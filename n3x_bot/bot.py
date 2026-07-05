@@ -159,6 +159,8 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
             except Exception:
                 members = guild.members
             for m in members:
+                if not m.bot:
+                    await repo.upsert_user(m.id, m.display_name)
                 await enforce_prefix(m)
         if not event_reminder_task.is_running():
             event_reminder_task.start()
@@ -187,6 +189,8 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
 
     @bot.event
     async def on_member_join(member):
+        if not member.bot:
+            await repo.upsert_user(member.id, member.display_name)
         channel = bot.get_channel(settings.welcome_channel_id)
         if channel:
             try:
@@ -196,3 +200,8 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
                 pass
         await asyncio.sleep(5)
         await enforce_prefix(member)
+
+    @bot.event
+    async def on_member_remove(member):
+        if await repo.get_user(member.id) is not None:
+            await repo.archive_user(member.id)

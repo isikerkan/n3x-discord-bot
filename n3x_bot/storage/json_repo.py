@@ -173,6 +173,7 @@ class JsonRepository(StatsRepository):
             self._db["users"].append(r)
         else:
             r["display_name"] = display_name
+            r["archived_at"] = None
         self._flush()
         return self._user(r)
 

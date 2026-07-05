@@ -540,6 +540,112 @@ async def test_on_member_update_skips_bot_and_owner_and_unprivileged_cases():
     await repo.close()
 
 
+# ── on_member_join / on_member_remove (auto-registration) ────────────────
+
+def _fake_member(*, member_id, display_name="Player", is_bot=False):
+    """A member whose `.guild` is wired just enough that `enforce_prefix`
+    (unconditionally invoked by the real `on_member_join`) takes its
+    early-return path (bot's own `manage_nicknames` permission is False)
+    instead of crashing on missing guild attributes.
+    """
+    guild_me = SimpleNamespace(
+        guild_permissions=SimpleNamespace(manage_nicknames=False))
+    guild = SimpleNamespace(owner=object(), me=guild_me)
+    return SimpleNamespace(id=member_id, display_name=display_name, bot=is_bot,
+                           mention=f"<@{member_id}>", guild=guild, roles=[],
+                           top_role=0)
+
+
+async def test_on_member_join_registers_non_bot_member():
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+    bot.get_channel = MagicMock(return_value=None)
+
+    member = _fake_member(member_id=555, display_name="Newbie")
+
+    await bot.on_member_join(member)
+
+    user = await repo.get_user(555)
+    assert user is not None
+    assert user.display_name == "Newbie"
+
+    await repo.close()
+
+
+async def test_on_member_join_skips_bot_members():
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+    bot.get_channel = MagicMock(return_value=None)
+
+    member = _fake_member(member_id=666, display_name="SomeBot", is_bot=True)
+
+    await bot.on_member_join(member)
+
+    assert await repo.get_user(666) is None
+
+    await repo.close()
+
+
+async def test_on_member_remove_archives_existing_user():
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+    bot.get_channel = MagicMock(return_value=None)
+
+    member = _fake_member(member_id=777, display_name="Leaver")
+    await bot.on_member_join(member)
+    assert await repo.get_user(777) is not None
+
+    await bot.on_member_remove(member)
+
+    user = await repo.get_user(777)
+    assert user is not None
+    assert user.archived_at is not None
+    assert 777 not in {u.discord_id for u in await repo.list_users()}
+
+    await repo.close()
+
+
+async def test_on_member_remove_never_registered_member_does_not_raise():
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+    bot.get_channel = MagicMock(return_value=None)
+
+    member = _fake_member(member_id=888, display_name="Ghost")
+
+    await bot.on_member_remove(member)  # must not raise
+
+    assert await repo.get_user(888) is None
+
+    await repo.close()
+
+
+async def test_on_member_join_after_remove_unarchives_rejoining_member():
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+    bot.get_channel = MagicMock(return_value=None)
+
+    member = _fake_member(member_id=999, display_name="Boomerang")
+    await bot.on_member_join(member)
+    await bot.on_member_remove(member)
+    assert 999 not in {u.discord_id for u in await repo.list_users()}
+
+    rejoined = _fake_member(member_id=999, display_name="Boomerang Back")
+    await bot.on_member_join(rejoined)
+
+    user = await repo.get_user(999)
+    assert user is not None
+    assert user.archived_at is None
+    assert user.display_name == "Boomerang Back"
+    assert 999 in {u.discord_id for u in await repo.list_users()}
+
+    await repo.close()
+
+
 async def test_prepare_sqlite_connects_and_seeds_within_one_loop():
     fd, db_path = tempfile.mkstemp(suffix=".db")
     os.close(fd)

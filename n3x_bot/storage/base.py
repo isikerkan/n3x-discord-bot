@@ -42,7 +42,14 @@ class StatsRepository(ABC):
 
     # users
     @abstractmethod
-    async def upsert_user(self, discord_id: int, display_name: str) -> User: ...
+    async def upsert_user(self, discord_id: int, display_name: str) -> User:
+        """Create or update a user row for `discord_id`.
+
+        For a new user, creates the row (archived_at=None). For an existing
+        user, updates `display_name` AND clears `archived_at` (an active/
+        present member is never archived) — so a rejoin auto-unarchives.
+        """
+        ...
     @abstractmethod
     async def get_user(self, discord_id: int) -> User | None: ...
     @abstractmethod

@@ -155,7 +155,7 @@ class SqlRepository(StatsRepository):
                 return self._user(res.one())
             await conn.execute(update(sc.users)
                                .where(sc.users.c.discord_id == discord_id)
-                               .values(display_name=display_name))
+                               .values(display_name=display_name, archived_at=None))
             r = (await conn.execute(select(sc.users)
                  .where(sc.users.c.discord_id == discord_id))).one()
             return self._user(r)

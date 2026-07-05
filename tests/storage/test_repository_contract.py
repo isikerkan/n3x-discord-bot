@@ -48,6 +48,17 @@ async def test_upsert_user_is_idempotent(repo):
     assert len(await repo.list_users()) == 1
 
 
+async def test_upsert_user_unarchives(repo):
+    await repo.upsert_user(42, "Erkan")
+    await repo.archive_user(42)
+    assert 42 not in {u.discord_id for u in await repo.list_users()}
+    # re-upsert (rejoin) must un-archive
+    u = await repo.upsert_user(42, "Erkan Back")
+    assert u.archived_at is None
+    assert u.display_name == "Erkan Back"
+    assert 42 in {u.discord_id for u in await repo.list_users()}
+
+
 async def test_record_use_increments_user_and_total(repo):
     await repo.create_stat("tit", "Tit")
     uc1, tc1 = await repo.record_use(42, "Erkan", "tit")
