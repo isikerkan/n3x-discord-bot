@@ -125,7 +125,7 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
         has_role = any(r.id == settings.target_role_id for r in member.roles)
         current = member.display_name
         if has_role and not current.startswith(settings.prefix_str):
-            base = current.replace("R3X", "").strip()
+            base = current.replace("R3X", "").replace(settings.prefix_str, "").strip()
             try:
                 await member.edit(nick=f"{settings.prefix_str}{base}"[:32],
                                   reason="N3X Prefix Enforcement")
@@ -170,6 +170,10 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
         if isinstance(error, commands.CommandOnCooldown):
             await ctx.send(f"Warte bitte {error.retry_after:.1f} Sekunden.",
                            delete_after=5)
+        elif isinstance(error, commands.MissingRequiredArgument):
+            await ctx.send("❌ Bitte gib einen Nutzer an.", delete_after=5)
+        elif isinstance(error, commands.MemberNotFound):
+            await ctx.send("❌ Nutzer nicht gefunden.", delete_after=5)
 
     @bot.event
     async def on_message(message):
