@@ -1,11 +1,11 @@
 import os
 import tempfile
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 from discord.ext import commands
 
-from n3x_bot.bot import build_bot, register_stat_commands, _send_or_update
+from n3x_bot.bot import build_bot, register_stat_commands, _send_or_update, _send_rank
 from n3x_bot.config import Settings
 from n3x_bot.seed import seed_defaults
 from n3x_bot.storage.json_repo import JsonRepository
@@ -193,19 +193,20 @@ async def test_rank_command_reports_no_usage_when_user_has_none():
     settings = _settings()
     bot = build_bot(settings, repo)
     await register_stat_commands(bot, repo, settings)
+    channel, _ = _fake_channel(send_return_id=111, channel_id=222)
+    bot.get_channel = MagicMock(return_value=channel)
 
     cmd = bot.get_command("rank")
     ctx = MagicMock()
     ctx.author = SimpleNamespace(id=1, display_name="NewUser")
 
-    # _send_or_update itself is exercised by dedicated tests above; here we
-    # only need to verify the _rank body composes the right text and hands
-    # it off, without depending on a real "rank_<id>" stat/channel existing.
-    with patch("n3x_bot.bot._send_or_update", new=AsyncMock()) as mock_send:
-        await cmd.callback(ctx)
+    # Real end-to-end call: no mocking of _send_or_update/set_last_post, so
+    # a regression to the old (buggy) rank_<id> stat_last_post path would
+    # surface as a real KeyError here.
+    await cmd.callback(ctx)
 
-    mock_send.assert_awaited_once()
-    text = mock_send.await_args.args[4]
+    channel.send.assert_awaited_once()
+    text = channel.send.await_args.args[0]
     assert "noch keine Befehle genutzt" in text
 
     await repo.close()
@@ -216,6 +217,8 @@ async def test_rank_command_reports_ordered_usage_when_user_has_data():
     settings = _settings()
     bot = build_bot(settings, repo)
     await register_stat_commands(bot, repo, settings)
+    channel, _ = _fake_channel(send_return_id=111, channel_id=222)
+    bot.get_channel = MagicMock(return_value=channel)
 
     await repo.record_use(7, "Erkan", "tit")
     await repo.record_use(7, "Erkan", "tit")
@@ -225,13 +228,83 @@ async def test_rank_command_reports_ordered_usage_when_user_has_data():
     ctx = MagicMock()
     ctx.author = SimpleNamespace(id=7, display_name="Erkan")
 
-    with patch("n3x_bot.bot._send_or_update", new=AsyncMock()) as mock_send:
-        await cmd.callback(ctx)
+    await cmd.callback(ctx)
 
-    mock_send.assert_awaited_once()
-    text = mock_send.await_args.args[4]
+    channel.send.assert_awaited_once()
+    text = channel.send.await_args.args[0]
     assert "tit" in text and "cry" in text
     assert text.index("tit") < text.index("cry")  # higher count ranks first
+
+    await repo.close()
+
+
+# ── _send_rank ────────────────────────────────────────────────────────────
+
+async def test_send_rank_sends_and_records_in_memory_without_db_persistence():
+    """Proves the rank path never touches stat_last_post: uses a real
+    seeded repo (no mocking of set_last_post) so a regression to the old
+    buggy `_send_or_update` call would raise a real KeyError, since
+    'rank_1' is never a row in the `stats` table.
+    """
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+    channel, _ = _fake_channel(send_return_id=111, channel_id=222)
+    bot.get_channel = MagicMock(return_value=channel)
+
+    rank_key = "rank_1"
+    await _send_rank(bot, settings, rank_key, "rank text")
+
+    channel.send.assert_awaited_once_with("rank text")
+    channel.fetch_message.assert_not_called()
+    assert bot._rank_last_posts[rank_key] == 111
+
+    # The rank key was never written to stat_last_post; real stats are
+    # unaffected. Confirm rank_key is not a real stat row by proving the
+    # repo's own write path would KeyError for it (this is exactly the
+    # crash the old buggy `_send_or_update(... f"rank_{id}" ...)` call hit).
+    assert await repo.get_last_post("tit") is None
+    assert await repo.get_last_post(rank_key) is None
+    try:
+        await repo.set_last_post(rank_key, 1, 2)
+        raised = False
+    except KeyError:
+        raised = True
+    assert raised, "rank_key is not a real stat; set_last_post should KeyError"
+
+    await repo.close()
+
+
+async def test_send_rank_second_call_deletes_previous_message_first():
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+    channel, old_message = _fake_channel(send_return_id=111, channel_id=222)
+    bot.get_channel = MagicMock(return_value=channel)
+
+    rank_key = "rank_1"
+    await _send_rank(bot, settings, rank_key, "first")
+
+    channel.send = AsyncMock(return_value=SimpleNamespace(id=333))
+    await _send_rank(bot, settings, rank_key, "second")
+
+    channel.fetch_message.assert_awaited_once_with(111)
+    old_message.delete.assert_awaited_once()
+    channel.send.assert_awaited_once_with("second")
+    assert bot._rank_last_posts[rank_key] == 333
+
+    await repo.close()
+
+
+async def test_send_rank_no_channel_is_safe_no_op():
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+    bot.get_channel = MagicMock(return_value=None)
+
+    await _send_rank(bot, settings, "rank_1", "text")
+
+    assert "rank_1" not in bot._rank_last_posts
 
     await repo.close()
 

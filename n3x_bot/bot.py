@@ -32,6 +32,7 @@ def build_bot(settings: Settings, repo: StatsRepository) -> commands.Bot:
                        intents=intents, case_insensitive=True)
     bot.n3x_settings = settings
     bot.n3x_repo = repo
+    bot._rank_last_posts = {}
 
     _wire_events(bot, settings, repo)
     return bot
@@ -53,6 +54,30 @@ async def _send_or_update(bot, repo, settings, stat_key: str, text: str):
     await repo.set_last_post(stat_key, new_msg.id, channel.id)
 
 
+async def _send_rank(bot, settings, rank_key: str, text: str):
+    """Send/update ephemeral rank output without touching stat_last_post.
+
+    Rank output is not a real stat (there is no `rank_<id>` row in the
+    `stats` table), so it cannot go through `_send_or_update` /
+    `repo.set_last_post` — the `stat_last_post` table is FK-bound to
+    `stats` and would raise `KeyError`. Instead, track the last posted
+    message id in-memory on the bot for the "delete previous, send new"
+    behavior, since this display doesn't need DB persistence.
+    """
+    channel = bot.get_channel(settings.reminder_channel_id)
+    if channel is None:
+        return
+    old_id = bot._rank_last_posts.get(rank_key)
+    if old_id is not None:
+        try:
+            old = await channel.fetch_message(old_id)
+            await old.delete()
+        except Exception:
+            pass
+    new_msg = await channel.send(text)
+    bot._rank_last_posts[rank_key] = new_msg.id
+
+
 async def register_stat_commands(bot, repo: StatsRepository, settings: Settings):
     for stat in await repo.list_stats():
         _add_stat_command(bot, repo, settings, stat.key)
@@ -69,7 +94,7 @@ async def register_stat_commands(bot, repo: StatsRepository, settings: Settings)
             for i, (cmd, count) in enumerate(ordered):
                 pref = emojis[i] if i < 3 else f"{i+1}."
                 text += f"{pref} !{cmd:<10} {count}\n"
-        await _send_or_update(bot, repo, settings, f"rank_{ctx.author.id}", text)
+        await _send_rank(bot, settings, f"rank_{ctx.author.id}", text)
 
     if bot.get_command("rank") is None:
         bot.add_command(commands.Command(_rank, name="rank"))
