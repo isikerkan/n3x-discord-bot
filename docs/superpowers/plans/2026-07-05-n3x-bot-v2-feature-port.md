@@ -305,3 +305,25 @@ Commit: `feat: gate tracker (input parsing, stats embed, !stat/!del)`
 - No hardcoded IDs — all IDs/rewards/roles in Settings → Tasks B, C. ✓
 - All new repo methods contract-tested across backends → Tasks B, C. ✓
 - Placeholder scan: none. Type consistency: `record_target_use`/`get_target_total`/gate method names used consistently between interface, impls, and tests.
+
+---
+
+### Task D: AMP feature-rich custom template (GUI-configurable) — REQUESTED 2026-07-05
+
+**Goal:** Replace stock "Python App Runner" reuse with a CUSTOM CubeCoders AMP template so an admin sets **Discord token, channel IDs, role IDs, storage backend (Database Type), and DB/Python version** directly in the **AMP web GUI** — AMP maps those GUI fields to env vars the bot reads via `pydantic-settings`. No manual `.env` editing.
+
+**Files:**
+- Create: `deploy/amp/n3x-bot.kvp` (metadata; based on python-app-runner.kvp; `App.EnvironmentVariables` maps `{{FieldName}}` → env vars: DISCORD_TOKEN, STORAGE_BACKEND, DATABASE_URL, all channel/role IDs, reminder time, gate config)
+- Create: `deploy/amp/n3x-botconfig.json` (GUI field manifest: DiscordToken=password, StorageBackend=enum flatfile|sqlite|postgres, DatabaseUrl=text, TargetRoleId/WelcomeChannelId/ReminderChannelId/GateInput/GateStats/GateDeleteRole=text, ReminderTime, GateRewards, PythonVersion=enum, plus git repo download settings baked to this repo)
+- Create: `deploy/amp/n3x-botupdates.json` (git-clone this repo + venv + requirements.txt install, ported from python-app-runner)
+- Create: `deploy/amp/n3x-botports.json` (minimal/none — bot needs no inbound port)
+- Update: `deploy/amp/README.md` (install the custom template vs stock)
+
+**Design notes:**
+- Reference format: CubeCoders/AMPTemplates `python-app-runner.{kvp,config.json,updates.json,ports.json}` (already studied). Map GUI fields to env vars via `App.EnvironmentVariables={"DISCORD_TOKEN":"{{DiscordToken}}", "STORAGE_BACKEND":"{{StorageBackend}}", ...}` so no `.env` file is required — the bot's `Settings` reads from the process env.
+- "Database Type" = `StorageBackend` enum (flatfile/sqlite/postgres). "Version": for postgres this is an EXTERNAL DB (AMP's Python App Runner does not provision a DB) — so "version" here is the **Python version** selector (already a field in the stock template) plus a documented note that postgres must be provisioned separately (its version chosen there). CLARIFY with user whether they expect AMP to also spin up the Postgres instance (would be a separate AMP Postgres instance/template) before building.
+- Secrets: DiscordToken uses `InputType: password`.
+
+- [ ] Steps: TBD at implementation time — port the four python-app-runner files, remap the config manifest to our Settings fields, bake this repo as the git source, test the JSON manifests parse (jq), document in README. (This task is config/templating, not Python — no pytest; validation = JSON well-formed + field/env-var mapping matches `Settings` field names.)
+
+**OPEN QUESTION for user (resolve before building Task D):** Should AMP also *provision* the Postgres database (separate AMP Postgres instance), or does "DB type + version" just mean selecting the backend + pointing `DATABASE_URL` at an externally-managed Postgres whose version is chosen outside AMP?
