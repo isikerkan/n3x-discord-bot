@@ -38,3 +38,35 @@ async def repo(repo_factory):
         path = getattr(r, "path", None)
         if path and os.path.exists(path):
             os.remove(path)
+
+
+from n3x_bot.storage.sql_repo import SqlRepository
+
+
+async def _make_sqlite():
+    import tempfile
+    fd, path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    os.remove(path)
+    r = SqlRepository(f"sqlite+aiosqlite:///{path}")
+    await r.connect()
+    return r
+
+
+BACKENDS.append(("sqlite", _make_sqlite))
+
+# Postgres only if a test DSN is provided; otherwise the id never registers
+# and postgres is silently skipped (not failed).
+_PG = os.environ.get("TEST_POSTGRES_URL")
+if _PG:
+    async def _make_postgres():
+        r = SqlRepository(_PG)
+        await r.connect()
+        # clean slate each test
+        from n3x_bot.storage import schema as sc
+        async with r.engine.begin() as conn:
+            await conn.run_sync(sc.metadata.drop_all)
+            await conn.run_sync(sc.metadata.create_all)
+        return r
+
+    BACKENDS.append(("postgres", _make_postgres))
