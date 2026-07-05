@@ -202,7 +202,7 @@ class SqlRepository(StatsRepository):
             else:
                 await conn.execute(update(sc.users)
                                    .where(sc.users.c.id == user.id)
-                                   .values(display_name=display_name))
+                                   .values(display_name=display_name, archived_at=None))
             # user_stats upsert
             us = (await conn.execute(select(sc.user_stats).where(
                 (sc.user_stats.c.user_id == user.id) &

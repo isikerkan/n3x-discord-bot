@@ -76,6 +76,16 @@ async def test_record_use_unknown_stat_raises(repo):
         await repo.record_use(1, "Nobody", "ghost")
 
 
+async def test_record_use_unarchives_user(repo):
+    await repo.create_stat("tit", "Tit")
+    await repo.upsert_user(42, "Erkan")
+    await repo.archive_user(42)
+    assert 42 not in {u.discord_id for u in await repo.list_users()}
+    await repo.record_use(42, "Erkan", "tit")
+    assert 42 in {u.discord_id for u in await repo.list_users()}  # un-archived
+    assert await repo.get_user_stats(42) == {"tit": 1}
+
+
 async def test_last_post_roundtrip(repo):
     await repo.create_stat("tit", "Tit")
     assert await repo.get_last_post("tit") is None
