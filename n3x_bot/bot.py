@@ -6,12 +6,15 @@ import discord
 from discord.ext import commands, tasks
 
 from n3x_bot.config import Settings
+from n3x_bot.format import format_number
+from n3x_bot.gates import build_gate_embed, parse_gate_message
 from n3x_bot.models import render_output
 from n3x_bot.storage.base import StatsRepository
 
 log = logging.getLogger("N3X-Bot")
 
 HOME_KEY = "home"
+GATE_STAT_CHUNK_LIMIT = 1900
 
 
 async def build_output(repo: StatsRepository, stat_key: str,
@@ -54,8 +57,10 @@ def build_bot(settings: Settings, repo: StatsRepository) -> commands.Bot:
     bot.n3x_repo = repo
     bot._rank_last_posts = {}
     bot._target_last_posts = {}
+    bot._gate_embed_msg_id = None
 
     _wire_events(bot, settings, repo)
+    register_gate_commands(bot, repo, settings)
     return bot
 
 
@@ -181,6 +186,117 @@ def _add_targeted_stat_command(bot, repo, settings, key: str):
     bot.add_command(commands.Command(_tcmd, name=key))
 
 
+# ── gate tracker ─────────────────────────────────────────────────────────────
+
+async def update_gate_stats_embed(bot, repo: StatsRepository, settings: Settings):
+    """Refresh (or first-post) the live gate-stats embed.
+
+    The last-posted message id is tracked in-memory on `bot._gate_embed_msg_id`
+    (like `_rank_last_posts`/`_target_last_posts`) rather than persisted via
+    `repo.set_last_post`, since that's FK-bound to a real `stats` row and
+    "gate" isn't one — it would KeyError. Ephemeral tracking means the embed
+    re-posts once after a bot restart, which is an acceptable trade-off.
+    """
+    if not settings.gate_stats_channel_id:
+        return
+    channel = bot.get_channel(settings.gate_stats_channel_id)
+    if channel is None:
+        return
+    totals = await repo.gate_totals()
+    rewards = settings.gate_rewards_map()
+    now_str = datetime.now().strftime("%d.%m.%Y %H:%M")
+    embed = build_gate_embed(totals, rewards, now_str)
+    if bot._gate_embed_msg_id is not None:
+        try:
+            msg = await channel.fetch_message(bot._gate_embed_msg_id)
+            await msg.edit(embed=embed)
+            return
+        except Exception:
+            pass
+    new_msg = await channel.send(embed=embed)
+    bot._gate_embed_msg_id = new_msg.id
+
+
+def _chunk_gate_lines(lines: list[str], limit: int = GATE_STAT_CHUNK_LIMIT) -> list[str]:
+    chunks = []
+    current = ""
+    for line in lines:
+        if len(current) + len(line) + 2 > limit:
+            chunks.append(current)
+            current = ""
+        current += line + "\n"
+    chunks.append(current)
+    return chunks
+
+
+async def _handle_gate_stat(ctx, repo: StatsRepository, settings: Settings, gate_type: str):
+    gtype = gate_type.lower()
+    if gtype not in settings.gate_rewards_map():
+        await ctx.send("Ungültiger Gate-Typ. Bitte nutze a, b oder c.", delete_after=5)
+        return
+    costs = await repo.list_gate_costs(gtype)
+    if not costs:
+        await ctx.send(f"Noch keine Daten für {gate_type.upper()} Gate vorhanden.", delete_after=5)
+        return
+    title = f"📊 {gate_type.upper()} Gate"
+    lines = [f"{i}. {format_number(cost)}" for i, cost in enumerate(costs, 1)]
+    for i, chunk in enumerate(_chunk_gate_lines(lines)):
+        embed = discord.Embed(title=title if i == 0 else f"{title} (Fortsetzung)",
+                              description=chunk, color=discord.Color.green())
+        await ctx.send(embed=embed)
+
+
+async def _handle_gate_del(ctx, bot, repo: StatsRepository, settings: Settings,
+                           gate_type: str, index: int):
+    has_role = any(r.id == settings.gate_delete_role_id for r in ctx.author.roles)
+    if not has_role:
+        await ctx.send("❌ Keine Berechtigung.", delete_after=5)
+        return
+    gtype = gate_type.lower()
+    if await repo.delete_gate_entry(gtype, index):
+        await ctx.send(f"✅ Eintrag {index} für {gate_type.upper()} gelöscht.", delete_after=5)
+        await update_gate_stats_embed(bot, repo, settings)
+    else:
+        await ctx.send(f"❌ Eintrag {index} nicht gefunden.", delete_after=5)
+
+
+def register_gate_commands(bot, repo: StatsRepository, settings: Settings):
+    if bot.get_command("stat") is None:
+        async def _stat_cmd(ctx, gate_type: str):
+            await _handle_gate_stat(ctx, repo, settings, gate_type)
+        bot.add_command(commands.Command(_stat_cmd, name="stat"))
+
+    if bot.get_command("del") is None:
+        async def _del_cmd(ctx, gate_type: str, index: int):
+            await _handle_gate_del(ctx, bot, repo, settings, gate_type, index)
+        bot.add_command(commands.Command(_del_cmd, name="del"))
+
+
+async def handle_gate_input_message(bot, repo: StatsRepository, settings: Settings, message):
+    """Parse a message in the configured gate-input channel and react.
+
+    ✅ on a freshly-recorded entry, ⏳ if it was rejected as a duplicate
+    within the dedup window, ❌ if the message doesn't parse as a gate entry
+    at all (and isn't a bot command, which is left alone).
+    """
+    parsed = parse_gate_message(message.content)
+    if parsed is None:
+        if not message.content.startswith(settings.command_prefix):
+            try:
+                await message.add_reaction("❌")
+            except Exception:
+                pass
+        return
+    gate_type, cost = parsed
+    inserted = await repo.add_gate_entry(gate_type, cost, message.author.id, message.author.name)
+    try:
+        await message.add_reaction("✅" if inserted else "⏳")
+    except Exception:
+        pass
+    if inserted:
+        await update_gate_stats_embed(bot, repo, settings)
+
+
 def _wire_events(bot, settings: Settings, repo: StatsRepository):
     reminder_h, reminder_m = settings.reminder_hm()
 
@@ -233,6 +349,8 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
                 await enforce_prefix(m)
         if not event_reminder_task.is_running():
             event_reminder_task.start()
+        if settings.gate_stats_channel_id:
+            await update_gate_stats_embed(bot, repo, settings)
 
     @bot.event
     async def on_command_error(ctx, error):
@@ -248,6 +366,8 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
     async def on_message(message):
         if message.author == bot.user:
             return
+        if settings.gate_input_channel_id and message.channel.id == settings.gate_input_channel_id:
+            await handle_gate_input_message(bot, repo, settings, message)
         if message.content.startswith(settings.command_prefix):
             try:
                 await message.delete(delay=5.0)

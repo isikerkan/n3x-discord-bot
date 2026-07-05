@@ -20,6 +20,11 @@ class Settings(BaseSettings):
     command_prefix: str = "!"
     reminder_time: str = "19:30"
 
+    gate_input_channel_id: int = 0
+    gate_stats_channel_id: int = 0
+    gate_delete_role_id: int = 0
+    gate_rewards: str = "a:46892,b:93820,c:139522"
+
     @model_validator(mode="after")
     def _require_db_url(self) -> "Settings":
         if self.storage_backend in ("sqlite", "postgres") and not self.database_url:
@@ -31,3 +36,11 @@ class Settings(BaseSettings):
     def reminder_hm(self) -> tuple[int, int]:
         hh, mm = self.reminder_time.split(":")
         return int(hh), int(mm)
+
+    def gate_rewards_map(self) -> dict[str, int]:
+        out = {}
+        for pair in self.gate_rewards.split(","):
+            if ":" in pair:
+                k, v = pair.split(":", 1)
+                out[k.strip()] = int(v)
+        return out

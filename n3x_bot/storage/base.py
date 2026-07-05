@@ -1,6 +1,8 @@
 from abc import ABC, abstractmethod
 from n3x_bot.models import User, Stat, Message
 
+GATE_TYPES: tuple[str, ...] = ("a", "b", "c")
+
 
 class StatsRepository(ABC):
     @abstractmethod
@@ -86,3 +88,29 @@ class StatsRepository(ABC):
         ...
     @abstractmethod
     async def get_target_total(self, target_discord_id: int, stat_key: str) -> int: ...
+
+    # gate tracker
+    @abstractmethod
+    async def add_gate_entry(self, gate_type: str, cost: int, user_id: int,
+                             username: str, dedup_window_seconds: int = 30) -> bool:
+        """Insert a gate cost entry unless an identical (user_id, gate_type,
+        cost) row was inserted within `dedup_window_seconds`. Returns True if
+        inserted, False if rejected as a duplicate.
+        """
+        ...
+    @abstractmethod
+    async def list_gate_costs(self, gate_type: str) -> list[int]:
+        """Costs for `gate_type`, ordered by insertion order."""
+        ...
+    @abstractmethod
+    async def delete_gate_entry(self, gate_type: str, index: int) -> bool:
+        """Delete the 1-based `index`-th entry (insertion order) for
+        `gate_type`. Returns True if deleted, False if out of range.
+        """
+        ...
+    @abstractmethod
+    async def gate_totals(self) -> dict[str, dict]:
+        """`{gate_type: {"count": int, "avg": int}}` for every gate type
+        that has at least one entry.
+        """
+        ...

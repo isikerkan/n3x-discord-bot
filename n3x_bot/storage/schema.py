@@ -60,3 +60,13 @@ target_stats = Table(
     Column("stat_id", Integer, ForeignKey("stats.id"), primary_key=True),
     Column("count", Integer, nullable=False, default=0),
 )
+
+gate_entries = Table(
+    "gate_entries", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("gate_type", String(1), nullable=False),
+    Column("cost", Integer, nullable=False),
+    Column("user_id", BigInteger, nullable=False),
+    Column("username", String(100), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+)

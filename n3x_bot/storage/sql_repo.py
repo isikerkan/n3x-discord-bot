@@ -1,15 +1,29 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select, insert, update, delete
+from sqlalchemy import func, select, insert, update, delete
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from n3x_bot.models import User, Stat, Message
-from n3x_bot.storage.base import StatsRepository
+from n3x_bot.storage.base import GATE_TYPES, StatsRepository
 from n3x_bot.storage import schema as sc
 
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _as_aware_utc(dt: datetime | None) -> datetime | None:
+    """Normalize a datetime read back from the DB to tz-aware UTC.
+
+    SQLite's `DateTime(timezone=True)` column round-trips as a naive
+    datetime (SQLite has no native timezone type) even though it was
+    written as aware UTC, while Postgres/asyncpg returns it aware already.
+    Comparing an aware threshold against a naive value raises TypeError, so
+    normalize here to keep dedup logic identical across both backends.
+    """
+    if dt is None:
+        return None
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
 
 
 class SqlRepository(StatsRepository):
@@ -310,3 +324,55 @@ class SqlRepository(StatsRepository):
                        (sc.target_stats.c.target_discord_id == target_discord_id)))
                 ).one_or_none()
             return r.count if r else 0
+
+    # ── gate tracker ───────────────────────────────────────────────────────
+    async def add_gate_entry(self, gate_type, cost, user_id, username,
+                             dedup_window_seconds=30):
+        threshold = _now() - timedelta(seconds=dedup_window_seconds)
+        async with self.engine.begin() as conn:
+            candidates = await conn.execute(select(sc.gate_entries.c.created_at).where(
+                (sc.gate_entries.c.user_id == user_id) &
+                (sc.gate_entries.c.gate_type == gate_type) &
+                (sc.gate_entries.c.cost == cost)))
+            for row in candidates:
+                created = _as_aware_utc(row.created_at)
+                if created is not None and created > threshold:
+                    return False
+            await conn.execute(insert(sc.gate_entries).values(
+                gate_type=gate_type, cost=cost, user_id=user_id,
+                username=username, created_at=_now()))
+            return True
+
+    async def list_gate_costs(self, gate_type):
+        async with self.engine.connect() as conn:
+            rows = await conn.execute(
+                select(sc.gate_entries.c.cost)
+                .where(sc.gate_entries.c.gate_type == gate_type)
+                .order_by(sc.gate_entries.c.id.asc()))
+            return [r.cost for r in rows]
+
+    async def delete_gate_entry(self, gate_type, index):
+        async with self.engine.begin() as conn:
+            rows = (await conn.execute(
+                select(sc.gate_entries.c.id)
+                .where(sc.gate_entries.c.gate_type == gate_type)
+                .order_by(sc.gate_entries.c.id.asc()))).all()
+            if index < 1 or index > len(rows):
+                return False
+            target_id = rows[index - 1].id
+            await conn.execute(delete(sc.gate_entries)
+                               .where(sc.gate_entries.c.id == target_id))
+            return True
+
+    async def gate_totals(self):
+        out = {}
+        async with self.engine.connect() as conn:
+            for gtype in GATE_TYPES:
+                r = (await conn.execute(
+                    select(func.count(sc.gate_entries.c.id),
+                          func.avg(sc.gate_entries.c.cost))
+                    .where(sc.gate_entries.c.gate_type == gtype))).one()
+                count, avg = r[0], r[1]
+                out[gtype] = {"count": count or 0,
+                             "avg": round(avg) if avg else 0}
+        return out

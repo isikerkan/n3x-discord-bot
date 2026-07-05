@@ -1,10 +1,10 @@
 import json
 import os
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from n3x_bot.models import User, Stat, Message
-from n3x_bot.storage.base import StatsRepository
+from n3x_bot.storage.base import GATE_TYPES, StatsRepository
 
 
 def _now() -> str:
@@ -23,10 +23,10 @@ class JsonRepository(StatsRepository):
     # ── lifecycle / persistence ────────────────────────────────────────────
     def _empty(self) -> dict:
         return {
-            "seq": {"user": 0, "message": 0, "stat": 0},
+            "seq": {"user": 0, "message": 0, "stat": 0, "gate": 0},
             "users": [], "messages": [], "stats": [],
             "user_stats": {}, "stat_totals": {}, "stat_last_post": {},
-            "target_stats": {},
+            "target_stats": {}, "gate_entries": [],
         }
 
     async def connect(self) -> None:
@@ -257,3 +257,42 @@ class JsonRepository(StatsRepository):
         if stat is None:
             return 0
         return self._db["target_stats"].get(str(stat["id"]), {}).get(str(target_discord_id), 0)
+
+    # ── gate tracker ───────────────────────────────────────────────────────
+    async def add_gate_entry(self, gate_type, cost, user_id, username,
+                             dedup_window_seconds=30):
+        threshold = datetime.now(timezone.utc) - timedelta(seconds=dedup_window_seconds)
+        for r in self._db["gate_entries"]:
+            if (r["gate_type"] == gate_type and r["cost"] == cost
+                    and r["user_id"] == user_id):
+                created = _parse_dt(r["created_at"])
+                if created is not None and created > threshold:
+                    return False
+        row = {"id": self._next("gate"), "gate_type": gate_type, "cost": cost,
+               "user_id": user_id, "username": username, "created_at": _now()}
+        self._db["gate_entries"].append(row)
+        self._flush()
+        return True
+
+    async def list_gate_costs(self, gate_type):
+        return [r["cost"] for r in self._db["gate_entries"]
+                if r["gate_type"] == gate_type]
+
+    async def delete_gate_entry(self, gate_type, index):
+        matches = [r for r in self._db["gate_entries"] if r["gate_type"] == gate_type]
+        if index < 1 or index > len(matches):
+            return False
+        target = matches[index - 1]
+        self._db["gate_entries"] = [r for r in self._db["gate_entries"] if r is not target]
+        self._flush()
+        return True
+
+    async def gate_totals(self):
+        out = {}
+        for gtype in GATE_TYPES:
+            costs = [r["cost"] for r in self._db["gate_entries"]
+                     if r["gate_type"] == gtype]
+            count = len(costs)
+            out[gtype] = {"count": count,
+                          "avg": round(sum(costs) / count) if count else 0}
+        return out

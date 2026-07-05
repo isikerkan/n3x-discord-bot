@@ -115,3 +115,22 @@ async def test_record_target_use_unknown_stat_raises(repo):
 async def test_create_stat_defaults_not_targeted(repo):
     await repo.create_stat("tit", "Tit")
     assert (await repo.get_stat("tit")).targeted is False
+
+
+# ── gate tracker ───────────────────────────────────────────────────────────
+
+async def test_gate_add_list_delete_totals(repo):
+    assert await repo.add_gate_entry("a", 46000, 1, "u1") is True
+    assert await repo.add_gate_entry("a", 47000, 2, "u2") is True
+    assert await repo.list_gate_costs("a") == [46000, 47000]
+    totals = await repo.gate_totals()
+    assert totals["a"]["count"] == 2
+    assert totals["a"]["avg"] == 46500
+    assert await repo.delete_gate_entry("a", 1) is True
+    assert await repo.list_gate_costs("a") == [47000]
+
+
+async def test_gate_dedup_window(repo):
+    assert await repo.add_gate_entry("b", 5, 1, "u1", dedup_window_seconds=3600) is True
+    # identical within window -> rejected
+    assert await repo.add_gate_entry("b", 5, 1, "u1", dedup_window_seconds=3600) is False

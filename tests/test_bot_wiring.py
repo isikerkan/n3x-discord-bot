@@ -5,7 +5,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 from discord.ext import commands
 
-from n3x_bot.bot import build_bot, register_stat_commands, _send_or_update, _send_rank
+from n3x_bot.bot import (
+    build_bot, register_stat_commands, _send_or_update, _send_rank,
+    handle_gate_input_message, update_gate_stats_embed,
+)
 from n3x_bot.config import Settings
 from n3x_bot.seed import seed_defaults
 from n3x_bot.storage.json_repo import JsonRepository
@@ -66,9 +69,10 @@ async def test_register_stat_commands_adds_one_command_per_stat_plus_rank():
     stats = await repo.list_stats()
     assert bot.get_command("tit") is not None
     assert bot.get_command("rank") is not None
-    # discord.py's commands.Bot ships a default "help" command; only count
-    # the commands this function is responsible for wiring.
-    wired = [c for c in bot.commands if c.name != "help"]
+    # discord.py's commands.Bot ships a default "help" command; "stat"/"del"
+    # are wired by register_gate_commands (called from build_bot itself, not
+    # register_stat_commands) — only count what THIS function wires.
+    wired = [c for c in bot.commands if c.name not in ("help", "stat", "del")]
     assert len(wired) == len(stats) + 1
 
     await repo.close()
@@ -83,7 +87,7 @@ async def test_register_stat_commands_is_idempotent():
     await register_stat_commands(bot, repo, settings)
 
     stats = await repo.list_stats()
-    wired = [c for c in bot.commands if c.name != "help"]
+    wired = [c for c in bot.commands if c.name not in ("help", "stat", "del")]
     assert len(wired) == len(stats) + 1
 
     await repo.close()
@@ -778,3 +782,355 @@ async def test_prepare_sqlite_connects_and_seeds_within_one_loop():
     await repo.close()
     if os.path.exists(db_path):
         os.remove(db_path)
+
+
+# ── gate tracker: update_gate_stats_embed ─────────────────────────────────
+
+async def test_update_gate_stats_embed_noop_when_channel_unset():
+    repo = await _flatfile_repo()
+    settings = _settings(gate_stats_channel_id=0)
+    bot = build_bot(settings, repo)
+    bot.get_channel = MagicMock()
+
+    await update_gate_stats_embed(bot, repo, settings)
+
+    bot.get_channel.assert_not_called()
+
+    await repo.close()
+
+
+async def test_update_gate_stats_embed_noop_when_channel_missing():
+    repo = await _flatfile_repo()
+    settings = _settings(gate_stats_channel_id=555)
+    bot = build_bot(settings, repo)
+    bot.get_channel = MagicMock(return_value=None)
+
+    await update_gate_stats_embed(bot, repo, settings)  # must not raise
+
+    await repo.close()
+
+
+async def test_update_gate_stats_embed_first_post_sends_and_records_id():
+    repo = await _flatfile_repo()
+    settings = _settings(gate_stats_channel_id=555)
+    bot = build_bot(settings, repo)
+    channel, _ = _fake_channel(send_return_id=42, channel_id=555)
+    bot.get_channel = MagicMock(return_value=channel)
+
+    await update_gate_stats_embed(bot, repo, settings)
+
+    channel.send.assert_awaited_once()
+    embed = channel.send.await_args.kwargs["embed"]
+    assert embed.title == "📊 Gate Statistics"
+    assert bot._gate_embed_msg_id == 42
+
+    await repo.close()
+
+
+async def test_update_gate_stats_embed_second_call_edits_existing_message():
+    repo = await _flatfile_repo()
+    settings = _settings(gate_stats_channel_id=555)
+    bot = build_bot(settings, repo)
+    channel, old_message = _fake_channel(send_return_id=42, channel_id=555)
+    old_message.edit = AsyncMock()
+    bot.get_channel = MagicMock(return_value=channel)
+
+    await update_gate_stats_embed(bot, repo, settings)
+    await update_gate_stats_embed(bot, repo, settings)
+
+    channel.fetch_message.assert_awaited_once_with(42)
+    old_message.edit.assert_awaited_once()
+    channel.send.assert_awaited_once()  # only the first call sent a new message
+
+    await repo.close()
+
+
+async def test_update_gate_stats_embed_falls_back_to_new_post_if_edit_fails():
+    repo = await _flatfile_repo()
+    settings = _settings(gate_stats_channel_id=555)
+    bot = build_bot(settings, repo)
+    channel, _ = _fake_channel(send_return_id=42, channel_id=555)
+    bot.get_channel = MagicMock(return_value=channel)
+
+    await update_gate_stats_embed(bot, repo, settings)
+
+    channel.fetch_message = AsyncMock(side_effect=RuntimeError("gone"))
+    channel.send = AsyncMock(return_value=SimpleNamespace(id=99))
+    await update_gate_stats_embed(bot, repo, settings)
+
+    assert bot._gate_embed_msg_id == 99
+
+    await repo.close()
+
+
+# ── gate tracker: handle_gate_input_message ────────────────────────────────
+
+def _fake_gate_message(content: str, author_id: int = 1, author_name: str = "Erkan"):
+    message = MagicMock()
+    message.content = content
+    message.author = SimpleNamespace(id=author_id, name=author_name)
+    message.add_reaction = AsyncMock()
+    return message
+
+
+async def test_handle_gate_input_valid_entry_reacts_check_and_refreshes_embed():
+    repo = await _flatfile_repo()
+    settings = _settings(gate_stats_channel_id=555)
+    bot = build_bot(settings, repo)
+    channel, _ = _fake_channel(send_return_id=1, channel_id=555)
+    bot.get_channel = MagicMock(return_value=channel)
+    message = _fake_gate_message("a 46892")
+
+    await handle_gate_input_message(bot, repo, settings, message)
+
+    message.add_reaction.assert_awaited_once_with("✅")
+    assert await repo.list_gate_costs("a") == [46892]
+    channel.send.assert_awaited_once()  # embed refreshed
+
+    await repo.close()
+
+
+async def test_handle_gate_input_duplicate_within_window_reacts_hourglass():
+    repo = await _flatfile_repo()
+    settings = _settings(gate_stats_channel_id=555)
+    bot = build_bot(settings, repo)
+    channel, _ = _fake_channel(send_return_id=1, channel_id=555)
+    bot.get_channel = MagicMock(return_value=channel)
+    message = _fake_gate_message("a 46892")
+
+    await handle_gate_input_message(bot, repo, settings, message)
+    channel.send.reset_mock()
+    dup_message = _fake_gate_message("a 46892")
+
+    await handle_gate_input_message(bot, repo, settings, dup_message)
+
+    dup_message.add_reaction.assert_awaited_once_with("⏳")
+    channel.send.assert_not_called()  # rejected entries don't refresh the embed
+    assert await repo.list_gate_costs("a") == [46892]
+
+    await repo.close()
+
+
+async def test_handle_gate_input_non_matching_non_command_text_reacts_cross():
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+    message = _fake_gate_message("just chatting")
+
+    await handle_gate_input_message(bot, repo, settings, message)
+
+    message.add_reaction.assert_awaited_once_with("❌")
+
+    await repo.close()
+
+
+async def test_handle_gate_input_command_prefixed_text_does_not_react():
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+    message = _fake_gate_message("!stat a")
+
+    await handle_gate_input_message(bot, repo, settings, message)
+
+    message.add_reaction.assert_not_called()
+
+    await repo.close()
+
+
+async def test_on_message_routes_gate_input_channel_to_gate_handler():
+    repo = await _flatfile_repo()
+    settings = _settings(gate_input_channel_id=777)
+    bot = build_bot(settings, repo)
+    bot.process_commands = AsyncMock()
+    bot.get_channel = MagicMock(return_value=None)  # no stats embed channel configured
+
+    message = _fake_gate_message("a 100")
+    message.channel = SimpleNamespace(id=777)
+
+    await bot.on_message(message)
+
+    message.add_reaction.assert_awaited_once_with("✅")
+    assert await repo.list_gate_costs("a") == [100]
+    bot.process_commands.assert_awaited_once_with(message)
+
+    await repo.close()
+
+
+async def test_on_message_ignores_other_channels_for_gate_parsing():
+    repo = await _flatfile_repo()
+    settings = _settings(gate_input_channel_id=777)
+    bot = build_bot(settings, repo)
+    bot.process_commands = AsyncMock()
+
+    message = _fake_gate_message("a 100")
+    message.channel = SimpleNamespace(id=888)  # different channel
+
+    await bot.on_message(message)
+
+    message.add_reaction.assert_not_called()
+    assert await repo.list_gate_costs("a") == []
+
+    await repo.close()
+
+
+# ── gate tracker: on_ready refreshes the embed once ────────────────────────
+
+async def test_on_ready_refreshes_gate_embed_when_channel_configured():
+    repo = await _flatfile_repo()
+    settings = _settings(gate_stats_channel_id=555)
+    bot = build_bot(settings, repo)
+    channel, _ = _fake_channel(send_return_id=1, channel_id=555)
+    bot.get_channel = MagicMock(return_value=channel)
+
+    await bot.on_ready()
+
+    channel.send.assert_awaited_once()
+
+    await repo.close()
+
+
+async def test_on_ready_skips_gate_embed_when_channel_unset():
+    repo = await _flatfile_repo()
+    settings = _settings(gate_stats_channel_id=0)
+    bot = build_bot(settings, repo)
+    bot.get_channel = MagicMock(return_value=None)
+
+    await bot.on_ready()  # must not raise; no channel lookup for the gate embed
+
+    await repo.close()
+
+
+# ── gate tracker: !stat command ─────────────────────────────────────────────
+
+async def test_stat_command_rejects_unknown_gate_type():
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+    ctx = MagicMock()
+    ctx.send = AsyncMock()
+
+    cmd = bot.get_command("stat")
+    await cmd.callback(ctx, "z")
+
+    ctx.send.assert_awaited_once()
+    assert "Ungültiger Gate-Typ" in ctx.send.await_args.args[0]
+
+    await repo.close()
+
+
+async def test_stat_command_reports_no_data_message():
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+    ctx = MagicMock()
+    ctx.send = AsyncMock()
+
+    cmd = bot.get_command("stat")
+    await cmd.callback(ctx, "a")
+
+    ctx.send.assert_awaited_once()
+    assert "Noch keine Daten" in ctx.send.await_args.args[0]
+
+    await repo.close()
+
+
+async def test_stat_command_lists_costs_as_embed():
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+    await repo.add_gate_entry("a", 46892, 1, "u1")
+    await repo.add_gate_entry("a", 47000, 2, "u2")
+    ctx = MagicMock()
+    ctx.send = AsyncMock()
+
+    cmd = bot.get_command("stat")
+    await cmd.callback(ctx, "A")  # uppercase input still resolves
+
+    ctx.send.assert_awaited_once()
+    embed = ctx.send.await_args.kwargs["embed"]
+    assert "46.892" in embed.description
+    assert "47.000" in embed.description
+
+    await repo.close()
+
+
+async def test_stat_command_chunks_long_lists_into_multiple_embeds():
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+    for i in range(200):  # long enough to exceed the 1900-char chunk limit
+        await repo.add_gate_entry("a", 1000000 + i, i, f"u{i}")
+    ctx = MagicMock()
+    ctx.send = AsyncMock()
+
+    cmd = bot.get_command("stat")
+    await cmd.callback(ctx, "a")
+
+    assert ctx.send.await_count > 1
+
+    await repo.close()
+
+
+# ── gate tracker: !del command ───────────────────────────────────────────────
+
+class _FakeAuthorWithRoles:
+    def __init__(self, roles):
+        self.roles = roles
+
+
+async def test_del_command_denies_without_configured_role():
+    repo = await _flatfile_repo()
+    settings = _settings(gate_delete_role_id=42)
+    bot = build_bot(settings, repo)
+    await repo.add_gate_entry("a", 46892, 1, "u1")
+    ctx = MagicMock()
+    ctx.send = AsyncMock()
+    ctx.author = _FakeAuthorWithRoles(roles=[SimpleNamespace(id=1)])
+
+    cmd = bot.get_command("del")
+    await cmd.callback(ctx, "a", 1)
+
+    ctx.send.assert_awaited_once()
+    assert "Keine Berechtigung" in ctx.send.await_args.args[0]
+    assert await repo.list_gate_costs("a") == [46892]  # untouched
+
+    await repo.close()
+
+
+async def test_del_command_with_role_deletes_and_refreshes_embed():
+    repo = await _flatfile_repo()
+    settings = _settings(gate_delete_role_id=42, gate_stats_channel_id=555)
+    bot = build_bot(settings, repo)
+    channel, _ = _fake_channel(send_return_id=1, channel_id=555)
+    bot.get_channel = MagicMock(return_value=channel)
+    await repo.add_gate_entry("a", 46892, 1, "u1")
+    ctx = MagicMock()
+    ctx.send = AsyncMock()
+    ctx.author = _FakeAuthorWithRoles(roles=[SimpleNamespace(id=42)])
+
+    cmd = bot.get_command("del")
+    await cmd.callback(ctx, "a", 1)
+
+    ctx.send.assert_awaited_once()
+    assert "gelöscht" in ctx.send.await_args.args[0]
+    assert await repo.list_gate_costs("a") == []
+    channel.send.assert_awaited_once()  # embed refresh
+
+    await repo.close()
+
+
+async def test_del_command_reports_index_not_found():
+    repo = await _flatfile_repo()
+    settings = _settings(gate_delete_role_id=42)
+    bot = build_bot(settings, repo)
+    ctx = MagicMock()
+    ctx.send = AsyncMock()
+    ctx.author = _FakeAuthorWithRoles(roles=[SimpleNamespace(id=42)])
+
+    cmd = bot.get_command("del")
+    await cmd.callback(ctx, "a", 5)
+
+    ctx.send.assert_awaited_once()
+    assert "nicht gefunden" in ctx.send.await_args.args[0]
+
+    await repo.close()
