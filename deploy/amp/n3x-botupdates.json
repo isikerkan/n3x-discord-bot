@@ -1,0 +1,66 @@
+[
+    {
+        "UpdateStageName": "App Download",
+        "UpdateSourcePlatform": "Linux",
+        "UpdateSource": "Executable",
+        "UpdateSourceData": "/bin/bash",
+        "UpdateSourceArgs": "-c \"cd n3x-bot && rm -rf srv >/dev/null 2>&1; DownloadUrl=\\\"https://github.com/isikerkan/n3x-discord-bot.git\\\"; [ ! -d .git ] && { echo \\\"Installing the app\\\" && git clone \\\"$DownloadUrl\\\" srv >/dev/null && \\cp -r srv/. ./ >/dev/null 2>&1 && rm -rf srv >/dev/null 2>&1 && DownloadBranch=$(git symbolic-ref refs/remotes/origin/HEAD | sed \\\"s|.*/||\\\") && git checkout $DownloadBranch --force >/dev/null && git pull >/dev/null && echo \\\"App installed\\\"; } || { echo \\\"Updating the app\\\" && git remote set-url origin \\\"$DownloadUrl\\\" >/dev/null && DownloadBranch=$(git symbolic-ref refs/remotes/origin/HEAD | sed \\\"s|.*/||\\\") && git checkout $DownloadBranch --force >/dev/null && git pull >/dev/null && echo \\\"App updated\\\"; }\"",
+        "SkipOnFailure": false
+    },
+    {
+        "UpdateStageName": "App Download",
+        "UpdateSourcePlatform": "Windows",
+        "UpdateSource": "Executable",
+        "UpdateSourceData": "powershell.exe",
+        "UpdateSourceArgs": "-NoProfile -Command \"$ProgressPreference='SilentlyContinue'; cd n3x-bot; Remove-Item srv -Recurse -Force -ErrorAction SilentlyContinue | Out-Null; $DownloadUrl = \\\"https://github.com/isikerkan/n3x-discord-bot.git\\\"; if (-Not (Test-Path .git)) { Write-Output \\\"Installing the app\\\"; git clone \\\"$DownloadUrl\\\" srv 1> $null; Copy-Item srv/* ./ -Recurse -Force -ErrorAction SilentlyContinue | Out-Null; Remove-Item srv -Recurse -Force -ErrorAction SilentlyContinue | Out-Null; $DownloadBranch = (git symbolic-ref refs/remotes/origin/HEAD) -replace '.*/'; git checkout --force $DownloadBranch 1> $null; if ($LASTEXITCODE -eq 0) { git pull 1> $null }; if ($LASTEXITCODE -eq 0) { Write-Output \\\"App installed\\\" } } else { Write-Output \\\"Updating the app\\\"; git remote set-url origin \\\"$DownloadUrl\\\" 1> $null; $DownloadBranch = (git symbolic-ref refs/remotes/origin/HEAD) -replace '.*/'; git checkout --force $DownloadBranch 1> $null; if ($LASTEXITCODE -eq 0) { git pull 1> $null }; if ($LASTEXITCODE -eq 0) { Write-Output \\\"App updated\\\" } }\"",
+        "SkipOnFailure": false
+    },
+    {
+        "UpdateStageName": "Create Virtual Environment",
+        "UpdateSourcePlatform": "Linux",
+        "UpdateSource": "Executable",
+        "UpdateSourceData": "/bin/bash",
+        "UpdateSourceArgs": "-c \"if ! command -v /usr/bin/python{{PythonVersion}} >/dev/null 2>&1; then echo 'Error: Python {{PythonVersion}} is not installed.'; exit 1; fi; /usr/bin/python{{PythonVersion}} -u -m venv --clear --upgrade-deps \\\"{{$FullBaseDir}}venv\\\"\"",
+        "SkipOnFailure": false
+    },
+    {
+        "UpdateStageName": "Create Virtual Environment",
+        "UpdateSourcePlatform": "Windows",
+        "UpdateSource": "Executable",
+        "UpdateSourceData": "cmd.exe",
+        "UpdateSourceArgs": "/C where py >NUL 2>&1 || (echo Error: Python launcher \"py\" is not installed for all users on this system or is not in the System PATH. & exit /b 1) & py -{{PythonVersion}} --version >NUL 2>&1 || (echo Error: Python {{PythonVersion}} is not installed for all users on this system. & exit /b 1) & py -{{PythonVersion}} -u -m venv --clear --upgrade-deps \"{{$FullBaseDir}}venv\"",
+        "SkipOnFailure": false
+    },
+    {
+        "UpdateStageName": "Install Basic Python Packages",
+        "UpdateSourcePlatform": "Linux",
+        "UpdateSource": "Executable",
+        "UpdateSourceData": "/bin/bash",
+        "UpdateSourceArgs": "-c \"source \\\"{{$FullBaseDir}}venv/bin/activate\\\" && python3 -u -m pip install -U pip setuptools wheel\"",
+        "SkipOnFailure": false
+    },
+    {
+        "UpdateStageName": "Install Basic Python Packages",
+        "UpdateSourcePlatform": "Windows",
+        "UpdateSource": "Executable",
+        "UpdateSourceData": "cmd.exe",
+        "UpdateSourceArgs": "/C \"{{$FullBaseDir}}venv\\Scripts\\activate.bat\" && python.exe -u -m pip install -U pip setuptools wheel",
+        "SkipOnFailure": false
+    },
+    {
+        "UpdateStageName": "Install Additional Python Packages",
+        "UpdateSourcePlatform": "Linux",
+        "UpdateSource": "Executable",
+        "UpdateSourceData": "/bin/bash",
+        "UpdateSourceArgs": "-c \"cd \\\"{{$FullBaseDir}}\\\" && source ./venv/bin/activate && python3 -u -m pip install -U -r ./{{AppDir}}/requirements.txt\"",
+        "SkipOnFailure": false
+    },
+    {
+        "UpdateStageName": "Install Additional Python Packages",
+        "UpdateSourcePlatform": "Windows",
+        "UpdateSource": "Executable",
+        "UpdateSourceData": "cmd.exe",
+        "UpdateSourceArgs": "/C cd \"{{$FullBaseDir}}\" && venv\\Scripts\\activate.bat && python.exe -u -m pip install -U -r .\\{{AppDir}}\\requirements.txt",
+        "SkipOnFailure": false
+    }
+]

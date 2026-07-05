@@ -21,3 +21,6 @@ htmlcov/
 dist/
 build/
 *.egg-info/
+
+# User's reference code (contains secrets) — never commit
+manus versions/
