@@ -2,6 +2,13 @@ services:
   bot:
     build: .
     env_file: .env
+    environment:
+      # Compose's `environment:` always wins over `env_file:` for the same
+      # key, so this guarantees the flatfile backend writes inside the
+      # bot-data volume (mounted below) even if .env still has the bare
+      # "stats.json" default. To use a different in-volume path, edit this
+      # value directly (a plain DATA_FILE in .env will NOT override it).
+      DATA_FILE: data/stats.json
     volumes:
       - bot-data:/app/data      # persists sqlite/flatfile
     depends_on:

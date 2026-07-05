@@ -20,6 +20,10 @@ data-driven commands.
     # Postgres: set STORAGE_BACKEND=postgres and
     # DATABASE_URL=postgresql+asyncpg://n3x:n3x@postgres:5432/n3x in .env
 
+Under Docker, flatfile data only persists if `DATA_FILE` points inside
+`data/` (the mounted `bot-data` volume); `docker-compose.yml` sets
+`DATA_FILE=data/stats.json` by default for this reason.
+
 ## Run (CubeCoders AMP)
 
 AMP can manage the bot (start/stop/console/auto-restart) via its stock
