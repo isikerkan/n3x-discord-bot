@@ -16,3 +16,9 @@ def test_missing_placeholder_in_template_is_ignored():
     stat = Stat(id=1, key="cry", name="Cry", message_id=9)
     msg = Message(id=9, name="cry_msg", template="cried {count} times")
     assert render_output(stat, msg, "Ali", 3) == "cried 3 times"
+
+
+def test_bad_template_with_unknown_placeholder_falls_back_to_default():
+    stat = Stat(id=1, key="cry", name="Cry", message_id=9)
+    msg = Message(id=9, name="cry_msg", template="{name} did it {count}")
+    assert render_output(stat, msg, "Ali", 3) == "Cry — Ali — 3"

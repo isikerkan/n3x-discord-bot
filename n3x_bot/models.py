@@ -33,5 +33,8 @@ class Stat:
 def render_output(stat: Stat, message: Message | None,
                   user_display: str, count: int) -> str:
     if message is not None:
-        return message.template.format(user=user_display, count=count, stat=stat.name)
+        try:
+            return message.template.format(user=user_display, count=count, stat=stat.name)
+        except (KeyError, IndexError, ValueError):
+            pass  # bad template -> fall back to default render below
     return f"{stat.name} — {user_display} — {count}"
