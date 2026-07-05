@@ -30,6 +30,7 @@ class SqlRepository(StatsRepository):
     @staticmethod
     def _stat(r) -> Stat:
         return Stat(id=r.id, key=r.key, name=r.name, message_id=r.message_id,
+                    targeted=r.targeted,
                     archived_at=r.archived_at, created_at=r.created_at)
 
     @staticmethod
@@ -91,10 +92,11 @@ class SqlRepository(StatsRepository):
             await conn.execute(delete(sc.messages).where(sc.messages.c.id == message_id))
 
     # ── stats ──────────────────────────────────────────────────────────────
-    async def create_stat(self, key, name, message_id=None) -> Stat:
+    async def create_stat(self, key, name, message_id=None, targeted=False) -> Stat:
         async with self.engine.begin() as conn:
             res = await conn.execute(
                 insert(sc.stats).values(key=key, name=name, message_id=message_id,
+                                        targeted=targeted,
                                         created_at=_now()).returning(sc.stats))
             return self._stat(res.one())
 
@@ -276,3 +278,35 @@ class SqlRepository(StatsRepository):
                                    .where(sc.stat_last_post.c.stat_id == stat.id)
                                    .values(discord_message_id=discord_message_id,
                                            channel_id=channel_id))
+
+    # ── target tracking ───────────────────────────────────────────────────
+    async def record_target_use(self, target_discord_id, stat_key):
+        async with self.engine.begin() as conn:
+            stat = (await conn.execute(select(sc.stats)
+                    .where(sc.stats.c.key == stat_key))).one_or_none()
+            if stat is None:
+                raise KeyError(stat_key)
+            row = (await conn.execute(select(sc.target_stats).where(
+                (sc.target_stats.c.target_discord_id == target_discord_id) &
+                (sc.target_stats.c.stat_id == stat.id)))).one_or_none()
+            if row is None:
+                new_count = 1
+                await conn.execute(insert(sc.target_stats).values(
+                    target_discord_id=target_discord_id, stat_id=stat.id, count=1))
+            else:
+                new_count = row.count + 1
+                await conn.execute(update(sc.target_stats).where(
+                    (sc.target_stats.c.target_discord_id == target_discord_id) &
+                    (sc.target_stats.c.stat_id == stat.id)).values(count=new_count))
+            return new_count
+
+    async def get_target_total(self, target_discord_id, stat_key):
+        async with self.engine.connect() as conn:
+            r = (await conn.execute(
+                select(sc.target_stats.c.count)
+                .select_from(sc.target_stats
+                             .join(sc.stats, sc.stats.c.id == sc.target_stats.c.stat_id))
+                .where((sc.stats.c.key == stat_key) &
+                       (sc.target_stats.c.target_discord_id == target_discord_id)))
+                ).one_or_none()
+            return r.count if r else 0

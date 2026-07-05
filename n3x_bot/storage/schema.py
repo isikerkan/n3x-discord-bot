@@ -1,6 +1,6 @@
 from sqlalchemy import (
     MetaData, Table, Column, Integer, BigInteger, String, Text,
-    DateTime, ForeignKey,
+    DateTime, ForeignKey, Boolean, text,
 )
 
 metadata = MetaData()
@@ -29,6 +29,7 @@ stats = Table(
     Column("key", String(50), unique=True, nullable=False),
     Column("name", String(100), nullable=False),
     Column("message_id", Integer, ForeignKey("messages.id"), nullable=True),
+    Column("targeted", Boolean, nullable=False, server_default=text("false")),
     Column("archived_at", DateTime(timezone=True), nullable=True),
     Column("created_at", DateTime(timezone=True), nullable=False),
 )
@@ -51,4 +52,11 @@ stat_last_post = Table(
     Column("stat_id", Integer, ForeignKey("stats.id"), primary_key=True),
     Column("discord_message_id", BigInteger, nullable=False),
     Column("channel_id", BigInteger, nullable=False),
+)
+
+target_stats = Table(
+    "target_stats", metadata,
+    Column("target_discord_id", BigInteger, primary_key=True),
+    Column("stat_id", Integer, ForeignKey("stats.id"), primary_key=True),
+    Column("count", Integer, nullable=False, default=0),
 )

@@ -22,3 +22,15 @@ def test_bad_template_with_unknown_placeholder_falls_back_to_default():
     stat = Stat(id=1, key="cry", name="Cry", message_id=9)
     msg = Message(id=9, name="cry_msg", template="{name} did it {count}")
     assert render_output(stat, msg, "Ali", 3) == "Cry — Ali — 3"
+
+
+def test_target_placeholder_renders_when_provided():
+    stat = Stat(id=1, key="smart", name="Smart", message_id=9, targeted=True)
+    msg = Message(id=9, name="smart_msg", template="{target} did {stat} x{count}")
+    assert render_output(stat, msg, "Erkan", 5, target_display="<@42>") == "<@42> did Smart x5"
+
+
+def test_target_placeholder_defaults_to_empty_string_when_not_provided():
+    stat = Stat(id=1, key="smart", name="Smart", message_id=9, targeted=True)
+    msg = Message(id=9, name="smart_msg", template="[{target}] {count}")
+    assert render_output(stat, msg, "Erkan", 5) == "[] 5"

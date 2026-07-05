@@ -26,7 +26,8 @@ class StatsRepository(ABC):
     # stats
     @abstractmethod
     async def create_stat(self, key: str, name: str,
-                          message_id: int | None = None) -> Stat: ...
+                          message_id: int | None = None,
+                          targeted: bool = False) -> Stat: ...
     @abstractmethod
     async def get_stat(self, key: str) -> Stat | None: ...
     @abstractmethod
@@ -72,3 +73,16 @@ class StatsRepository(ABC):
     @abstractmethod
     async def set_last_post(self, stat_key: str, discord_message_id: int,
                             channel_id: int) -> None: ...
+
+    # target tracking
+    @abstractmethod
+    async def record_target_use(self, target_discord_id: int, stat_key: str) -> int:
+        """Increment the per-target counter for `stat_key`, return the new count.
+
+        Raises KeyError for an unknown stat. This only touches the target
+        counter — the invoker's own `user_stats` is updated separately via
+        `record_use`.
+        """
+        ...
+    @abstractmethod
+    async def get_target_total(self, target_discord_id: int, stat_key: str) -> int: ...

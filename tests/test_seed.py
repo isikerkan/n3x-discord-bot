@@ -3,7 +3,7 @@ import os
 import tempfile
 
 from n3x_bot.storage.json_repo import JsonRepository
-from n3x_bot.seed import seed_defaults, migrate_legacy_json, LEGACY_STATS
+from n3x_bot.seed import seed_defaults, migrate_legacy_json, LEGACY_STATS, TARGETED_STATS
 
 
 async def _repo():
@@ -25,6 +25,16 @@ async def test_seed_is_idempotent():
     assert tit.message_id is not None
     msg = await r.get_message(tit.message_id)
     assert "{count}" in msg.template
+    await r.close()
+
+
+async def test_seed_marks_targeted_stats_correctly():
+    r = await _repo()
+    await seed_defaults(r)
+    for key, _, _ in LEGACY_STATS:
+        stat = await r.get_stat(key)
+        assert stat.targeted == (key in TARGETED_STATS), key
+    assert TARGETED_STATS == {"smart", "crash", "home"}
     await r.close()
 
 

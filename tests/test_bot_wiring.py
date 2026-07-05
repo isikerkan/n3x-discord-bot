@@ -16,6 +16,7 @@ BASE_SETTINGS_KWARGS = dict(
     target_role_id=1,
     welcome_channel_id=2,
     reminder_channel_id=999,
+    julez_id=424242,
     _env_file=None,
     _env_prefix="NONEXISTENT_",
 )
@@ -642,6 +643,119 @@ async def test_on_member_join_after_remove_unarchives_rejoining_member():
     assert user.archived_at is None
     assert user.display_name == "Boomerang Back"
     assert 999 in {u.discord_id for u in await repo.list_users()}
+
+    await repo.close()
+
+
+# ── targeted stat commands (smart/crash/home) ────────────────────────────
+
+async def test_targeted_stat_command_increments_target_and_invoker():
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+    await register_stat_commands(bot, repo, settings)
+    channel, _ = _fake_channel()
+    bot.get_channel = MagicMock(return_value=channel)
+
+    cmd = bot.get_command("smart")
+    ctx = MagicMock()
+    ctx.author = SimpleNamespace(id=1, display_name="Invoker")
+    member = SimpleNamespace(id=42, display_name="Target", mention="<@42>")
+
+    await cmd.callback(ctx, member)
+
+    # target's per-target counter increments, not the invoker's user_stats
+    # under the target's id
+    assert await repo.get_target_total(42, "smart") == 1
+    # the invoker's own user_stats is still updated via record_use
+    assert await repo.get_user_stats(1) == {"smart": 1}
+    channel.send.assert_awaited_once()
+    text = channel.send.await_args.args[0]
+    assert "<@42>" in text
+
+    await repo.close()
+
+
+async def test_targeted_stat_command_counts_per_target_separately():
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+    await register_stat_commands(bot, repo, settings)
+    channel, _ = _fake_channel()
+    bot.get_channel = MagicMock(return_value=channel)
+
+    cmd = bot.get_command("crash")
+    ctx = MagicMock()
+    ctx.author = SimpleNamespace(id=1, display_name="Invoker")
+    member_a = SimpleNamespace(id=10, display_name="A", mention="<@10>")
+    member_b = SimpleNamespace(id=20, display_name="B", mention="<@20>")
+
+    await cmd.callback(ctx, member_a)
+    await cmd.callback(ctx, member_a)
+    await cmd.callback(ctx, member_b)
+
+    assert await repo.get_target_total(10, "crash") == 2
+    assert await repo.get_target_total(20, "crash") == 1
+    assert await repo.get_user_stats(1) == {"crash": 3}
+
+    await repo.close()
+
+
+async def test_non_targeted_stats_are_unaffected_by_targeted_wiring():
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+    await register_stat_commands(bot, repo, settings)
+    channel, _ = _fake_channel()
+    bot.get_channel = MagicMock(return_value=channel)
+
+    cmd = bot.get_command("tit")
+    ctx = MagicMock()
+    ctx.author = SimpleNamespace(id=1, display_name="Invoker")
+
+    await cmd.callback(ctx)
+
+    channel.send.assert_awaited_once()
+    assert await repo.get_user_stats(1) == {"tit": 1}
+
+    await repo.close()
+
+
+async def test_home_command_targets_configured_julez_id_with_no_argument():
+    repo = await _flatfile_repo()
+    settings = _settings(julez_id=999)
+    bot = build_bot(settings, repo)
+    await register_stat_commands(bot, repo, settings)
+    channel, _ = _fake_channel()
+    bot.get_channel = MagicMock(return_value=channel)
+
+    cmd = bot.get_command("home")
+    assert cmd is not None
+    ctx = MagicMock()
+    ctx.author = SimpleNamespace(id=1, display_name="Invoker")
+
+    await cmd.callback(ctx)
+
+    assert await repo.get_target_total(999, "home") == 1
+    assert await repo.get_user_stats(1) == {"home": 1}
+    channel.send.assert_awaited_once()
+    text = channel.send.await_args.args[0]
+    assert "<@999>" in text
+
+    await repo.close()
+
+
+async def test_home_command_is_skipped_when_julez_id_unset():
+    repo = await _flatfile_repo()
+    settings = _settings(julez_id=0)
+    bot = build_bot(settings, repo)
+
+    await register_stat_commands(bot, repo, settings)
+
+    assert bot.get_command("home") is None
+    # other targeted stats still register normally
+    assert bot.get_command("smart") is not None
+    assert bot.get_command("crash") is not None
 
     await repo.close()
 

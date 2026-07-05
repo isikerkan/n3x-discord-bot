@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     target_role_id: int
     welcome_channel_id: int
     reminder_channel_id: int
+    julez_id: int = 0
 
     prefix_str: str = "[N3X]"
     command_prefix: str = "!"

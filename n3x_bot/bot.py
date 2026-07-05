@@ -11,6 +11,8 @@ from n3x_bot.storage.base import StatsRepository
 
 log = logging.getLogger("N3X-Bot")
 
+HOME_KEY = "home"
+
 
 async def build_output(repo: StatsRepository, stat_key: str,
                        discord_id: int, display_name: str) -> str:
@@ -20,6 +22,24 @@ async def build_output(repo: StatsRepository, stat_key: str,
     if stat.message_id is not None:
         message = await repo.get_message(stat.message_id)
     return render_output(stat, message, display_name, total)
+
+
+async def build_target_output(repo: StatsRepository, stat_key: str,
+                              invoker_id: int, invoker_display: str,
+                              target_id: int, target_display: str) -> str:
+    """Render output for a targeted stat (e.g. `!smart @user`).
+
+    The invoker's own `user_stats` is updated via `record_use` (as today),
+    while the target's separate counter is updated via `record_target_use`.
+    The rendered count reflects the TARGET's count, not the invoker's.
+    """
+    await repo.record_use(invoker_id, invoker_display, stat_key)
+    count = await repo.record_target_use(target_id, stat_key)
+    stat = await repo.get_stat(stat_key)
+    message = None
+    if stat.message_id is not None:
+        message = await repo.get_message(stat.message_id)
+    return render_output(stat, message, invoker_display, count, target_display=target_display)
 
 
 def build_bot(settings: Settings, repo: StatsRepository) -> commands.Bot:
@@ -33,6 +53,7 @@ def build_bot(settings: Settings, repo: StatsRepository) -> commands.Bot:
     bot.n3x_settings = settings
     bot.n3x_repo = repo
     bot._rank_last_posts = {}
+    bot._target_last_posts = {}
 
     _wire_events(bot, settings, repo)
     return bot
@@ -54,20 +75,21 @@ async def _send_or_update(bot, repo, settings, stat_key: str, text: str):
     await repo.set_last_post(stat_key, new_msg.id, channel.id)
 
 
-async def _send_rank(bot, settings, rank_key: str, text: str):
-    """Send/update ephemeral rank output without touching stat_last_post.
+async def _send_ephemeral(bot, settings, store: dict, track_key: str, text: str):
+    """Send/update an ephemeral output without touching `stat_last_post`.
 
-    Rank output is not a real stat (there is no `rank_<id>` row in the
-    `stats` table), so it cannot go through `_send_or_update` /
-    `repo.set_last_post` — the `stat_last_post` table is FK-bound to
-    `stats` and would raise `KeyError`. Instead, track the last posted
-    message id in-memory on the bot for the "delete previous, send new"
-    behavior, since this display doesn't need DB persistence.
+    Some display keys are not real stat rows (e.g. `rank_<user_id>`, or a
+    per-target key like `smart_<member_id>` for a targeted stat command),
+    so they cannot go through `_send_or_update` / `repo.set_last_post` —
+    `stat_last_post` is FK-bound to `stats` and would raise `KeyError` for
+    an unknown key. Instead, track the last posted message id in-memory in
+    `store` for the "delete previous, send new" behavior, since these
+    displays don't need DB persistence.
     """
     channel = bot.get_channel(settings.reminder_channel_id)
     if channel is None:
         return
-    old_id = bot._rank_last_posts.get(rank_key)
+    old_id = store.get(track_key)
     if old_id is not None:
         try:
             old = await channel.fetch_message(old_id)
@@ -75,12 +97,19 @@ async def _send_rank(bot, settings, rank_key: str, text: str):
         except Exception:
             pass
     new_msg = await channel.send(text)
-    bot._rank_last_posts[rank_key] = new_msg.id
+    store[track_key] = new_msg.id
+
+
+async def _send_rank(bot, settings, rank_key: str, text: str):
+    await _send_ephemeral(bot, settings, bot._rank_last_posts, rank_key, text)
 
 
 async def register_stat_commands(bot, repo: StatsRepository, settings: Settings):
     for stat in await repo.list_stats():
-        _add_stat_command(bot, repo, settings, stat.key)
+        if stat.targeted:
+            _add_targeted_stat_command(bot, repo, settings, stat.key)
+        else:
+            _add_stat_command(bot, repo, settings, stat.key)
 
     async def _rank(ctx):
         data = await repo.get_user_stats(ctx.author.id)
@@ -110,6 +139,46 @@ def _add_stat_command(bot, repo, settings, key: str):
         await _send_or_update(bot, repo, settings, _key, text)
 
     bot.add_command(commands.Command(_cmd, name=key))
+
+
+def _add_targeted_stat_command(bot, repo, settings, key: str):
+    """Register a targeted stat command.
+
+    Ordinary targeted stats (e.g. `smart`, `crash`) take an explicit
+    `member: discord.Member` argument. `HOME_KEY` is special-cased: it has
+    a fixed target (`settings.julez_id`) and takes no argument. If
+    `settings.julez_id` is unset (0/falsy), `home` is skipped entirely
+    rather than registering a broken command with no valid target.
+    """
+    if bot.get_command(key) is not None:
+        return
+
+    if key == HOME_KEY:
+        if not settings.julez_id:
+            return
+
+        @commands.cooldown(1, 20, commands.BucketType.user)
+        async def _home_cmd(ctx, _key=key):
+            text = await build_target_output(
+                repo, _key, ctx.author.id, ctx.author.display_name,
+                settings.julez_id, f"<@{settings.julez_id}>")
+            await _send_or_update(bot, repo, settings, _key, text)
+
+        bot.add_command(commands.Command(_home_cmd, name=key))
+        return
+
+    @commands.cooldown(1, 20, commands.BucketType.user)
+    async def _tcmd(ctx, member: discord.Member, _key=key):
+        text = await build_target_output(
+            repo, _key, ctx.author.id, ctx.author.display_name,
+            member.id, member.mention)
+        # Per-target output isn't a single row `stat_last_post` can track
+        # (many possible targets per stat), so use in-memory tracking keyed
+        # by "<stat_key>_<member_id>", same pattern as `_send_rank`.
+        await _send_ephemeral(bot, settings, bot._target_last_posts,
+                              f"{_key}_{member.id}", text)
+
+    bot.add_command(commands.Command(_tcmd, name=key))
 
 
 def _wire_events(bot, settings: Settings, repo: StatsRepository):

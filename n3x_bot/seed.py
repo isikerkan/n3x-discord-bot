@@ -10,9 +10,15 @@ LEGACY_STATS: list[tuple[str, str, str]] = [
     ("afk", "AFK", "Muneeb ist zum {count} mal AFK..."),
     ("oma", "Oma", "Patrick wurde zum {count} mal Perma gebannt."),
     ("jules", "Jules", "Der aller echteste Homelander hat euch schon {count} mal am leben gelassen!"),
-    ("smart", "Smart", "Julez beweist zum {count} Mal, dass er ein Klugscheisser ist.."),
-    ("crash", "Crash", "Dennis geht zum {count} mal komplett crashout... opfer"),
+    ("smart", "Smart", "{target} beweist zum {count} Mal, dass er ein Klugscheisser ist.."),
+    ("crash", "Crash", "{target} geht zum {count} mal komplett crashout... opfer"),
+    ("home", "Home",
+     "Der aller echteste Homelander {target} hat euch schon {count} mal am leben gelassen!"),
 ]
+
+# Stats counted against a TARGET member (e.g. `!smart @user`) rather than
+# the invoker. `home` targets a fixed configured id (settings.julez_id).
+TARGETED_STATS: set[str] = {"smart", "crash", "home"}
 
 
 async def seed_defaults(repo: StatsRepository) -> None:
@@ -20,7 +26,7 @@ async def seed_defaults(repo: StatsRepository) -> None:
         if await repo.get_stat(key) is not None:
             continue
         msg = await repo.create_message(f"{key}_msg", template)
-        await repo.create_stat(key, name, message_id=msg.id)
+        await repo.create_stat(key, name, message_id=msg.id, targeted=(key in TARGETED_STATS))
 
 
 async def migrate_legacy_json(repo: StatsRepository, path: str) -> None:

@@ -93,3 +93,25 @@ async def test_last_post_roundtrip(repo):
     assert await repo.get_last_post("tit") == (123, 456)
     await repo.set_last_post("tit", 789, 456)
     assert await repo.get_last_post("tit") == (789, 456)
+
+
+async def test_targeted_stat_and_record_target_use(repo):
+    await repo.create_stat("smart", "Smart", targeted=True)
+    s = await repo.get_stat("smart")
+    assert s.targeted is True
+    c1 = await repo.record_target_use(999, "smart")
+    c2 = await repo.record_target_use(999, "smart")
+    c3 = await repo.record_target_use(111, "smart")
+    assert (c1, c2, c3) == (1, 2, 1)
+    assert await repo.get_target_total(999, "smart") == 2
+    assert await repo.get_target_total(111, "smart") == 1
+
+
+async def test_record_target_use_unknown_stat_raises(repo):
+    with pytest.raises(KeyError):
+        await repo.record_target_use(1, "ghost")
+
+
+async def test_create_stat_defaults_not_targeted(repo):
+    await repo.create_stat("tit", "Tit")
+    assert (await repo.get_stat("tit")).targeted is False

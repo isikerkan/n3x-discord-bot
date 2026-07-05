@@ -26,6 +26,7 @@ class JsonRepository(StatsRepository):
             "seq": {"user": 0, "message": 0, "stat": 0},
             "users": [], "messages": [], "stats": [],
             "user_stats": {}, "stat_totals": {}, "stat_last_post": {},
+            "target_stats": {},
         }
 
     async def connect(self) -> None:
@@ -61,6 +62,7 @@ class JsonRepository(StatsRepository):
     def _stat(self, r) -> Stat:
         return Stat(id=r["id"], key=r["key"], name=r["name"],
                     message_id=r["message_id"],
+                    targeted=r.get("targeted", False),
                     archived_at=_parse_dt(r["archived_at"]),
                     created_at=_parse_dt(r["created_at"]))
 
@@ -120,9 +122,10 @@ class JsonRepository(StatsRepository):
         self._flush()
 
     # ── stats ──────────────────────────────────────────────────────────────
-    async def create_stat(self, key, name, message_id=None) -> Stat:
+    async def create_stat(self, key, name, message_id=None, targeted=False) -> Stat:
         row = {"id": self._next("stat"), "key": key, "name": name,
-               "message_id": message_id, "archived_at": None, "created_at": _now()}
+               "message_id": message_id, "targeted": targeted,
+               "archived_at": None, "created_at": _now()}
         self._db["stats"].append(row)
         self._flush()
         return self._stat(row)
@@ -237,3 +240,20 @@ class JsonRepository(StatsRepository):
             raise KeyError(stat_key)
         self._db["stat_last_post"][str(stat["id"])] = [discord_message_id, channel_id]
         self._flush()
+
+    # ── target tracking ────────────────────────────────────────────────────
+    async def record_target_use(self, target_discord_id, stat_key):
+        stat = self._find("stats", key=stat_key)
+        if stat is None:
+            raise KeyError(stat_key)
+        sid, tid = str(stat["id"]), str(target_discord_id)
+        ts = self._db["target_stats"].setdefault(sid, {})
+        ts[tid] = ts.get(tid, 0) + 1
+        self._flush()
+        return ts[tid]
+
+    async def get_target_total(self, target_discord_id, stat_key):
+        stat = self._find("stats", key=stat_key)
+        if stat is None:
+            return 0
+        return self._db["target_stats"].get(str(stat["id"]), {}).get(str(target_discord_id), 0)
