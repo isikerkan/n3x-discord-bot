@@ -10,8 +10,8 @@ users = Table(
     Column("id", Integer, primary_key=True, autoincrement=True),
     Column("discord_id", BigInteger, unique=True, nullable=False),
     Column("display_name", String(100), nullable=False),
-    Column("archived_at", DateTime, nullable=True),
-    Column("created_at", DateTime, nullable=False),
+    Column("archived_at", DateTime(timezone=True), nullable=True),
+    Column("created_at", DateTime(timezone=True), nullable=False),
 )
 
 messages = Table(
@@ -19,8 +19,8 @@ messages = Table(
     Column("id", Integer, primary_key=True, autoincrement=True),
     Column("name", String(100), unique=True, nullable=False),
     Column("template", Text, nullable=False),
-    Column("archived_at", DateTime, nullable=True),
-    Column("created_at", DateTime, nullable=False),
+    Column("archived_at", DateTime(timezone=True), nullable=True),
+    Column("created_at", DateTime(timezone=True), nullable=False),
 )
 
 stats = Table(
@@ -29,8 +29,8 @@ stats = Table(
     Column("key", String(50), unique=True, nullable=False),
     Column("name", String(100), nullable=False),
     Column("message_id", Integer, ForeignKey("messages.id"), nullable=True),
-    Column("archived_at", DateTime, nullable=True),
-    Column("created_at", DateTime, nullable=False),
+    Column("archived_at", DateTime(timezone=True), nullable=True),
+    Column("created_at", DateTime(timezone=True), nullable=False),
 )
 
 user_stats = Table(

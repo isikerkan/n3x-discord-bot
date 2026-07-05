@@ -3,6 +3,7 @@ import os
 import pytest
 
 from n3x_bot.storage.json_repo import JsonRepository
+from n3x_bot.storage.sql_repo import SqlRepository
 
 
 async def _make_json():
@@ -38,9 +39,9 @@ async def repo(repo_factory):
         path = getattr(r, "path", None)
         if path and os.path.exists(path):
             os.remove(path)
-
-
-from n3x_bot.storage.sql_repo import SqlRepository
+        db_path = getattr(r, "_test_db_path", None)
+        if db_path and os.path.exists(db_path):
+            os.remove(db_path)
 
 
 async def _make_sqlite():
@@ -50,6 +51,7 @@ async def _make_sqlite():
     os.remove(path)
     r = SqlRepository(f"sqlite+aiosqlite:///{path}")
     await r.connect()
+    r._test_db_path = path
     return r
 
 

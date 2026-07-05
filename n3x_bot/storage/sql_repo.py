@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import select, insert, update, delete, func
+from sqlalchemy import select, insert, update, delete
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from n3x_bot.models import User, Stat, Message
