@@ -1,10 +1,12 @@
+import os
+
 import pytest
 
 from n3x_bot.storage.json_repo import JsonRepository
 
 
-async def _make_json(tmp_path_holder=[]):
-    import tempfile, os
+async def _make_json():
+    import tempfile
     fd, path = tempfile.mkstemp(suffix=".json")
     os.close(fd)
     os.remove(path)  # start clean; connect() will create it
@@ -33,3 +35,6 @@ async def repo(repo_factory):
         yield r
     finally:
         await r.close()
+        path = getattr(r, "path", None)
+        if path and os.path.exists(path):
+            os.remove(path)

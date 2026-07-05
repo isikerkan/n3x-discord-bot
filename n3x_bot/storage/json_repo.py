@@ -1,5 +1,6 @@
 import json
 import os
+import tempfile
 from datetime import datetime, timezone
 
 from n3x_bot.models import User, Stat, Message
@@ -41,8 +42,16 @@ class JsonRepository(StatsRepository):
         self._flush()
 
     def _flush(self) -> None:
-        with open(self.path, "w") as f:
-            json.dump(self._db, f)
+        directory = os.path.dirname(self.path) or "."
+        fd, tmp_path = tempfile.mkstemp(dir=directory, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump(self._db, f)
+            os.replace(tmp_path, self.path)
+        except BaseException:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+            raise
 
     def _next(self, kind: str) -> int:
         self._db["seq"][kind] += 1
