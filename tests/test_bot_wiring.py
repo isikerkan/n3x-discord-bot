@@ -434,6 +434,60 @@ async def test_on_command_error_notifies_on_cooldown():
     await repo.close()
 
 
+async def test_on_command_error_missing_arg_is_generic_for_gate_commands():
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+
+    ctx = MagicMock()
+    ctx.send = AsyncMock()
+    ctx.command = SimpleNamespace(name="stat")
+    error = commands.MissingRequiredArgument.__new__(commands.MissingRequiredArgument)
+
+    await bot.on_command_error(ctx, error)
+
+    ctx.send.assert_awaited_once()
+    assert ctx.send.await_args.args[0] == "❌ Fehlendes Argument."
+
+    await repo.close()
+
+
+async def test_on_command_error_missing_arg_asks_for_user_on_targeted_commands():
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+
+    ctx = MagicMock()
+    ctx.send = AsyncMock()
+    ctx.command = SimpleNamespace(name="smart")
+    error = commands.MissingRequiredArgument.__new__(commands.MissingRequiredArgument)
+
+    await bot.on_command_error(ctx, error)
+
+    ctx.send.assert_awaited_once()
+    assert ctx.send.await_args.args[0] == "❌ Bitte gib einen Nutzer an."
+
+    await repo.close()
+
+
+async def test_on_command_error_reports_bad_argument():
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+
+    ctx = MagicMock()
+    ctx.send = AsyncMock()
+    ctx.command = SimpleNamespace(name="del")
+    error = commands.BadArgument("not an int")
+
+    await bot.on_command_error(ctx, error)
+
+    ctx.send.assert_awaited_once()
+    assert ctx.send.await_args.args[0] == "❌ Ungültiges Argument."
+
+    await repo.close()
+
+
 async def test_on_command_error_ignores_other_errors():
     repo = await _flatfile_repo()
     settings = _settings()

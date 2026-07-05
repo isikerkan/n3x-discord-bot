@@ -358,9 +358,14 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
             await ctx.send(f"Warte bitte {error.retry_after:.1f} Sekunden.",
                            delete_after=5)
         elif isinstance(error, commands.MissingRequiredArgument):
-            await ctx.send("❌ Bitte gib einen Nutzer an.", delete_after=5)
+            if ctx.command and ctx.command.name in ("stat", "del"):
+                await ctx.send("❌ Fehlendes Argument.", delete_after=5)
+            else:
+                await ctx.send("❌ Bitte gib einen Nutzer an.", delete_after=5)
         elif isinstance(error, commands.MemberNotFound):
             await ctx.send("❌ Nutzer nicht gefunden.", delete_after=5)
+        elif isinstance(error, commands.BadArgument):
+            await ctx.send("❌ Ungültiges Argument.", delete_after=5)
 
     @bot.event
     async def on_message(message):
