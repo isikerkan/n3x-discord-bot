@@ -29,29 +29,22 @@ async def migrate_legacy_json(repo: StatsRepository, path: str) -> None:
     with open(path, "r") as f:
         data = json.load(f)
 
-    # per-user counts first (these contribute to global totals)
-    user_contributed = {}
-    for uid_str, cmds in data.get("user_stats", {}).items():
-        discord_id = int(uid_str)
-        for key, count in cmds.items():
-            if await repo.get_stat(key) is None:
-                continue
-            for _ in range(count):
-                await repo.record_use(discord_id, f"user_{discord_id}", key)
-            user_contributed[key] = user_contributed.get(key, 0) + count
-
-    # global totals: keys like "tit_count"
-    # attribute the unattributed difference to user 0
+    user_stats = data.get("user_stats", {})
     for key, _, _ in LEGACY_STATS:
+        # Idempotency guard: if this key already has counts, it was migrated.
+        if await repo.get_total(key) != 0:
+            continue
+        if await repo.get_stat(key) is None:
+            continue
         total = data.get(f"{key}_count", 0)
-        user_count = user_contributed.get(key, 0)
-        unattributed = total - user_count
-        if unattributed > 0:
-            for _ in range(unattributed):
-                # seed total without attributing to a user
-                await _bump_total(repo, key)
-
-
-async def _bump_total(repo: StatsRepository, key: str) -> None:
-    # Increment only the global total, using a synthetic archived migrator user
-    await repo.record_use(0, "legacy_migrator", key)
+        attributed = 0
+        for uid_str, cmds in user_stats.items():
+            count = cmds.get(key, 0)
+            for _ in range(count):
+                await repo.record_use(int(uid_str), f"user_{uid_str}", key)
+            attributed += count
+        remainder = total - attributed
+        for _ in range(max(0, remainder)):
+            # Attribute the unattributed remainder to synthetic user 0
+            # (the migrator), not to any real Discord user.
+            await repo.record_use(0, "legacy_migrator", key)
