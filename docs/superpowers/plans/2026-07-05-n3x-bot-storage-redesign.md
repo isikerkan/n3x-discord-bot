@@ -1815,17 +1815,21 @@ git commit -m "feat: dynamic stat commands, events, entrypoint; drop legacy bot.
 
 ---
 
-### Task 10: Docker + compose + README
+### Task 10: Docker + compose + AMP + README
 
 **Files:**
 - Create: `Dockerfile`
 - Create: `docker-compose.yml`
 - Create: `.dockerignore`
+- Create: `requirements.txt` (runtime deps; exported from uv — used by CubeCoders AMP's Python App Runner file-install method, and handy generally)
+- Create: `deploy/amp/README.md` (how to run under CubeCoders AMP via the stock "Python App Runner" generic template, with exact field values)
 - Create: `README.md`
 
 **Interfaces:**
 - Consumes: `n3x_bot` package, `.env`.
-- Produces: runnable container; `docker compose up` launches bot; postgres service available; `STORAGE_BACKEND` read from `.env`.
+- Produces: runnable container; `docker compose up` launches bot; postgres service available; `STORAGE_BACKEND` read from `.env`. Plus AMP-managed operation via the stock Python App Runner template.
+
+**AMP approach (research/reuse):** CubeCoders AMP already ships a maintained **"Python App Runner"** generic-module template (`CubeCoders/AMPTemplates/python-app-runner.kvp`) that git-clones a repo, creates a venv, installs a `requirements.txt`, and runs the app as `-u -m <module>`. We reuse it rather than hand-rolling a `.kvp` bundle. Our only code deliverables for AMP are: (1) a `requirements.txt` so AMP installs our non-default deps (AMP's Python App Runner installs `discord.py` + `python-dotenv` by default, but NOT `pydantic-settings`, `sqlalchemy`, `asyncpg`, `aiosqlite`), and (2) setup docs. The app runs from the repo root as `python -m n3x_bot` (the package is importable from the working dir — no install step needed), reading `.env` from the working dir. AMP then provides start/stop/console/logs/auto-restart.
 
 - [ ] **Step 1: Write `.dockerignore`**
 
@@ -1898,7 +1902,70 @@ volumes:
 
 Note: `bot` reads `STORAGE_BACKEND` from `.env`. For flatfile/sqlite the postgres service is harmless (idle); for postgres set `DATABASE_URL=postgresql+asyncpg://n3x:n3x@postgres:5432/n3x` in `.env`. `required: false` on the dependency keeps the bot startable even if postgres is not desired.
 
-- [ ] **Step 4: Write `README.md`**
+- [ ] **Step 4: Generate `requirements.txt` (runtime deps)**
+
+Export the locked runtime dependencies (no dev group) so AMP's Python App Runner can install them:
+
+Run: `uv export --no-dev --no-hashes --format requirements-txt -o requirements.txt`
+Then confirm it lists `discord.py`, `pydantic-settings`, `sqlalchemy`, `asyncpg`, `aiosqlite` (transitive deps included is fine).
+If `uv export` is unavailable, write `requirements.txt` by hand with the five runtime deps and their lower bounds copied from `pyproject.toml`:
+
+```
+discord.py>=2.4
+pydantic-settings>=2.4
+sqlalchemy[asyncio]>=2.0
+asyncpg>=0.29
+aiosqlite>=0.20
+```
+
+- [ ] **Step 5: Write `deploy/amp/README.md` (CubeCoders AMP setup)**
+
+```markdown
+# Running N3X Bot under CubeCoders AMP
+
+AMP can start/stop/console/auto-restart the bot using its stock **Python App
+Runner** generic template (no custom template needed). This is the "AMP Generic"
+tier; Docker (see project README) is the alternative.
+
+## One-time setup
+
+1. In AMP, create a new instance and choose the **Python App Runner**
+   application (install it from the "Python App Runner" template if not present).
+2. Configure the instance (Configuration → the app's settings), setting:
+   - **App Download Type:** `Git repo`
+   - **App Download Source:** `https://github.com/isikerkan/n3x-discord-bot.git`
+   - **Git Repo Branch:** empty (default branch) — or a release branch/tag
+   - **Python Version:** `3.12`
+   - **Python Packages Install Method:** `Requirements.txt file`
+   - **App Run Mode:** `Python module`
+   - **App Module Name:** `n3x_bot`
+   - **App Subdirectory:** empty (repo root — `n3x_bot/` is importable there)
+3. **Update** the instance. AMP git-clones the repo, creates a venv, and
+   installs `requirements.txt`.
+4. Create the `.env` file in the instance's working directory (the cloned repo
+   root) with `DISCORD_TOKEN`, `STORAGE_BACKEND`, `DATABASE_URL` (if sqlite/
+   postgres), and the channel/role IDs — same variables as `.env.example`.
+   AMP's Python App Runner loads `.env` from the working directory automatically.
+5. **Start** the instance. Use the AMP console for logs; Start/Stop/Restart and
+   scheduled restarts are managed by AMP.
+
+## Storage under AMP
+
+- `flatfile` / `sqlite`: data persists in the instance's working directory
+  (`stats.json` or the sqlite `.db`). Back these up with AMP's file manager.
+- `postgres`: point `DATABASE_URL` at an external Postgres (a separate AMP
+  instance, a container, or a managed DB). AMP's Python App Runner does not
+  provision a database.
+
+## Updating
+
+Re-run **Update** on the instance to pull the latest commit and reinstall
+dependencies, then **Restart**.
+```
+
+- [ ] **Step 6: Write `.dockerignore` additions + `README.md`**
+
+Ensure `.dockerignore` also excludes `deploy` (AMP docs aren't needed in the image). Then write `README.md`:
 
 ```markdown
 # N3X Discord Bot
@@ -1923,6 +1990,12 @@ data-driven commands.
     # Postgres: set STORAGE_BACKEND=postgres and
     # DATABASE_URL=postgresql+asyncpg://n3x:n3x@postgres:5432/n3x in .env
 
+## Run (CubeCoders AMP)
+
+AMP can manage the bot (start/stop/console/auto-restart) via its stock
+**Python App Runner** template pointed at this repo. See
+[`deploy/amp/README.md`](deploy/amp/README.md) for exact settings.
+
 ## Test
 
     uv run pytest --cov=n3x_bot
@@ -1937,16 +2010,16 @@ All three satisfy the same repository contract. Adding a counter = insert a
 registered automatically on next start.
 ```
 
-- [ ] **Step 5: Build sanity check**
+- [ ] **Step 7: Build sanity check**
 
 Run: `docker compose build bot`
-Expected: image builds without error.
+Expected: image builds without error. (If `uv sync --no-dev` in the Dockerfile needs the lockfile, also `COPY uv.lock ./` before it.)
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add Dockerfile docker-compose.yml .dockerignore README.md
-git commit -m "chore: Docker, compose, and README"
+git add Dockerfile docker-compose.yml .dockerignore requirements.txt deploy/amp/README.md README.md
+git commit -m "chore: Docker, compose, AMP (Python App Runner) setup, and README"
 ```
 
 ---
@@ -1960,10 +2033,15 @@ git commit -m "chore: Docker, compose, and README"
 Run: `git grep -nE "MTU='?|discord_token *= *\"" || echo clean`
 Expected: `clean`. Also confirm `.env` is untracked: `git status --porcelain | grep -q "\.env$" && echo "LEAK" || echo ok` → `ok`.
 
-- [ ] **Step 2: Push**
+- [ ] **Step 2: Push the feature branch + open a PR**
+
+Work happens on `feat/storage-redesign` (not `main`).
 
 ```bash
-git push -u origin main
+git push -u origin feat/storage-redesign
+gh pr create --base main --head feat/storage-redesign \
+  --title "Storage redesign: pluggable backends, dynamic CRUD stats, Docker + AMP" \
+  --body "See docs/superpowers/plans/2026-07-05-n3x-bot-storage-redesign.md"
 ```
 
 - [ ] **Step 3: Final coverage gate**
