@@ -24,11 +24,16 @@ async def _prepare(settings: Settings):
     return repo
 
 
-def main() -> None:
+async def amain() -> None:
     settings = Settings()
-    repo = asyncio.run(_prepare(settings))
+    repo = await _prepare(settings)
     bot = build_bot(settings, repo)
-    bot.run(settings.discord_token)
+    async with bot:
+        await bot.start(settings.discord_token)
+
+
+def main() -> None:
+    asyncio.run(amain())
 
 
 if __name__ == "__main__":

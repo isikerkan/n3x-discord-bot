@@ -130,7 +130,7 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
         await register_stat_commands(bot, repo, settings)
         for guild in bot.guilds:
             try:
-                members = await guild.fetch_members(limit=None).flatten()
+                members = [m async for m in guild.fetch_members(limit=None)]
             except Exception:
                 members = guild.members
             for m in members:
