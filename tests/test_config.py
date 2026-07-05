@@ -7,6 +7,8 @@ BASE = dict(
     target_role_id=1,
     welcome_channel_id=2,
     reminder_channel_id=3,
+    _env_file=None,
+    _env_prefix="NONEXISTENT_",
 )
 
 
