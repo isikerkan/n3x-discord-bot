@@ -22,16 +22,55 @@ to `https://github.com/isikerkan/n3x-discord-bot.git`, so an admin just hits
 **Update** to clone/pull the bot — no baked-in clone command. The bot runs as
 `python -u -m n3x_bot` from the repo root (`./n3x-bot/`).
 
-## Installing the custom template
+## Installing via a Configuration Repository (recommended, native)
 
-1. Copy the four files in this directory into your AMP controller's template
-   directory (e.g. `.ampdata/instances/<name>/` for a per-instance template, or
-   the shared AMP config templates directory). AMP discovers the app via
-   `n3x-bot.kvp` (which references the other three files by name).
-2. In AMP, create a new instance and select the **N3X Bot** application.
-3. Open **Configuration** and set the fields below. The **App Download Type** is
-   already **Git repo** with the repo URL pre-filled — leave those as-is unless
-   you want an alternative source (see *App download options* below).
+AMP can fetch this template natively from a Git repo added as a **Configuration
+Repository** — then **N3X Bot** appears in the app list with no manual file
+copying. This mirrors how the stock templates ship from `CubeCoders/AMPTemplates`.
+
+**Requirement:** AMP scans the **root** of a configuration repository. The
+template files must therefore live at a git repo's top level (lower-cased), not
+in a subdirectory. This `deploy/amp/` directory is that template set; publish its
+contents to the **root** of a dedicated git repo (e.g. `n3x-amp-templates`).
+
+Config-repo layout (all at repo root):
+
+```
+AMPMetadata.json        # marks the repo as an AMP configuration repository
+n3x-bot.kvp             # main template (references the JSON files by name)
+n3x-botconfig.json      # GUI field definitions
+n3x-botupdates.json     # native fetch/update + venv + requirements stages
+n3x-botports.json       # placeholder port
+```
+
+Add it to AMP (controller host):
+
+```bash
+# List current repositories
+ampinstmgr ListRepositories
+# Add your config repo (use the raw git URL)
+ampinstmgr AddRepository https://github.com/<you>/n3x-amp-templates.git
+# Refresh the local template cache
+ampinstmgr RefreshRepositories
+```
+
+(Or via the AMP web UI: **Configuration → Configuration Repositories → Add**,
+paste the git URL, then **Refresh**.)
+
+Then in AMP: **Create Instance → select the N3X Bot application**, open
+**Configuration**, and set the fields below. **App Download Type** is already
+**Git repo** with the repo URL pre-filled — leave it unless you want an
+alternative source (see *App download options*).
+
+The bot's own code is fetched at runtime into the instance's `./n3x-bot/`
+directory (`App.RootDir`/`App.BaseDirectory`, exactly like the stock Python App
+Runner's `./python-app-runner/`), so it is browsable in AMP's file manager.
+
+### Alternative: drop-in template (no repository)
+
+Instead of a configuration repository, copy the five files above directly into
+your AMP controller's shared template directory; AMP discovers the app via
+`n3x-bot.kvp`. Then create the instance and configure as below.
 
 ## GUI fields → environment variables
 
