@@ -24,3 +24,6 @@ build/
 
 # User's reference code (contains secrets) — never commit
 manus versions/
+
+# Local Claude Code config
+.claude/
