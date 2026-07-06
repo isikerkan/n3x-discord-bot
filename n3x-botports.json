@@ -1,0 +1,9 @@
+[
+    {
+        "Protocol": "Both",
+        "Port": 7777,
+        "Ref": "ServerPort",
+        "Name": "Unused Port",
+        "Description": "Placeholder port. The bot uses no inbound port (it makes an outbound gateway connection to Discord); AMP only requires an AdminPortRef to exist."
+    }
+]
