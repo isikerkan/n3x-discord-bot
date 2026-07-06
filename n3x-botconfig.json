@@ -142,12 +142,12 @@
         "DisplayName": "App Subdirectory",
         "Category": "N3X Bot:cog",
         "Subcategory": "Runtime:code:1",
-        "Description": "Reserved subdirectory under the repo root that holds the app. Leave empty — n3x_bot is importable from the repo root, which is the working directory",
+        "Description": "Reserved subdirectory under the instance base that holds the fetched app code (matches App.RootDir=./n3x-bot/). The n3x_bot package lives here and this is the process working directory",
         "Keywords": "app,directory,subdirectory,AppDir",
         "FieldName": "AppDir",
         "InputType": "hidden",
         "ParamFieldName": "AppDir",
-        "DefaultValue": "",
+        "DefaultValue": "n3x-bot",
         "EnumValues": {}
     },
     {
