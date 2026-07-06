@@ -1,5 +1,126 @@
 [
     {
+        "DisplayName": "App Download Type",
+        "Category": "N3X Bot:cog",
+        "Subcategory": "Download:download:0",
+        "Description": "How AMP fetches the bot when you hit Update. Default 'Git repo' clones the App Download Source repo (the N3X bot repo is pre-filled). Alternatives: 'GitHub release' or 'Download URL' fetch a zip, 'PyPI package' pip-installs a package. Update the app after changing this",
+        "Keywords": "download,type,DownloadType",
+        "FieldName": "DownloadType",
+        "InputType": "enum",
+        "ParamFieldName": "DownloadType",
+        "DefaultValue": "GitRepo",
+        "Required": true,
+        "EnumValues": {
+            "DownloadURL": "Download URL",
+            "GithubRelease": "GitHub release",
+            "GitRepo": "Git repo",
+            "PyPIPackage": "PyPI package"
+        }
+    },
+    {
+        "DisplayName": "App Download Source",
+        "Category": "N3X Bot:cog",
+        "Subcategory": "Download:download:0",
+        "Description": "Source for the App Download Type. Git repo = URL ending in .git (default: the N3X bot repo). GitHub release = User/Repo. Download URL = URL to a zip file. PyPI package = package name (and version if needed). Update the app after changing this",
+        "Keywords": "download,source,url,repo,DownloadSource",
+        "FieldName": "DownloadSource",
+        "InputType": "text",
+        "ParamFieldName": "DownloadSource",
+        "DefaultValue": "https://github.com/isikerkan/n3x-discord-bot.git",
+        "Placeholder": "https://github.com/isikerkan/n3x-discord-bot.git",
+        "EnumValues": {}
+    },
+    {
+        "DisplayName": "Git Repo Branch",
+        "Category": "N3X Bot:cog",
+        "Subcategory": "Download:download:0",
+        "Description": "If 'Git repo' is selected under App Download Type, sets the branch to check out. Empty = default branch",
+        "Keywords": "git,repo,branch,DownloadBranch",
+        "FieldName": "DownloadBranch",
+        "InputType": "text",
+        "ParamFieldName": "DownloadBranch",
+        "DefaultValue": "",
+        "EnumValues": {}
+    },
+    {
+        "DisplayName": "Git Repo Username",
+        "Category": "N3X Bot:cog",
+        "Subcategory": "Download:download:0",
+        "Description": "If 'Git repo' is selected under App Download Type, sets the username for a private repo. Empty for public repos",
+        "Keywords": "git,repo,username,private,auth,DownloadUsername",
+        "FieldName": "DownloadUsername",
+        "InputType": "text",
+        "ParamFieldName": "DownloadUsername",
+        "DefaultValue": "",
+        "EnumValues": {}
+    },
+    {
+        "DisplayName": "Git Repo Password/Token",
+        "Category": "N3X Bot:cog",
+        "Subcategory": "Download:download:0",
+        "Description": "If 'Git repo' is selected under App Download Type, sets the password or personal access token for a private repo. Empty for public repos",
+        "Keywords": "git,repo,password,token,private,auth,DownloadPassword",
+        "FieldName": "DownloadPassword",
+        "InputType": "password",
+        "ParamFieldName": "DownloadPassword",
+        "DefaultValue": "",
+        "EnumValues": {}
+    },
+    {
+        "DisplayName": "GitHub Release Filename",
+        "Category": "N3X Bot:cog",
+        "Subcategory": "Download:download:0",
+        "Description": "If 'GitHub release' is selected under App Download Type, sets the name of the zip asset to download",
+        "Keywords": "github,release,filename,asset,DownloadFilename",
+        "FieldName": "DownloadFilename",
+        "InputType": "text",
+        "ParamFieldName": "DownloadFilename",
+        "DefaultValue": "",
+        "Placeholder": "app.zip",
+        "EnumValues": {}
+    },
+    {
+        "DisplayName": "GitHub Release Version",
+        "Category": "N3X Bot:cog",
+        "Subcategory": "Download:download:0",
+        "Description": "If 'GitHub release' is selected under App Download Type, sets the release tag to download. Empty = latest",
+        "Keywords": "github,release,version,tag,DownloadVersion",
+        "FieldName": "DownloadVersion",
+        "InputType": "text",
+        "ParamFieldName": "DownloadVersion",
+        "DefaultValue": "",
+        "Placeholder": "1.0.0",
+        "EnumValues": {}
+    },
+    {
+        "DisplayName": "PyPI Package Installation Arguments",
+        "Category": "N3X Bot:cog",
+        "Subcategory": "Download:download:0",
+        "Description": "If 'PyPI package' is selected under App Download Type, sets any extra pip arguments used when installing the package. The '-U' flag is passed by default",
+        "Keywords": "pypi,install,package,arguments,flags,DownloadPackageArgs",
+        "FieldName": "DownloadPackageArgs",
+        "InputType": "text",
+        "ParamFieldName": "DownloadPackageArgs",
+        "DefaultValue": "",
+        "Placeholder": "--force-reinstall --no-cache-dir",
+        "EnumValues": {}
+    },
+    {
+        "DisplayName": "Python Packages Install Method",
+        "Category": "N3X Bot:cog",
+        "Subcategory": "Runtime:code:1",
+        "Description": "How to install the bot's Python dependencies. 'Requirements.txt file' (default) installs from the repo's requirements.txt. 'None' skips dependency install. Note: pip, setuptools and wheel are always installed",
+        "Keywords": "python,install,method,packages,requirements,PackagesInstallType",
+        "FieldName": "PackagesInstallType",
+        "InputType": "enum",
+        "ParamFieldName": "PackagesInstallType",
+        "DefaultValue": "file",
+        "EnumValues": {
+            "none": "None",
+            "file": "Requirements.txt file"
+        }
+    },
+    {
         "DisplayName": "Python Version",
         "Category": "N3X Bot:cog",
         "Subcategory": "Runtime:code:1",

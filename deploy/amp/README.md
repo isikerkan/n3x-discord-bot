@@ -13,12 +13,14 @@ needed**.
 |------|---------|
 | `n3x-bot.kvp` | Root config: run command (`-m n3x_bot`), venv paths, and the `EnvironmentVariables` map (GUI field → env var). |
 | `n3x-botconfig.json` | GUI field definitions (Discord / Storage / Gates groups + Python Version). |
-| `n3x-botupdates.json` | Install/update stages: git-clone this repo, create venv, install `requirements.txt`. |
+| `n3x-botupdates.json` | AMP-native fetch/update stages (Git repo / GitHub release / Download URL / PyPI, gated on **App Download Type**), plus venv creation and `requirements.txt` install. |
 | `n3x-botports.json` | Placeholder port (AMP requires an AdminPortRef; the bot uses no inbound port). |
 
-The git repo (`https://github.com/isikerkan/n3x-discord-bot.git`, default
-branch) is **baked into the template** — there are no download-source GUI
-fields. The bot runs as `python -u -m n3x_bot` from the repo root.
+The template uses **AMP's native repo Fetch/Download system**. The **App
+Download Type** defaults to **Git repo** with **App Download Source** pre-filled
+to `https://github.com/isikerkan/n3x-discord-bot.git`, so an admin just hits
+**Update** to clone/pull the bot — no baked-in clone command. The bot runs as
+`python -u -m n3x_bot` from the repo root (`./n3x-bot/`).
 
 ## Installing the custom template
 
@@ -27,7 +29,9 @@ fields. The bot runs as `python -u -m n3x_bot` from the repo root.
    the shared AMP config templates directory). AMP discovers the app via
    `n3x-bot.kvp` (which references the other three files by name).
 2. In AMP, create a new instance and select the **N3X Bot** application.
-3. Open **Configuration** and set the fields below.
+3. Open **Configuration** and set the fields below. The **App Download Type** is
+   already **Git repo** with the repo URL pre-filled — leave those as-is unless
+   you want an alternative source (see *App download options* below).
 
 ## GUI fields → environment variables
 
@@ -57,10 +61,32 @@ Every field maps to an uppercased env var matching a `Settings` field in
 `postgres` (enforced by the `Settings` validator). Leave it empty only for
 `flatfile`.
 
-4. **Update** the instance. AMP git-clones the repo, creates a venv, and
-   installs `requirements.txt`.
+4. **Update** the instance. AMP fetches the app per **App Download Type**
+   (default: git-clone/pull the repo), creates a venv, installs pip/setuptools/
+   wheel, then installs `requirements.txt`.
 5. **Start** the instance. Use the AMP console for logs; Start/Stop/Restart and
    scheduled restarts are managed by AMP.
+
+## App download options
+
+The **Download** settings group controls how AMP fetches the bot on **Update**:
+
+| App Download Type | App Download Source | Notes |
+|-------------------|---------------------|-------|
+| **Git repo** (default) | `https://github.com/isikerkan/n3x-discord-bot.git` | Clones on first Update, `git pull` thereafter. Set **Git Repo Branch** to pin a branch (empty = default). |
+| **GitHub release** | `User/Repo` | Downloads a release zip. Set **GitHub Release Filename** (the asset zip) and optionally **GitHub Release Version** (empty = latest). |
+| **Download URL** | URL to a `.zip` | Fetches and extracts the archive into the app directory. |
+| **PyPI package** | package name (and version) | `pip install`s the package into the venv. Add extra pip flags via **PyPI Package Installation Arguments**. |
+
+**Private repo auth:** for a private Git repo, set **Git Repo Username** and
+**Git Repo Password/Token** (a GitHub personal access token works as the
+password). Leave both empty for public repos. The default N3X repo is public, so
+no auth is needed.
+
+**Python Packages Install Method** (Runtime group) defaults to
+**Requirements.txt file**, which installs the repo's `requirements.txt`. Set it
+to **None** to skip dependency install (pip/setuptools/wheel are always
+installed).
 
 ## Storage backends
 
