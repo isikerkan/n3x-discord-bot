@@ -307,6 +307,10 @@ class JsonRepository(StatsRepository):
         users = copy.deepcopy(sorted(self._db["users"], key=lambda r: r["id"]))
         messages = copy.deepcopy(sorted(self._db["messages"], key=lambda r: r["id"]))
         stats = copy.deepcopy(sorted(self._db["stats"], key=lambda r: r["id"]))
+        # backfill flags absent from pre-feature (legacy) stat rows so the
+        # snapshot is always fully shaped for any importing backend.
+        for s in stats:
+            s.setdefault("targeted", False)
         gate_entries = copy.deepcopy(
             sorted(self._db["gate_entries"], key=lambda r: r["id"]))
         return {

@@ -26,12 +26,26 @@ def _has_data(snapshot: dict) -> bool:
 async def migrate(source: StatsRepository, dest: StatsRepository,
                   *, overwrite: bool = False) -> None:
     snapshot = await source.export_all()
-    if _has_data(await dest.export_all()):
+    dest_snapshot = await dest.export_all()
+    if _has_data(dest_snapshot):
         if not overwrite:
             raise DestinationNotEmptyError(
                 "destination already holds data; pass overwrite=True to replace it")
+        # clear() and import_all() are separate transactions, so a failed
+        # import must not leave the destination wiped: snapshot the dest
+        # before clearing and restore it if the import fails.
+        # NOTE: this holds the whole pre-existing destination in memory; for
+        # very large destinations a streaming/backup strategy would be
+        # preferable (flagged for human review).
         await dest.clear()
-    await dest.import_all(snapshot)
+        try:
+            await dest.import_all(snapshot)
+        except BaseException:
+            await dest.clear()
+            await dest.import_all(dest_snapshot)
+            raise
+    else:
+        await dest.import_all(snapshot)
 
 
 async def run_migration(*, from_backend: str, from_location: str,
@@ -40,12 +54,14 @@ async def run_migration(*, from_backend: str, from_location: str,
     source = _build_repo(from_backend, from_location)
     dest = _build_repo(to_backend, to_location)
     await source.connect()
-    await dest.connect()
     try:
-        await migrate(source, dest, overwrite=overwrite)
+        await dest.connect()
+        try:
+            await migrate(source, dest, overwrite=overwrite)
+        finally:
+            await dest.close()
     finally:
         await source.close()
-        await dest.close()
 
 
 def main() -> None:
@@ -64,10 +80,13 @@ def main() -> None:
     parser.add_argument("--overwrite", action="store_true",
                         help="clear a non-empty destination before migrating")
     args = parser.parse_args()
-    asyncio.run(run_migration(
-        from_backend=args.from_backend, from_location=args.from_location,
-        to_backend=args.to_backend, to_location=args.to_location,
-        overwrite=args.overwrite))
+    try:
+        asyncio.run(run_migration(
+            from_backend=args.from_backend, from_location=args.from_location,
+            to_backend=args.to_backend, to_location=args.to_location,
+            overwrite=args.overwrite))
+    except DestinationNotEmptyError as e:
+        raise SystemExit(f"error: {e}")
 
 
 if __name__ == "__main__":

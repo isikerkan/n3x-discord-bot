@@ -462,7 +462,7 @@ class SqlRepository(StatsRepository):
             for r in snapshot["stats"]:
                 await conn.execute(insert(sc.stats).values(
                     id=r["id"], key=r["key"], name=r["name"],
-                    message_id=r["message_id"], targeted=r["targeted"],
+                    message_id=r["message_id"], targeted=r.get("targeted", False),
                     archived_at=_parse_dt(r["archived_at"]),
                     created_at=_parse_dt(r["created_at"])))
             for uid, inner in snapshot["user_stats"].items():

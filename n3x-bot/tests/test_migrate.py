@@ -227,3 +227,130 @@ def test_migrate_module_exposes_cli_entrypoint():
     assert callable(m.main)
     assert callable(m.run_migration)
     assert callable(m.migrate)
+
+
+# ── failure-mode / robustness ───────────────────────────────────────────────
+
+async def test_migrate_overwrite_import_failure_preserves_dest_data(json_source):
+    # A failed import on --overwrite must NOT wipe the pre-existing dest data.
+    from n3x_bot.migrate import migrate
+    url, db_path = _new_sqlite_url()
+    dest = SqlRepository(url)
+    await dest.connect()
+    await dest.create_stat("existing", "Existing")
+    original = await dest.export_all()
+    real_import = dest.import_all
+    calls = {"n": 0}
+
+    async def flaky_import(snapshot):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("boom")  # fail the real import only
+        return await real_import(snapshot)
+
+    dest.import_all = flaky_import
+    try:
+        with pytest.raises(RuntimeError):
+            await migrate(json_source, dest, overwrite=True)
+        # dest rolled back to its original contents, nothing lost
+        assert await dest.get_stat("existing") is not None
+        assert await dest.export_all() == original
+    finally:
+        await dest.close()
+        if os.path.exists(db_path):
+            os.remove(db_path)
+
+
+async def test_run_migration_closes_source_if_dest_connect_fails(monkeypatch):
+    # If dest.connect() raises, the already-connected source must still close.
+    from n3x_bot import migrate as mig
+    src_repo, src_path = await _seeded_json_source()
+    await src_repo.close()
+    closed = {"source": False}
+    real_build = mig._build_repo
+
+    def build(backend, location):
+        repo = real_build(backend, location)
+        if backend == "flatfile":
+            orig_close = repo.close
+
+            async def tracking_close():
+                closed["source"] = True
+                await orig_close()
+
+            repo.close = tracking_close
+        else:
+            async def bad_connect():
+                raise RuntimeError("dest connect failed")
+
+            repo.connect = bad_connect
+        return repo
+
+    monkeypatch.setattr(mig, "_build_repo", build)
+    try:
+        with pytest.raises(RuntimeError):
+            await mig.run_migration(
+                from_backend="flatfile", from_location=src_path,
+                to_backend="sqlite", to_location="sqlite+aiosqlite:///:memory:")
+        assert closed["source"] is True
+    finally:
+        if os.path.exists(src_path):
+            os.remove(src_path)
+
+
+async def test_migrate_legacy_stat_without_targeted_key(sqlite_dest):
+    # A pre-feature stats.json has stat rows lacking a "targeted" key; migrating
+    # it must not raise KeyError and must default the flag to False.
+    import json as _json
+    from n3x_bot.migrate import migrate
+    fd, path = tempfile.mkstemp(suffix=".json")
+    os.close(fd)
+    legacy = {
+        "seq": {"user": 0, "message": 0, "stat": 1, "gate": 0},
+        "users": [], "messages": [],
+        "stats": [{"id": 1, "key": "legacy", "name": "Legacy", "message_id": None,
+                   "archived_at": None, "created_at": "2020-01-01T00:00:00+00:00"}],
+        "user_stats": {}, "stat_totals": {}, "stat_last_post": {},
+        "target_stats": {}, "gate_entries": [],
+    }
+    with open(path, "w") as f:
+        _json.dump(legacy, f)
+    src = JsonRepository(path)
+    await src.connect()
+    try:
+        await migrate(src, sqlite_dest)
+        assert (await sqlite_dest.get_stat("legacy")).targeted is False
+    finally:
+        await src.close()
+        if os.path.exists(path):
+            os.remove(path)
+
+
+def test_main_reports_destination_not_empty_cleanly(monkeypatch):
+    # Omitting --overwrite on a non-empty dest exits cleanly, no raw traceback.
+    import asyncio as _asyncio
+    from n3x_bot.migrate import main
+    src_repo, src_path = _asyncio.run(_seeded_json_source())
+    _asyncio.run(src_repo.close())
+    fd, dest_path = tempfile.mkstemp(suffix=".json")
+    os.close(fd)
+    os.remove(dest_path)
+
+    async def _seed_dest():
+        d = JsonRepository(dest_path)
+        await d.connect()
+        await d.create_stat("existing", "Existing")
+        await d.close()
+
+    _asyncio.run(_seed_dest())
+    argv = ["prog", "--from", "flatfile", "--to", "flatfile",
+            "--from-location", src_path, "--to-location", dest_path]
+    monkeypatch.setattr("sys.argv", argv)
+    try:
+        with pytest.raises(SystemExit) as ei:
+            main()
+        assert "error:" in str(ei.value.code)
+    finally:
+        for p in (src_path, dest_path):
+            if os.path.exists(p):
+                os.remove(p)
