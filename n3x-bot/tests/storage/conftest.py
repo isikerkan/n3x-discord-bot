@@ -29,6 +29,15 @@ def pytest_generate_tests(metafunc):
         metafunc.parametrize("repo_factory", [b[1] for b in BACKENDS], ids=ids)
 
 
+def _cleanup_repo_files(r) -> None:
+    path = getattr(r, "path", None)
+    if path and os.path.exists(path):
+        os.remove(path)
+    db_path = getattr(r, "_test_db_path", None)
+    if db_path and os.path.exists(db_path):
+        os.remove(db_path)
+
+
 @pytest.fixture
 async def repo(repo_factory):
     r = await repo_factory()
@@ -36,12 +45,34 @@ async def repo(repo_factory):
         yield r
     finally:
         await r.close()
-        path = getattr(r, "path", None)
-        if path and os.path.exists(path):
-            os.remove(path)
-        db_path = getattr(r, "_test_db_path", None)
-        if db_path and os.path.exists(db_path):
-            os.remove(db_path)
+        _cleanup_repo_files(r)
+
+
+@pytest.fixture
+async def make_repo(repo_factory):
+    """Factory yielding freshly-connected, EMPTY repos of the same backend.
+
+    Used by the export/import round-trip contract tests to obtain a
+    destination repo distinct from the seeded ``repo``. For the SQL backends
+    the underlying ``repo_factory`` starts from a clean schema on each call
+    (a new temp file for sqlite; a drop/create for postgres), so every repo
+    handed out here is empty. Callers must capture any needed snapshot of the
+    source BEFORE requesting a fresh repo, since the postgres factory shares a
+    single physical database across calls.
+    """
+    created = []
+
+    async def _make():
+        r = await repo_factory()
+        created.append(r)
+        return r
+
+    try:
+        yield _make
+    finally:
+        for r in created:
+            await r.close()
+            _cleanup_repo_files(r)
 
 
 async def _make_sqlite():

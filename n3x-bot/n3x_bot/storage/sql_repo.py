@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select, insert, update, delete
+from sqlalchemy import func, select, insert, update, delete, text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from n3x_bot.models import User, Stat, Message
@@ -10,6 +10,10 @@ from n3x_bot.storage import schema as sc
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _parse_dt(v: str | None) -> datetime | None:
+    return datetime.fromisoformat(v) if v else None
 
 
 def _as_aware_utc(dt: datetime | None) -> datetime | None:
@@ -376,3 +380,121 @@ class SqlRepository(StatsRepository):
                 out[gtype] = {"count": count or 0,
                              "avg": round(avg) if avg else 0}
         return out
+
+    # ── bulk export / import ───────────────────────────────────────────────
+    @staticmethod
+    def _dt(dt: datetime | None) -> str | None:
+        aware = _as_aware_utc(dt)
+        return aware.isoformat() if aware is not None else None
+
+    async def export_all(self) -> dict:
+        async with self.engine.connect() as conn:
+            users = [
+                {"id": r.id, "discord_id": r.discord_id,
+                 "display_name": r.display_name,
+                 "archived_at": self._dt(r.archived_at),
+                 "created_at": self._dt(r.created_at)}
+                for r in await conn.execute(
+                    select(sc.users).order_by(sc.users.c.id.asc()))
+            ]
+            messages = [
+                {"id": r.id, "name": r.name, "template": r.template,
+                 "archived_at": self._dt(r.archived_at),
+                 "created_at": self._dt(r.created_at)}
+                for r in await conn.execute(
+                    select(sc.messages).order_by(sc.messages.c.id.asc()))
+            ]
+            stats = [
+                {"id": r.id, "key": r.key, "name": r.name,
+                 "message_id": r.message_id, "targeted": bool(r.targeted),
+                 "archived_at": self._dt(r.archived_at),
+                 "created_at": self._dt(r.created_at)}
+                for r in await conn.execute(
+                    select(sc.stats).order_by(sc.stats.c.id.asc()))
+            ]
+            user_stats: dict = {}
+            for r in await conn.execute(select(sc.user_stats)):
+                user_stats.setdefault(str(r.user_id), {})[str(r.stat_id)] = r.count
+            stat_totals = {
+                str(r.stat_id): r.count
+                for r in await conn.execute(select(sc.stat_totals))
+            }
+            stat_last_post = {
+                str(r.stat_id): [r.discord_message_id, r.channel_id]
+                for r in await conn.execute(select(sc.stat_last_post))
+            }
+            target_stats: dict = {}
+            for r in await conn.execute(select(sc.target_stats)):
+                target_stats.setdefault(str(r.stat_id), {})[
+                    str(r.target_discord_id)] = r.count
+            gate_entries = [
+                {"id": r.id, "gate_type": r.gate_type, "cost": r.cost,
+                 "user_id": r.user_id, "username": r.username,
+                 "created_at": self._dt(r.created_at)}
+                for r in await conn.execute(
+                    select(sc.gate_entries).order_by(sc.gate_entries.c.id.asc()))
+            ]
+            seq = {}
+            for key, table in (("user", sc.users), ("message", sc.messages),
+                               ("stat", sc.stats), ("gate", sc.gate_entries)):
+                m = (await conn.execute(select(func.max(table.c.id)))).scalar()
+                seq[key] = m or 0
+        return {
+            "users": users, "messages": messages, "stats": stats,
+            "user_stats": user_stats, "stat_totals": stat_totals,
+            "stat_last_post": stat_last_post, "target_stats": target_stats,
+            "gate_entries": gate_entries, "seq": seq,
+        }
+
+    async def import_all(self, snapshot: dict) -> None:
+        async with self.engine.begin() as conn:
+            for r in snapshot["messages"]:
+                await conn.execute(insert(sc.messages).values(
+                    id=r["id"], name=r["name"], template=r["template"],
+                    archived_at=_parse_dt(r["archived_at"]),
+                    created_at=_parse_dt(r["created_at"])))
+            for r in snapshot["users"]:
+                await conn.execute(insert(sc.users).values(
+                    id=r["id"], discord_id=r["discord_id"],
+                    display_name=r["display_name"],
+                    archived_at=_parse_dt(r["archived_at"]),
+                    created_at=_parse_dt(r["created_at"])))
+            for r in snapshot["stats"]:
+                await conn.execute(insert(sc.stats).values(
+                    id=r["id"], key=r["key"], name=r["name"],
+                    message_id=r["message_id"], targeted=r.get("targeted", False),
+                    archived_at=_parse_dt(r["archived_at"]),
+                    created_at=_parse_dt(r["created_at"])))
+            for uid, inner in snapshot["user_stats"].items():
+                for sid, count in inner.items():
+                    await conn.execute(insert(sc.user_stats).values(
+                        user_id=int(uid), stat_id=int(sid), count=count))
+            for sid, count in snapshot["stat_totals"].items():
+                await conn.execute(insert(sc.stat_totals).values(
+                    stat_id=int(sid), count=count))
+            for sid, v in snapshot["stat_last_post"].items():
+                await conn.execute(insert(sc.stat_last_post).values(
+                    stat_id=int(sid), discord_message_id=v[0], channel_id=v[1]))
+            for sid, inner in snapshot["target_stats"].items():
+                for tid, count in inner.items():
+                    await conn.execute(insert(sc.target_stats).values(
+                        target_discord_id=int(tid), stat_id=int(sid), count=count))
+            for r in snapshot["gate_entries"]:
+                await conn.execute(insert(sc.gate_entries).values(
+                    id=r["id"], gate_type=r["gate_type"], cost=r["cost"],
+                    user_id=r["user_id"], username=r["username"],
+                    created_at=_parse_dt(r["created_at"])))
+            if self.engine.dialect.name == "postgresql":
+                for tbl, key in (("users", "user"), ("messages", "message"),
+                                 ("stats", "stat"), ("gate_entries", "gate")):
+                    if snapshot["seq"].get(key, 0) > 0:
+                        await conn.execute(
+                            text("SELECT setval(pg_get_serial_sequence(:t, 'id'), :v)"),
+                            {"t": tbl, "v": snapshot["seq"][key]})
+
+    async def clear(self) -> None:
+        async with self.engine.begin() as conn:
+            for table in (sc.gate_entries, sc.user_stats, sc.stat_totals,
+                          sc.stat_last_post, sc.target_stats, sc.stats,
+                          sc.users, sc.messages):
+                await conn.execute(delete(table))

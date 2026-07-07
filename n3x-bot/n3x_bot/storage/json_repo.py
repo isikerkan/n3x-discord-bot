@@ -1,3 +1,4 @@
+import copy
 import json
 import os
 import tempfile
@@ -296,3 +297,51 @@ class JsonRepository(StatsRepository):
             out[gtype] = {"count": count,
                           "avg": round(sum(costs) / count) if count else 0}
         return out
+
+    # ── bulk export / import ───────────────────────────────────────────────
+    @staticmethod
+    def _max_id(rows) -> int:
+        return max((r["id"] for r in rows), default=0)
+
+    async def export_all(self) -> dict:
+        users = copy.deepcopy(sorted(self._db["users"], key=lambda r: r["id"]))
+        messages = copy.deepcopy(sorted(self._db["messages"], key=lambda r: r["id"]))
+        stats = copy.deepcopy(sorted(self._db["stats"], key=lambda r: r["id"]))
+        # backfill flags absent from pre-feature (legacy) stat rows so the
+        # snapshot is always fully shaped for any importing backend.
+        for s in stats:
+            s.setdefault("targeted", False)
+        gate_entries = copy.deepcopy(
+            sorted(self._db["gate_entries"], key=lambda r: r["id"]))
+        return {
+            "users": users,
+            "messages": messages,
+            "stats": stats,
+            "user_stats": copy.deepcopy(self._db["user_stats"]),
+            "stat_totals": copy.deepcopy(self._db["stat_totals"]),
+            "stat_last_post": copy.deepcopy(self._db["stat_last_post"]),
+            "target_stats": copy.deepcopy(self._db["target_stats"]),
+            "gate_entries": gate_entries,
+            "seq": {
+                "user": self._max_id(users),
+                "message": self._max_id(messages),
+                "stat": self._max_id(stats),
+                "gate": self._max_id(gate_entries),
+            },
+        }
+
+    async def import_all(self, snapshot: dict) -> None:
+        self._db["users"] = copy.deepcopy(snapshot["users"])
+        self._db["messages"] = copy.deepcopy(snapshot["messages"])
+        self._db["stats"] = copy.deepcopy(snapshot["stats"])
+        self._db["gate_entries"] = copy.deepcopy(snapshot["gate_entries"])
+        self._db["user_stats"] = copy.deepcopy(snapshot["user_stats"])
+        self._db["stat_totals"] = copy.deepcopy(snapshot["stat_totals"])
+        self._db["stat_last_post"] = copy.deepcopy(snapshot["stat_last_post"])
+        self._db["target_stats"] = copy.deepcopy(snapshot["target_stats"])
+        self._db["seq"] = dict(snapshot["seq"])
+        self._flush()
+
+    async def clear(self) -> None:
+        self._db = self._empty()
+        self._flush()

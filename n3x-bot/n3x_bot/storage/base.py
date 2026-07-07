@@ -114,3 +114,17 @@ class StatsRepository(ABC):
         that has at least one entry.
         """
         ...
+
+    # bulk export / import
+    @abstractmethod
+    async def export_all(self) -> dict:
+        """JSON-serializable snapshot of ALL tables."""
+        ...
+    @abstractmethod
+    async def import_all(self, snapshot: dict) -> None:
+        """Populate an EMPTY repo from a snapshot produced by `export_all`."""
+        ...
+    @abstractmethod
+    async def clear(self) -> None:
+        """Remove all data from every table."""
+        ...
