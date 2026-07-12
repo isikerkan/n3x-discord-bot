@@ -406,3 +406,84 @@ async def test_register_admin_commands_entrypoint_exists():
     # At minimum the intended registration entrypoint must exist, so both
     # surfaces can be wired from build_bot.
     assert callable(getattr(botmod, "register_admin_commands", None))
+
+
+# ── error-path / edge-case regressions ────────────────────────────────────
+
+async def test_admin_create_stat_reactivates_archived_key():
+    # Re-creating an ARCHIVED key must reactivate it in place (not dead-end
+    # with a duplicate-key ValueError) and re-register the live command.
+    repo = await _flatfile_repo()
+    settings = _settings(admin_role_id=42)
+    bot = build_bot(settings, repo)
+    await botmod.admin_create_stat(bot, repo, settings, "boop", "Boop")
+    await botmod.admin_archive_stat(bot, repo, settings, "boop")
+    assert (await repo.get_stat("boop")).archived_at is not None
+    assert bot.get_command("boop") is None
+
+    stat = await botmod.admin_create_stat(bot, repo, settings, "boop", "Boop Reborn")
+
+    assert stat.key == "boop"
+    assert (await repo.get_stat("boop")).archived_at is None   # reactivated
+    assert (await repo.get_stat("boop")).name == "Boop Reborn"  # new name applied
+    assert bot.get_command("boop") is not None                 # command re-registered
+
+    await repo.close()
+
+
+async def test_admin_create_stat_active_duplicate_still_raises():
+    # A NON-archived existing key is a true duplicate and must still raise.
+    repo = await _flatfile_repo()
+    settings = _settings(admin_role_id=42)
+    bot = build_bot(settings, repo)
+    await botmod.admin_create_stat(bot, repo, settings, "boop", "Boop")
+
+    with pytest.raises(ValueError):
+        await botmod.admin_create_stat(bot, repo, settings, "boop", "Dup")
+
+    await repo.close()
+
+
+async def test_admin_create_stat_reserved_key_raises_and_writes_nothing():
+    repo = await _flatfile_repo()
+    settings = _settings(admin_role_id=42)
+    bot = build_bot(settings, repo)
+
+    with pytest.raises(ValueError):
+        await botmod.admin_create_stat(bot, repo, settings, "rank", "Rank")
+
+    assert await repo.get_stat("rank") is None  # no dead row written
+
+    await repo.close()
+
+
+async def test_admin_edit_stat_unknown_key_raises():
+    repo = await _flatfile_repo()
+    settings = _settings(admin_role_id=42)
+    bot = build_bot(settings, repo)
+
+    with pytest.raises(ValueError):
+        await botmod.admin_edit_stat(bot, repo, settings, "ghost", name="X")
+
+    await repo.close()
+
+
+async def test_admin_edit_stat_no_fields_raises():
+    repo = await _flatfile_repo()
+    settings = _settings(admin_role_id=42)
+    bot = build_bot(settings, repo)
+    await botmod.admin_create_stat(bot, repo, settings, "boop", "Boop")
+
+    with pytest.raises(ValueError):
+        await botmod.admin_edit_stat(bot, repo, settings, "boop")
+
+    await repo.close()
+
+
+async def test_is_admin_false_for_member_without_roles_attribute():
+    # A DM author is a `User`, not a `Member`, and has no `.roles` — is_admin
+    # must return False rather than raising AttributeError.
+    settings = _settings(admin_role_id=42)
+    member = SimpleNamespace(id=5)  # no `.roles`
+
+    assert botmod.is_admin(member, settings) is False

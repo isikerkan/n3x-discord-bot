@@ -158,6 +158,11 @@ class SqlRepository(StatsRepository):
             await conn.execute(update(sc.stats)
                                .where(sc.stats.c.key == key).values(archived_at=_now()))
 
+    async def unarchive_stat(self, key):
+        async with self.engine.begin() as conn:
+            await conn.execute(update(sc.stats)
+                               .where(sc.stats.c.key == key).values(archived_at=None))
+
     async def delete_stat(self, key):
         async with self.engine.begin() as conn:
             await conn.execute(delete(sc.stats).where(sc.stats.c.key == key))

@@ -41,6 +41,13 @@ class StatsRepository(ABC):
     @abstractmethod
     async def archive_stat(self, key: str) -> None: ...
     @abstractmethod
+    async def unarchive_stat(self, key: str) -> None:
+        """Clear `archived_at` for `key`, reactivating an archived stat.
+
+        Raises KeyError for an unknown key.
+        """
+        ...
+    @abstractmethod
     async def delete_stat(self, key: str) -> None: ...
 
     # users

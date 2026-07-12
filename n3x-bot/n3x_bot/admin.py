@@ -12,10 +12,15 @@ from n3x_bot.config import Settings
 from n3x_bot.models import Message, Stat
 from n3x_bot.storage.base import StatsRepository
 
+# Stat keys that collide with existing bot commands. Creating a stat under one
+# of these writes a row but never registers a usable `!<key>` command (the
+# existing command shadows it via `bot.get_command`), so refuse them up front.
+RESERVED_STAT_KEYS = frozenset({"stat", "del", "admin", "rank", "help"})
+
 
 def is_admin(member, settings: Settings) -> bool:
     return bool(settings.admin_role_id) and any(
-        r.id == settings.admin_role_id for r in member.roles)
+        r.id == settings.admin_role_id for r in getattr(member, "roles", []))
 
 
 async def _resolve_message_id(repo: StatsRepository, name: str) -> int:
@@ -30,10 +35,24 @@ async def _resolve_message_id(repo: StatsRepository, name: str) -> int:
 async def admin_create_stat(bot, repo: StatsRepository, settings: Settings,
                             key: str, name: str, targeted: bool = False,
                             message_name: str | None = None) -> Stat:
-    if await repo.get_stat(key) is not None:
+    if key in RESERVED_STAT_KEYS:
+        raise ValueError(f"stat key {key!r} is reserved")
+    existing = await repo.get_stat(key)
+    if existing is not None and existing.archived_at is None:
         raise ValueError(f"stat {key!r} already exists")
     message_id = await _resolve_message_id(repo, message_name) if message_name else None
-    stat = await repo.create_stat(key, name, message_id=message_id, targeted=targeted)
+
+    if existing is not None:
+        # Archived key: reactivate in place instead of dead-ending. `targeted`
+        # is preserved (the repo has no toggle; consistent with the no-toggle
+        # rule in `admin_edit_stat`), so the live command matches the DB row.
+        await repo.update_stat(key, name=name)
+        await repo.set_stat_message(key, message_id)
+        await repo.unarchive_stat(key)
+        stat = await repo.get_stat(key)
+        targeted = stat.targeted
+    else:
+        stat = await repo.create_stat(key, name, message_id=message_id, targeted=targeted)
 
     # Deferred to break the bot <-> admin import cycle: bot.py imports this
     # module at top level, so admin.py must not import bot at module scope.
@@ -48,6 +67,10 @@ async def admin_create_stat(bot, repo: StatsRepository, settings: Settings,
 async def admin_edit_stat(bot, repo: StatsRepository, settings: Settings,
                           key: str, name: str | None = None,
                           message_name: str | None = None) -> Stat:
+    if await repo.get_stat(key) is None:
+        raise ValueError(f"stat {key!r} does not exist")
+    if name is None and message_name is None:
+        raise ValueError("nothing to edit: provide a name and/or a message")
     if name is not None:
         await repo.update_stat(key, name=name)
     if message_name is not None:

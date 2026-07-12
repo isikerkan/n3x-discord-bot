@@ -163,6 +163,13 @@ class JsonRepository(StatsRepository):
         r["archived_at"] = _now()
         self._flush()
 
+    async def unarchive_stat(self, key):
+        r = self._find("stats", key=key)
+        if r is None:
+            raise KeyError(key)
+        r["archived_at"] = None
+        self._flush()
+
     async def delete_stat(self, key):
         self._db["stats"] = [r for r in self._db["stats"] if r["key"] != key]
         self._flush()
