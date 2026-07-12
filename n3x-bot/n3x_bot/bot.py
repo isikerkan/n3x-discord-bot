@@ -5,6 +5,14 @@ from datetime import datetime, time
 import discord
 from discord.ext import commands, tasks
 
+from n3x_bot.admin import (
+    is_admin,
+    admin_create_stat, admin_edit_stat, admin_archive_stat,
+    admin_delete_stat, admin_list_stats,
+    admin_create_message, admin_edit_message, admin_archive_message,
+    admin_delete_message, admin_list_messages,
+    register_admin_commands,
+)
 from n3x_bot.config import Settings
 from n3x_bot.format import format_number
 from n3x_bot.gates import build_gate_embed, parse_gate_message
@@ -61,6 +69,7 @@ def build_bot(settings: Settings, repo: StatsRepository) -> commands.Bot:
 
     _wire_events(bot, settings, repo)
     register_gate_commands(bot, repo, settings)
+    register_admin_commands(bot, repo, settings)
     return bot
 
 
