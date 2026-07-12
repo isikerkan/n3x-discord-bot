@@ -5,6 +5,14 @@ from datetime import datetime, time
 import discord
 from discord.ext import commands, tasks
 
+from n3x_bot.admin import (
+    is_admin,
+    admin_create_stat, admin_edit_stat, admin_archive_stat,
+    admin_delete_stat, admin_list_stats,
+    admin_create_message, admin_edit_message, admin_archive_message,
+    admin_delete_message, admin_list_messages,
+    register_admin_commands,
+)
 from n3x_bot.config import Settings
 from n3x_bot.format import format_number
 from n3x_bot.gates import build_gate_embed, parse_gate_message
@@ -15,6 +23,13 @@ log = logging.getLogger("N3X-Bot")
 
 HOME_KEY = "home"
 GATE_STAT_CHUNK_LIMIT = 1900
+
+# Commands whose only required arg is NOT a member/user. A missing-argument
+# error on these gets a generic hint; everything else (the targeted stat
+# commands, which take a `member`) is told to specify a user. Covers the gate
+# commands and the admin CRUD subcommand tokens.
+_GENERIC_ARG_COMMANDS = frozenset(
+    {"stat", "del", "admin", "msg", "add", "edit", "archive", "rm", "list"})
 
 
 async def build_output(repo: StatsRepository, stat_key: str,
@@ -61,6 +76,7 @@ def build_bot(settings: Settings, repo: StatsRepository) -> commands.Bot:
 
     _wire_events(bot, settings, repo)
     register_gate_commands(bot, repo, settings)
+    register_admin_commands(bot, repo, settings)
     return bot
 
 
@@ -351,6 +367,10 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
             event_reminder_task.start()
         if settings.gate_stats_channel_id:
             await update_gate_stats_embed(bot, repo, settings)
+        # Publish the /admin ... slash group (and any other app commands) to
+        # Discord. Global sync — the tree is only populated locally otherwise,
+        # so the slash commands would never appear at runtime.
+        await bot.tree.sync()
 
     @bot.event
     async def on_command_error(ctx, error):
@@ -358,7 +378,7 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
             await ctx.send(f"Warte bitte {error.retry_after:.1f} Sekunden.",
                            delete_after=5)
         elif isinstance(error, commands.MissingRequiredArgument):
-            if ctx.command and ctx.command.name in ("stat", "del"):
+            if ctx.command and ctx.command.name in _GENERIC_ARG_COMMANDS:
                 await ctx.send("❌ Fehlendes Argument.", delete_after=5)
             else:
                 await ctx.send("❌ Bitte gib einen Nutzer an.", delete_after=5)
@@ -366,6 +386,24 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
             await ctx.send("❌ Nutzer nicht gefunden.", delete_after=5)
         elif isinstance(error, commands.BadArgument):
             await ctx.send("❌ Ungültiges Argument.", delete_after=5)
+        elif (isinstance(error, commands.CommandInvokeError)
+              and isinstance(error.original, (ValueError, KeyError))):
+            # Admin CRUD helpers raise ValueError/KeyError (duplicate key,
+            # message-not-found, unknown key, ...). Surface the reason to the
+            # admin instead of failing silently.
+            await ctx.send(f"❌ {error.original}", delete_after=5)
+
+    @bot.tree.error
+    async def on_app_command_error(interaction, error):
+        original = getattr(error, "original", error)
+        if isinstance(original, (ValueError, KeyError)):
+            msg = f"❌ {original}"
+        else:
+            msg = "❌ Ein Fehler ist aufgetreten."
+        if interaction.response.is_done():
+            await interaction.followup.send(msg, ephemeral=True)
+        else:
+            await interaction.response.send_message(msg, ephemeral=True)
 
     @bot.event
     async def on_message(message):

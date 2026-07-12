@@ -22,6 +22,15 @@ async def test_list_stats_excludes_archived_by_default(repo):
     assert all_keys == {"a", "b"}
 
 
+async def test_unarchive_stat_reactivates(repo):
+    await repo.create_stat("a", "A")
+    await repo.archive_stat("a")
+    assert (await repo.get_stat("a")).archived_at is not None
+    await repo.unarchive_stat("a")
+    assert (await repo.get_stat("a")).archived_at is None
+    assert {s.key for s in await repo.list_stats()} == {"a"}
+
+
 async def test_update_and_delete_stat(repo):
     await repo.create_stat("x", "X")
     updated = await repo.update_stat("x", name="X2")

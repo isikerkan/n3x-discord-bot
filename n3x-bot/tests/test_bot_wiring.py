@@ -72,7 +72,7 @@ async def test_register_stat_commands_adds_one_command_per_stat_plus_rank():
     # discord.py's commands.Bot ships a default "help" command; "stat"/"del"
     # are wired by register_gate_commands (called from build_bot itself, not
     # register_stat_commands) — only count what THIS function wires.
-    wired = [c for c in bot.commands if c.name not in ("help", "stat", "del")]
+    wired = [c for c in bot.commands if c.name not in ("help", "stat", "del", "admin")]
     assert len(wired) == len(stats) + 1
 
     await repo.close()
@@ -87,7 +87,7 @@ async def test_register_stat_commands_is_idempotent():
     await register_stat_commands(bot, repo, settings)
 
     stats = await repo.list_stats()
-    wired = [c for c in bot.commands if c.name not in ("help", "stat", "del")]
+    wired = [c for c in bot.commands if c.name not in ("help", "stat", "del", "admin")]
     assert len(wired) == len(stats) + 1
 
     await repo.close()
@@ -499,6 +499,65 @@ async def test_on_command_error_ignores_other_errors():
     await bot.on_command_error(ctx, RuntimeError("boom"))
 
     ctx.send.assert_not_called()
+
+    await repo.close()
+
+
+async def test_on_command_error_missing_arg_is_generic_for_admin_commands():
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+
+    ctx = MagicMock()
+    ctx.send = AsyncMock()
+    ctx.command = SimpleNamespace(name="add")  # e.g. `!admin stat add`
+    error = commands.MissingRequiredArgument.__new__(commands.MissingRequiredArgument)
+
+    await bot.on_command_error(ctx, error)
+
+    ctx.send.assert_awaited_once()
+    assert ctx.send.await_args.args[0] == "❌ Fehlendes Argument."
+
+    await repo.close()
+
+
+async def test_on_command_error_surfaces_admin_helper_valueerror():
+    # A ValueError raised by an admin helper is wrapped by discord.py in a
+    # CommandInvokeError; the admin must see the reason, not silence.
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+
+    ctx = MagicMock()
+    ctx.send = AsyncMock()
+    ctx.command = SimpleNamespace(name="add")
+    error = commands.CommandInvokeError(ValueError("stat 'tit' already exists"))
+
+    await bot.on_command_error(ctx, error)
+
+    ctx.send.assert_awaited_once()
+    assert "already exists" in ctx.send.await_args.args[0]
+    assert ctx.send.await_args.kwargs.get("delete_after") == 5
+
+    await repo.close()
+
+
+async def test_tree_on_error_surfaces_helper_error_to_interaction():
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+
+    interaction = MagicMock()
+    interaction.response.is_done = MagicMock(return_value=False)
+    interaction.response.send_message = AsyncMock()
+    interaction.followup.send = AsyncMock()
+    error = SimpleNamespace(original=ValueError("no message named 'x'"))
+
+    await bot.tree.on_error(interaction, error)
+
+    interaction.response.send_message.assert_awaited_once()
+    assert "no message named" in interaction.response.send_message.await_args.args[0]
+    assert interaction.response.send_message.await_args.kwargs.get("ephemeral") is True
 
     await repo.close()
 
@@ -1035,6 +1094,7 @@ async def test_on_ready_refreshes_gate_embed_when_channel_configured():
     bot = build_bot(settings, repo)
     channel, _ = _fake_channel(send_return_id=1, channel_id=555)
     bot.get_channel = MagicMock(return_value=channel)
+    bot.tree.sync = AsyncMock()
 
     await bot.on_ready()
 
@@ -1048,8 +1108,23 @@ async def test_on_ready_skips_gate_embed_when_channel_unset():
     settings = _settings(gate_stats_channel_id=0)
     bot = build_bot(settings, repo)
     bot.get_channel = MagicMock(return_value=None)
+    bot.tree.sync = AsyncMock()
 
     await bot.on_ready()  # must not raise; no channel lookup for the gate embed
+
+    await repo.close()
+
+
+async def test_on_ready_syncs_command_tree():
+    repo = await _flatfile_repo()
+    settings = _settings(gate_stats_channel_id=0)
+    bot = build_bot(settings, repo)
+    bot.get_channel = MagicMock(return_value=None)
+    bot.tree.sync = AsyncMock()
+
+    await bot.on_ready()
+
+    bot.tree.sync.assert_awaited_once()
 
     await repo.close()
 
