@@ -34,3 +34,20 @@ def test_postgres_with_url_ok():
 def test_reminder_hm_parses():
     s = Settings(**BASE, reminder_time="07:05")
     assert s.reminder_hm() == (7, 5)
+
+
+def test_admin_role_id_defaults_to_zero():
+    s = Settings(**BASE)
+    assert s.admin_role_id == 0
+
+
+def test_admin_role_id_read_from_env(monkeypatch):
+    monkeypatch.setenv("ADMIN_ROLE_ID", "778899")
+    s = Settings(
+        discord_token="tok",
+        target_role_id=1,
+        welcome_channel_id=2,
+        reminder_channel_id=3,
+        _env_file=None,
+    )
+    assert s.admin_role_id == 778899
