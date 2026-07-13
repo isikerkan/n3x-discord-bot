@@ -72,3 +72,16 @@ v3 bugs found during reverse-engineering. Most are "avoid when porting"; a few a
 | B18 | Minor | Nickname strip leaves stray space; `[:32]` truncation mangles | Single normalize helper (`"[N3X] "` + `.strip()`). |
 
 Note: v3 SQL is parameterized — **no SQL-injection found**. Only critical security issue is the hardcoded token (B1).
+
+---
+
+## D. TODO — AMP GUI content management
+
+**Goal:** manage bot content (stats/commands, achievements, messages — later maybe gate rewards, milestones) from the **AMP web GUI**, not only via Discord `!admin` commands or the DB. Needs its own brainstorm to pick an approach; candidates (AMP-native):
+
+- **Config-file + AMP File Manager (declarative, recommended to evaluate first).** Bot loads content from an editable file in the working dir (e.g. `content.yaml`/`.json`: list of stats, achievement definitions/thresholds, message templates). Admin edits it in AMP's built-in **File Manager**; bot reloads on change (watch file, `/admin reload`, or on restart). Simple, no custom UI, versionable. Downside: file is source-of-truth, must reconcile with the DB-backed runtime (seed/sync on load).
+- **Console command interface (interactive).** Bot reads **stdin**; admin types management commands in AMP's **Console** tab (our kvp already sets `App.HasWriteableConsole=True`), e.g. `stat add tit Tit`, `achievement add …`. Reuses the existing `admin_*` helpers. AMP-native, live, no file format. Downside: console is ephemeral/one-way-ish, no listing UI.
+- **AMP config manifest fields (limited).** `n3x-botconfig.json` GUI fields are for static instance config (env → Settings), NOT dynamic CRUD tables — can't list/add achievements. Usable only for a small fixed set (already used for channel/role IDs). Not sufficient for open-ended content.
+- **Custom AMP module/plugin UI** — heavy; out of scope unless the above don't suffice.
+
+**Suggested scope for v1:** a `content.yaml` (stats + messages + achievement definitions) loaded on startup + an `/admin reload` (Discord) and/or console `reload`, editable via AMP File Manager. Decide file-vs-DB source-of-truth in the brainstorm. Depends on the achievements port (#2) for the achievement side.
