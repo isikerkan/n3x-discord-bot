@@ -70,3 +70,25 @@ gate_entries = Table(
     Column("username", String(100), nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False),
 )
+
+activity_counters = Table(
+    "activity_counters", metadata,
+    Column("discord_id", BigInteger, primary_key=True),
+    Column("metric", String(20), primary_key=True),
+    Column("count", BigInteger, nullable=False, default=0),
+)
+
+streak_stats = Table(
+    "streak_stats", metadata,
+    Column("discord_id", BigInteger, primary_key=True),
+    Column("current_streak", Integer, nullable=False),
+    Column("last_active_date", String(10), nullable=False),
+    Column("max_streak", Integer, nullable=False),
+)
+
+night_stats = Table(
+    "night_stats", metadata,
+    Column("discord_id", BigInteger, primary_key=True),
+    Column("night_count", Integer, nullable=False),
+    Column("last_night_date", String(10), nullable=False),
+)

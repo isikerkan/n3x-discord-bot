@@ -386,6 +386,77 @@ class SqlRepository(StatsRepository):
                              "avg": round(avg) if avg else 0}
         return out
 
+    # ── activity ───────────────────────────────────────────────────────────
+    async def add_activity(self, discord_id, metric, amount):
+        async with self.engine.begin() as conn:
+            row = (await conn.execute(select(sc.activity_counters.c.count).where(
+                (sc.activity_counters.c.discord_id == discord_id) &
+                (sc.activity_counters.c.metric == metric)))).one_or_none()
+            if row is None:
+                new_total = amount
+                await conn.execute(insert(sc.activity_counters).values(
+                    discord_id=discord_id, metric=metric, count=amount))
+            else:
+                new_total = row.count + amount
+                await conn.execute(update(sc.activity_counters).where(
+                    (sc.activity_counters.c.discord_id == discord_id) &
+                    (sc.activity_counters.c.metric == metric)).values(count=new_total))
+            return new_total
+
+    async def get_activity(self, discord_id, metric):
+        async with self.engine.connect() as conn:
+            r = (await conn.execute(select(sc.activity_counters.c.count).where(
+                (sc.activity_counters.c.discord_id == discord_id) &
+                (sc.activity_counters.c.metric == metric)))).one_or_none()
+            return r.count if r else 0
+
+    async def get_streak(self, discord_id):
+        async with self.engine.connect() as conn:
+            r = (await conn.execute(select(sc.streak_stats)
+                 .where(sc.streak_stats.c.discord_id == discord_id))).one_or_none()
+            if r is None:
+                return None
+            return {"current_streak": r.current_streak,
+                    "last_active_date": r.last_active_date,
+                    "max_streak": r.max_streak}
+
+    async def set_streak(self, discord_id, current_streak, last_active_date, max_streak):
+        async with self.engine.begin() as conn:
+            exists = (await conn.execute(select(sc.streak_stats.c.discord_id)
+                      .where(sc.streak_stats.c.discord_id == discord_id))).one_or_none()
+            vals = {"current_streak": current_streak,
+                    "last_active_date": last_active_date,
+                    "max_streak": max_streak}
+            if exists is None:
+                await conn.execute(insert(sc.streak_stats).values(
+                    discord_id=discord_id, **vals))
+            else:
+                await conn.execute(update(sc.streak_stats)
+                                   .where(sc.streak_stats.c.discord_id == discord_id)
+                                   .values(**vals))
+
+    async def get_night(self, discord_id):
+        async with self.engine.connect() as conn:
+            r = (await conn.execute(select(sc.night_stats)
+                 .where(sc.night_stats.c.discord_id == discord_id))).one_or_none()
+            if r is None:
+                return None
+            return {"night_count": r.night_count,
+                    "last_night_date": r.last_night_date}
+
+    async def set_night(self, discord_id, night_count, last_night_date):
+        async with self.engine.begin() as conn:
+            exists = (await conn.execute(select(sc.night_stats.c.discord_id)
+                      .where(sc.night_stats.c.discord_id == discord_id))).one_or_none()
+            vals = {"night_count": night_count, "last_night_date": last_night_date}
+            if exists is None:
+                await conn.execute(insert(sc.night_stats).values(
+                    discord_id=discord_id, **vals))
+            else:
+                await conn.execute(update(sc.night_stats)
+                                   .where(sc.night_stats.c.discord_id == discord_id)
+                                   .values(**vals))
+
     # ── bulk export / import ───────────────────────────────────────────────
     @staticmethod
     def _dt(dt: datetime | None) -> str | None:
@@ -439,6 +510,20 @@ class SqlRepository(StatsRepository):
                 for r in await conn.execute(
                     select(sc.gate_entries).order_by(sc.gate_entries.c.id.asc()))
             ]
+            activity_counters: dict = {}
+            for r in await conn.execute(select(sc.activity_counters)):
+                activity_counters.setdefault(str(r.discord_id), {})[r.metric] = r.count
+            streak_stats = {
+                str(r.discord_id): {"current_streak": r.current_streak,
+                                    "last_active_date": r.last_active_date,
+                                    "max_streak": r.max_streak}
+                for r in await conn.execute(select(sc.streak_stats))
+            }
+            night_stats = {
+                str(r.discord_id): {"night_count": r.night_count,
+                                    "last_night_date": r.last_night_date}
+                for r in await conn.execute(select(sc.night_stats))
+            }
             seq = {}
             for key, table in (("user", sc.users), ("message", sc.messages),
                                ("stat", sc.stats), ("gate", sc.gate_entries)):
@@ -448,7 +533,9 @@ class SqlRepository(StatsRepository):
             "users": users, "messages": messages, "stats": stats,
             "user_stats": user_stats, "stat_totals": stat_totals,
             "stat_last_post": stat_last_post, "target_stats": target_stats,
-            "gate_entries": gate_entries, "seq": seq,
+            "gate_entries": gate_entries,
+            "activity_counters": activity_counters, "streak_stats": streak_stats,
+            "night_stats": night_stats, "seq": seq,
         }
 
     async def import_all(self, snapshot: dict) -> None:
@@ -489,6 +576,19 @@ class SqlRepository(StatsRepository):
                     id=r["id"], gate_type=r["gate_type"], cost=r["cost"],
                     user_id=r["user_id"], username=r["username"],
                     created_at=_parse_dt(r["created_at"])))
+            for did, metrics in snapshot.get("activity_counters", {}).items():
+                for metric, count in metrics.items():
+                    await conn.execute(insert(sc.activity_counters).values(
+                        discord_id=int(did), metric=metric, count=count))
+            for did, v in snapshot.get("streak_stats", {}).items():
+                await conn.execute(insert(sc.streak_stats).values(
+                    discord_id=int(did), current_streak=v["current_streak"],
+                    last_active_date=v["last_active_date"],
+                    max_streak=v["max_streak"]))
+            for did, v in snapshot.get("night_stats", {}).items():
+                await conn.execute(insert(sc.night_stats).values(
+                    discord_id=int(did), night_count=v["night_count"],
+                    last_night_date=v["last_night_date"]))
             if self.engine.dialect.name == "postgresql":
                 for tbl, key in (("users", "user"), ("messages", "message"),
                                  ("stats", "stat"), ("gate_entries", "gate")):
@@ -501,5 +601,6 @@ class SqlRepository(StatsRepository):
         async with self.engine.begin() as conn:
             for table in (sc.gate_entries, sc.user_stats, sc.stat_totals,
                           sc.stat_last_post, sc.target_stats, sc.stats,
-                          sc.users, sc.messages):
+                          sc.users, sc.messages,
+                          sc.activity_counters, sc.streak_stats, sc.night_stats):
                 await conn.execute(delete(table))

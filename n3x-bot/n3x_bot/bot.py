@@ -13,6 +13,13 @@ from n3x_bot.admin import (
     admin_delete_message, admin_list_messages,
     register_admin_commands,
 )
+from n3x_bot.activity import (
+    register_activity,
+    record_message_activity,
+    handle_voice_state_update,
+    handle_activity_reaction,
+    now_local,
+)
 from n3x_bot.config import Settings
 from n3x_bot.format import format_number
 from n3x_bot.gates import build_gate_embed, parse_gate_message
@@ -73,10 +80,12 @@ def build_bot(settings: Settings, repo: StatsRepository) -> commands.Bot:
     bot._rank_last_posts = {}
     bot._target_last_posts = {}
     bot._gate_embed_msg_id = None
+    bot.voice_join_times = {}
 
     _wire_events(bot, settings, repo)
     register_gate_commands(bot, repo, settings)
     register_admin_commands(bot, repo, settings)
+    register_activity(bot, repo, settings)
     return bot
 
 
@@ -350,6 +359,15 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
         elif weekday == 4:
             await channel.send("*EVENT REMINDER*: Invasion beginnt in 30 Minuten! @everyone")
 
+    @tasks.loop(minutes=5)
+    async def voice_flush_task():
+        now = now_local(settings)
+        for member_id, join in list(bot.voice_join_times.items()):
+            secs = (now - join).total_seconds()
+            if secs > 0:
+                await repo.add_activity(member_id, "voice_seconds", int(secs))
+            bot.voice_join_times[member_id] = now
+
     @bot.event
     async def on_ready():
         log.info("Bot eingeloggt als %s", bot.user)
@@ -365,6 +383,13 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
                 await enforce_prefix(m)
         if not event_reminder_task.is_running():
             event_reminder_task.start()
+        for guild in bot.guilds:
+            for channel in guild.voice_channels:
+                for m in channel.members:
+                    if not m.bot:
+                        bot.voice_join_times[m.id] = now_local(settings)
+        if not voice_flush_task.is_running():
+            voice_flush_task.start()
         if settings.gate_stats_channel_id:
             await update_gate_stats_embed(bot, repo, settings)
         # Publish the /admin ... slash group (and any other app commands) to
@@ -409,6 +434,10 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
     async def on_message(message):
         if message.author == bot.user:
             return
+        author = message.author
+        if not getattr(author, "bot", False) and getattr(author, "id", None) is not None:
+            await record_message_activity(repo, settings, author.id,
+                                          now_local(settings))
         if settings.gate_input_channel_id and message.channel.id == settings.gate_input_channel_id:
             await handle_gate_input_message(bot, repo, settings, message)
         if message.content.startswith(settings.command_prefix):
@@ -417,6 +446,15 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
             except Exception:
                 pass
         await bot.process_commands(message)
+
+    @bot.event
+    async def on_voice_state_update(member, before, after):
+        await handle_voice_state_update(bot, repo, settings, member, before, after,
+                                        now_local(settings))
+
+    @bot.event
+    async def on_raw_reaction_add(payload):
+        await handle_activity_reaction(bot, repo, settings, payload)
 
     @bot.event
     async def on_member_update(before, after):
