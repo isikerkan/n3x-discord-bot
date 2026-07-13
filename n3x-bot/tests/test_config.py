@@ -51,3 +51,32 @@ def test_admin_role_id_read_from_env(monkeypatch):
         _env_file=None,
     )
     assert s.admin_role_id == 778899
+
+
+def test_timezone_defaults_to_europe_berlin():
+    s = Settings(**BASE)
+    assert s.timezone == "Europe/Berlin"
+
+
+def test_timezone_read_from_env(monkeypatch):
+    monkeypatch.setenv("TIMEZONE", "America/New_York")
+    s = Settings(
+        discord_token="tok",
+        target_role_id=1,
+        welcome_channel_id=2,
+        reminder_channel_id=3,
+        _env_file=None,
+    )
+    assert s.timezone == "America/New_York"
+
+
+def test_bad_timezone_is_rejected_at_load():
+    # A typo would otherwise only blow up at runtime inside now_local(),
+    # bricking every command. Fail fast at config load instead.
+    with pytest.raises(ValidationError):
+        Settings(**BASE, timezone="Nonsense/Foo")
+
+
+def test_good_timezone_passes_validation():
+    s = Settings(**BASE, timezone="America/New_York")
+    assert s.timezone == "America/New_York"

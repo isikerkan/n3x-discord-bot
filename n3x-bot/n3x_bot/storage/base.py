@@ -122,6 +122,24 @@ class StatsRepository(ABC):
         """
         ...
 
+    # activity
+    @abstractmethod
+    async def add_activity(self, discord_id: int, metric: str, amount: int) -> int:
+        """Increment the `metric` counter for `discord_id`, return the new total."""
+        ...
+    @abstractmethod
+    async def get_activity(self, discord_id: int, metric: str) -> int: ...
+    @abstractmethod
+    async def get_streak(self, discord_id: int) -> dict | None: ...
+    @abstractmethod
+    async def set_streak(self, discord_id: int, current_streak: int,
+                         last_active_date: str, max_streak: int) -> None: ...
+    @abstractmethod
+    async def get_night(self, discord_id: int) -> dict | None: ...
+    @abstractmethod
+    async def set_night(self, discord_id: int, night_count: int,
+                        last_night_date: str) -> None: ...
+
     # bulk export / import
     @abstractmethod
     async def export_all(self) -> dict:

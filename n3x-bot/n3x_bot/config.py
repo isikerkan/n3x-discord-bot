@@ -1,4 +1,5 @@
 from typing import Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -16,6 +17,7 @@ class Settings(BaseSettings):
     reminder_channel_id: int
     julez_id: int = 0
     admin_role_id: int = 0
+    timezone: str = "Europe/Berlin"
 
     prefix_str: str = "[N3X]"
     command_prefix: str = "!"
@@ -32,6 +34,17 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"database_url is required for storage_backend={self.storage_backend}"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_timezone(self) -> "Settings":
+        # A bad tz would otherwise only surface at runtime inside now_local()
+        # (called before process_commands in on_message), silently bricking all
+        # commands with a logged traceback. Fail fast at config load instead.
+        try:
+            ZoneInfo(self.timezone)
+        except (ZoneInfoNotFoundError, ValueError) as e:
+            raise ValueError(f"invalid timezone: {self.timezone!r}") from e
         return self
 
     def reminder_hm(self) -> tuple[int, int]:

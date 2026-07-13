@@ -153,6 +153,47 @@ async def test_migrate_flatfile_to_postgres_full_snapshot_equal(json_source, pos
     assert await postgres_dest.export_all() == before
 
 
+# ── activity-only data: round-trip + non-empty detection ────────────────────
+
+async def _seed_activity_only(repo):
+    """Populate ONLY the activity/streak/night tables (no users/stats/gates)."""
+    await repo.add_activity(4242, "messages", 9)
+    await repo.add_activity(4242, "reactions", 3)
+    await repo.add_activity(4242, "voice_seconds", 720)
+    await repo.set_streak(4242, 5, "2026-07-13", 11)
+    await repo.set_night(4242, 2, "2026-07-13")
+
+
+async def test_migrate_activity_only_source_round_trips(sqlite_dest):
+    from n3x_bot.migrate import migrate
+    fd, path = tempfile.mkstemp(suffix=".json")
+    os.close(fd)
+    os.remove(path)
+    src = JsonRepository(path)
+    await src.connect()
+    await _seed_activity_only(src)
+    before = await src.export_all()
+    try:
+        await migrate(src, sqlite_dest)
+        assert await sqlite_dest.export_all() == before
+        assert await sqlite_dest.get_activity(4242, "messages") == 9
+        assert (await sqlite_dest.get_streak(4242))["max_streak"] == 11
+        assert (await sqlite_dest.get_night(4242))["night_count"] == 2
+    finally:
+        await src.close()
+        if os.path.exists(path):
+            os.remove(path)
+
+
+async def test_migrate_refuses_dest_holding_only_activity_data(json_source, sqlite_dest):
+    # A dest carrying ONLY activity data must be seen as non-empty, else
+    # import_all would collide on PKs / corrupt it.
+    from n3x_bot.migrate import migrate, DestinationNotEmptyError
+    await sqlite_dest.add_activity(4242, "messages", 1)
+    with pytest.raises(DestinationNotEmptyError):
+        await migrate(json_source, sqlite_dest)
+
+
 # ── run_migration(...) — the CLI-wrapped callable ───────────────────────────
 
 async def test_run_migration_flatfile_to_sqlite_copies_all_data():

@@ -28,6 +28,7 @@ class JsonRepository(StatsRepository):
             "users": [], "messages": [], "stats": [],
             "user_stats": {}, "stat_totals": {}, "stat_last_post": {},
             "target_stats": {}, "gate_entries": [],
+            "activity_counters": {}, "streak_stats": {}, "night_stats": {},
         }
 
     async def connect(self) -> None:
@@ -305,6 +306,44 @@ class JsonRepository(StatsRepository):
                           "avg": round(sum(costs) / count) if count else 0}
         return out
 
+    # ── activity ───────────────────────────────────────────────────────────
+    async def add_activity(self, discord_id, metric, amount):
+        d = self._db["activity_counters"].setdefault(str(discord_id), {})
+        d[metric] = d.get(metric, 0) + amount
+        self._flush()
+        return d[metric]
+
+    async def get_activity(self, discord_id, metric):
+        return self._db["activity_counters"].get(str(discord_id), {}).get(metric, 0)
+
+    async def get_streak(self, discord_id):
+        r = self._db["streak_stats"].get(str(discord_id))
+        if r is None:
+            return None
+        return {"current_streak": r["current_streak"],
+                "last_active_date": r["last_active_date"],
+                "max_streak": r["max_streak"]}
+
+    async def set_streak(self, discord_id, current_streak, last_active_date, max_streak):
+        self._db["streak_stats"][str(discord_id)] = {
+            "current_streak": current_streak,
+            "last_active_date": last_active_date,
+            "max_streak": max_streak}
+        self._flush()
+
+    async def get_night(self, discord_id):
+        r = self._db["night_stats"].get(str(discord_id))
+        if r is None:
+            return None
+        return {"night_count": r["night_count"],
+                "last_night_date": r["last_night_date"]}
+
+    async def set_night(self, discord_id, night_count, last_night_date):
+        self._db["night_stats"][str(discord_id)] = {
+            "night_count": night_count,
+            "last_night_date": last_night_date}
+        self._flush()
+
     # ── bulk export / import ───────────────────────────────────────────────
     @staticmethod
     def _max_id(rows) -> int:
@@ -329,6 +368,9 @@ class JsonRepository(StatsRepository):
             "stat_last_post": copy.deepcopy(self._db["stat_last_post"]),
             "target_stats": copy.deepcopy(self._db["target_stats"]),
             "gate_entries": gate_entries,
+            "activity_counters": copy.deepcopy(self._db["activity_counters"]),
+            "streak_stats": copy.deepcopy(self._db["streak_stats"]),
+            "night_stats": copy.deepcopy(self._db["night_stats"]),
             "seq": {
                 "user": self._max_id(users),
                 "message": self._max_id(messages),
@@ -346,6 +388,9 @@ class JsonRepository(StatsRepository):
         self._db["stat_totals"] = copy.deepcopy(snapshot["stat_totals"])
         self._db["stat_last_post"] = copy.deepcopy(snapshot["stat_last_post"])
         self._db["target_stats"] = copy.deepcopy(snapshot["target_stats"])
+        self._db["activity_counters"] = copy.deepcopy(snapshot.get("activity_counters", {}))
+        self._db["streak_stats"] = copy.deepcopy(snapshot.get("streak_stats", {}))
+        self._db["night_stats"] = copy.deepcopy(snapshot.get("night_stats", {}))
         self._db["seq"] = dict(snapshot["seq"])
         self._flush()
 
