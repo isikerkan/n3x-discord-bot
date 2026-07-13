@@ -18,6 +18,7 @@ from n3x_bot.activity import (
     record_message_activity,
     handle_voice_state_update,
     handle_activity_reaction,
+    flush_voice_times,
     now_local,
 )
 from n3x_bot.config import Settings
@@ -80,7 +81,11 @@ def build_bot(settings: Settings, repo: StatsRepository) -> commands.Bot:
     bot._rank_last_posts = {}
     bot._target_last_posts = {}
     bot._gate_embed_msg_id = None
+    # Single-guild bot (N3X): voice_join_times is keyed by member.id alone.
+    # voice_lock serialises the flush task against the leave/move handler so
+    # they can't double-count or leave a phantom session behind.
     bot.voice_join_times = {}
+    bot.voice_lock = asyncio.Lock()
 
     _wire_events(bot, settings, repo)
     register_gate_commands(bot, repo, settings)
@@ -361,12 +366,7 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
 
     @tasks.loop(minutes=5)
     async def voice_flush_task():
-        now = now_local(settings)
-        for member_id, join in list(bot.voice_join_times.items()):
-            secs = (now - join).total_seconds()
-            if secs > 0:
-                await repo.add_activity(member_id, "voice_seconds", int(secs))
-            bot.voice_join_times[member_id] = now
+        await flush_voice_times(bot, repo, now_local(settings))
 
     @bot.event
     async def on_ready():
@@ -387,7 +387,10 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
             for channel in guild.voice_channels:
                 for m in channel.members:
                     if not m.bot:
-                        bot.voice_join_times[m.id] = now_local(settings)
+                        # Idempotent across reconnects: setdefault so a repeat
+                        # on_ready doesn't overwrite an existing join time and
+                        # drop un-flushed voice seconds.
+                        bot.voice_join_times.setdefault(m.id, now_local(settings))
         if not voice_flush_task.is_running():
             voice_flush_task.start()
         if settings.gate_stats_channel_id:

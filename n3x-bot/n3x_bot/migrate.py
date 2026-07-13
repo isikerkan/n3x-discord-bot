@@ -18,9 +18,19 @@ def _build_repo(backend: str, location: str) -> StatsRepository:
     return SqlRepository(location)
 
 
+# Every data-bearing table in an export_all() snapshot (excludes "seq", which
+# is bookkeeping). A destination is non-empty if ANY of these is populated —
+# otherwise a dest holding only activity/streak/night data would be seen as
+# empty and import_all would collide on PKs / corrupt it.
+_DATA_TABLES = (
+    "users", "messages", "stats", "gate_entries",
+    "user_stats", "stat_totals", "target_stats", "stat_last_post",
+    "activity_counters", "streak_stats", "night_stats",
+)
+
+
 def _has_data(snapshot: dict) -> bool:
-    return bool(snapshot["users"] or snapshot["messages"]
-                or snapshot["stats"] or snapshot["gate_entries"])
+    return any(snapshot.get(t) for t in _DATA_TABLES)
 
 
 async def migrate(source: StatsRepository, dest: StatsRepository,

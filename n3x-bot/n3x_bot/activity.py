@@ -1,3 +1,4 @@
+import asyncio
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
@@ -11,6 +12,8 @@ from n3x_bot.storage.base import StatsRepository
 # ── pure logic ─────────────────────────────────────────────────────────────
 
 def elapsed_seconds(join_dt: datetime, leave_dt: datetime) -> int:
+    # Truncates sub-second remainder (int()); the lost <1s per session is a
+    # deliberate, negligible rounding — voice time is a coarse counter.
     return int((leave_dt - join_dt).total_seconds())
 
 
@@ -54,6 +57,9 @@ def today_local(settings: Settings) -> date:
 
 async def record_message_activity(repo: StatsRepository, settings: Settings,
                                    member_id: int, now: datetime) -> None:
+    # Intentionally fires on EVERY non-bot message (including command and
+    # gate-input posts): the message counter + streak reflect all participation,
+    # matching v3 intent. Not scoped to "chat-only" channels by design.
     await repo.add_activity(member_id, "messages", 1)
     today = now.date()
     prev = await repo.get_streak(member_id)
@@ -73,24 +79,55 @@ async def handle_voice_state_update(bot, repo: StatsRepository, settings: Settin
                                     member, before, after, now: datetime) -> None:
     if getattr(member, "bot", False):
         return
-    times = bot.voice_join_times
     b = before.channel
     a = after.channel
-    if b is None and a is not None:
-        times[member.id] = now
-    elif b is not None and a is None:
-        join = times.pop(member.id, None)
-        if join is not None:
+    # `bot.voice_lock` serialises every read/mutation of `voice_join_times`
+    # against `flush_voice_times`; without it a leave landing mid-flush-await
+    # would double-count the interval and resurrect the popped key as a
+    # phantom session. See flush_voice_times for the full rationale.
+    async with bot.voice_lock:
+        times = bot.voice_join_times
+        # NOTE: keyed by member.id alone (single-guild bot — N3X). If the bot
+        # ever joined multiple guilds, a per-guild key would be required.
+        if b is None and a is not None:
+            times[member.id] = now
+        elif b is not None and a is None:
+            join = times.pop(member.id, None)
+            if join is not None:
+                secs = elapsed_seconds(join, now)
+                if secs > 0:
+                    await repo.add_activity(member.id, "voice_seconds", secs)
+        elif b is not None and a is not None and b.id != a.id:
+            join = times.pop(member.id, None)
+            if join is not None:
+                secs = elapsed_seconds(join, now)
+                if secs > 0:
+                    await repo.add_activity(member.id, "voice_seconds", secs)
+            times[member.id] = now
+
+
+async def flush_voice_times(bot, repo: StatsRepository, now: datetime) -> None:
+    """Credit elapsed voice time for every tracked member, then reset their
+    stored join to ``now`` so the next interval starts fresh.
+
+    Guarded by ``bot.voice_lock`` so it cannot interleave with
+    ``handle_voice_state_update``. Without the lock, a member leaving during
+    the ``add_activity`` await would (1) be credited twice — once here and
+    once by the leave handler — and (2) worse, this loop's reset would
+    re-insert the just-popped key as a phantom session that accrues time
+    forever. The pop-recompute + re-check-before-reset below is a second line
+    of defence: a key that vanished mid-iteration is never resurrected.
+    """
+    async with bot.voice_lock:
+        for member_id in list(bot.voice_join_times.keys()):
+            join = bot.voice_join_times.get(member_id)
+            if join is None:
+                continue
             secs = elapsed_seconds(join, now)
             if secs > 0:
-                await repo.add_activity(member.id, "voice_seconds", secs)
-    elif b is not None and a is not None and b.id != a.id:
-        join = times.pop(member.id, None)
-        if join is not None:
-            secs = elapsed_seconds(join, now)
-            if secs > 0:
-                await repo.add_activity(member.id, "voice_seconds", secs)
-        times[member.id] = now
+                await repo.add_activity(member_id, "voice_seconds", secs)
+            if member_id in bot.voice_join_times:
+                bot.voice_join_times[member_id] = now
 
 
 async def handle_activity_reaction(bot, repo: StatsRepository, settings: Settings,
@@ -101,6 +138,8 @@ async def handle_activity_reaction(bot, repo: StatsRepository, settings: Setting
     if payload.channel_id in (settings.gate_input_channel_id,
                               settings.gate_stats_channel_id):
         return
+    # Reactions on bot-UI messages (reminder/welcome) still count — a design
+    # choice: any reaction is treated as engagement, not filtered by target.
     await repo.add_activity(payload.user_id, "reactions", 1)
 
 

@@ -68,3 +68,15 @@ def test_timezone_read_from_env(monkeypatch):
         _env_file=None,
     )
     assert s.timezone == "America/New_York"
+
+
+def test_bad_timezone_is_rejected_at_load():
+    # A typo would otherwise only blow up at runtime inside now_local(),
+    # bricking every command. Fail fast at config load instead.
+    with pytest.raises(ValidationError):
+        Settings(**BASE, timezone="Nonsense/Foo")
+
+
+def test_good_timezone_passes_validation():
+    s = Settings(**BASE, timezone="America/New_York")
+    assert s.timezone == "America/New_York"
