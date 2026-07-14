@@ -194,6 +194,31 @@ async def test_migrate_refuses_dest_holding_only_activity_data(json_source, sqli
         await migrate(json_source, sqlite_dest)
 
 
+async def test_migrate_refuses_dest_holding_only_base_timers(json_source, sqlite_dest):
+    # A dest carrying ONLY base_timers (someone ran !base there) must be seen
+    # as non-empty, else migrate() would silently replace its timers.
+    from datetime import datetime, timezone
+    from n3x_bot.migrate import migrate, DestinationNotEmptyError
+    await sqlite_dest.set_base_timer(
+        "mapB", datetime(2031, 1, 1, tzinfo=timezone.utc))
+    with pytest.raises(DestinationNotEmptyError):
+        await migrate(json_source, sqlite_dest)
+    # dest's own timer is untouched by the refused migration.
+    assert await sqlite_dest.list_base_timers() == {
+        "mapB": datetime(2031, 1, 1, tzinfo=timezone.utc)}
+    # with overwrite=True it proceeds and the dest is replaced by the source.
+    await migrate(json_source, sqlite_dest, overwrite=True)
+    assert await sqlite_dest.export_all() == await json_source.export_all()
+
+
+async def test_migrate_refuses_dest_holding_only_kodex_data(json_source, sqlite_dest):
+    # A dest carrying ONLY kodex data must likewise be seen as non-empty.
+    from n3x_bot.migrate import migrate, DestinationNotEmptyError
+    await sqlite_dest.save_kodex_message(9001, 4242)
+    with pytest.raises(DestinationNotEmptyError):
+        await migrate(json_source, sqlite_dest)
+
+
 # ── run_migration(...) — the CLI-wrapped callable ───────────────────────────
 
 async def test_run_migration_flatfile_to_sqlite_copies_all_data():
