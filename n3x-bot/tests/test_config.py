@@ -99,3 +99,91 @@ def test_kodex_check_channel_id_read_from_env(monkeypatch):
         _env_file=None,
     )
     assert s.kodex_check_channel_id == 667788
+
+
+# ── Base-timer config (v3 port #6) ─────────────────────────────────────────
+
+DEFAULT_ALLOWED_MAPS = [
+    "4-1", "4-2", "4-3", "4-4",
+    "1-5", "1-6", "1-7",
+    "2-5", "2-6", "2-7",
+    "3-5", "3-6", "3-7",
+]
+
+
+def test_base_timer_role_id_defaults_to_zero():
+    s = Settings(**BASE)
+    assert s.base_timer_role_id == 0
+
+
+def test_base_timer_role_id_read_from_env(monkeypatch):
+    monkeypatch.setenv("BASE_TIMER_ROLE_ID", "1525938679581900930")
+    s = Settings(
+        discord_token="tok",
+        target_role_id=1,
+        welcome_channel_id=2,
+        reminder_channel_id=3,
+        _env_file=None,
+    )
+    assert s.base_timer_role_id == 1525938679581900930
+
+
+def test_timer_overview_channel_id_defaults_to_zero():
+    s = Settings(**BASE)
+    assert s.timer_overview_channel_id == 0
+
+
+def test_timer_overview_channel_id_read_from_env(monkeypatch):
+    monkeypatch.setenv("TIMER_OVERVIEW_CHANNEL_ID", "112233")
+    s = Settings(
+        discord_token="tok",
+        target_role_id=1,
+        welcome_channel_id=2,
+        reminder_channel_id=3,
+        _env_file=None,
+    )
+    assert s.timer_overview_channel_id == 112233
+
+
+def test_timer_overview_message_id_defaults_to_zero():
+    s = Settings(**BASE)
+    assert s.timer_overview_message_id == 0
+
+
+def test_timer_overview_message_id_read_from_env(monkeypatch):
+    monkeypatch.setenv("TIMER_OVERVIEW_MESSAGE_ID", "445566")
+    s = Settings(
+        discord_token="tok",
+        target_role_id=1,
+        welcome_channel_id=2,
+        reminder_channel_id=3,
+        _env_file=None,
+    )
+    assert s.timer_overview_message_id == 445566
+
+
+def test_allowed_maps_defaults_to_the_v3_map_list():
+    s = Settings(**BASE)
+    assert s.allowed_maps == "4-1,4-2,4-3,4-4,1-5,1-6,1-7,2-5,2-6,2-7,3-5,3-6,3-7"
+
+
+def test_allowed_maps_list_parses_default_into_thirteen_maps():
+    s = Settings(**BASE)
+    assert s.allowed_maps_list == DEFAULT_ALLOWED_MAPS
+
+
+def test_allowed_maps_list_strips_whitespace_and_drops_empties():
+    s = Settings(**BASE, allowed_maps=" 4-1 , 4-2 ,, 4-3 ,")
+    assert s.allowed_maps_list == ["4-1", "4-2", "4-3"]
+
+
+def test_allowed_maps_read_from_env(monkeypatch):
+    monkeypatch.setenv("ALLOWED_MAPS", "4-1,1-5")
+    s = Settings(
+        discord_token="tok",
+        target_role_id=1,
+        welcome_channel_id=2,
+        reminder_channel_id=3,
+        _env_file=None,
+    )
+    assert s.allowed_maps_list == ["4-1", "1-5"]

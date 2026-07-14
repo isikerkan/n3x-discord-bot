@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from datetime import datetime
 from n3x_bot.models import User, Stat, Message
 
 GATE_TYPES: tuple[str, ...] = ("a", "b", "c", "d")
@@ -199,6 +200,24 @@ class StatsRepository(ABC):
     async def save_kodex_message(self, message_id: int, discord_id: int) -> None: ...
     @abstractmethod
     async def get_kodex_message_user(self, message_id: int) -> int | None: ...
+
+    # base timers
+    @abstractmethod
+    async def set_base_timer(self, map_name: str, end_time: datetime) -> None:
+        """Upsert the end_time for `map_name` (tz-aware)."""
+        ...
+    @abstractmethod
+    async def remove_base_timer(self, map_name: str) -> bool:
+        """Delete the timer for `map_name`; True if a row existed."""
+        ...
+    @abstractmethod
+    async def list_base_timers(self) -> dict[str, datetime]:
+        """All timers as `{map_name: end_time}` (end_time tz-aware)."""
+        ...
+    @abstractmethod
+    async def purge_expired_base_timers(self, now: datetime) -> list[str]:
+        """Delete timers with `end_time <= now`; return the removed map names."""
+        ...
 
     # bulk export / import
     @abstractmethod

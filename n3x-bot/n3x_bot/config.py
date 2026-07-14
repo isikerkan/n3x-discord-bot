@@ -33,6 +33,11 @@ class Settings(BaseSettings):
     kodex_check_channel_id: int = 0
     voice_achievement_roles: str = ""
 
+    base_timer_role_id: int = 0
+    timer_overview_channel_id: int = 0
+    timer_overview_message_id: int = 0
+    allowed_maps: str = "4-1,4-2,4-3,4-4,1-5,1-6,1-7,2-5,2-6,2-7,3-5,3-6,3-7"
+
     @model_validator(mode="after")
     def _require_db_url(self) -> "Settings":
         if self.storage_backend in ("sqlite", "postgres") and not self.database_url:
@@ -63,6 +68,10 @@ class Settings(BaseSettings):
                 k, v = pair.split(":", 1)
                 out[k.strip()] = int(v)
         return out
+
+    @property
+    def allowed_maps_list(self) -> list[str]:
+        return [m.strip() for m in self.allowed_maps.split(",") if m.strip()]
 
     def voice_role_map(self) -> dict[str, int]:
         out = {}

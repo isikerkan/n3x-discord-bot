@@ -110,3 +110,9 @@ kodex_messages = Table(
     Column("message_id", BigInteger, primary_key=True),
     Column("discord_id", BigInteger, nullable=False),
 )
+
+base_timers = Table(
+    "base_timers", metadata,
+    Column("map_name", String(20), primary_key=True),
+    Column("end_time", DateTime(timezone=True), nullable=False),
+)
