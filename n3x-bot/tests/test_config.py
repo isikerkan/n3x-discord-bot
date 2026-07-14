@@ -80,3 +80,22 @@ def test_bad_timezone_is_rejected_at_load():
 def test_good_timezone_passes_validation():
     s = Settings(**BASE, timezone="America/New_York")
     assert s.timezone == "America/New_York"
+
+
+# ── Kodex (rules-acceptance) config ────────────────────────────────────────
+
+def test_kodex_check_channel_id_defaults_to_zero():
+    s = Settings(**BASE)
+    assert s.kodex_check_channel_id == 0
+
+
+def test_kodex_check_channel_id_read_from_env(monkeypatch):
+    monkeypatch.setenv("KODEX_CHECK_CHANNEL_ID", "667788")
+    s = Settings(
+        discord_token="tok",
+        target_role_id=1,
+        welcome_channel_id=2,
+        reminder_channel_id=3,
+        _env_file=None,
+    )
+    assert s.kodex_check_channel_id == 667788
