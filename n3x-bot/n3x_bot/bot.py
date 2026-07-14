@@ -22,6 +22,7 @@ from n3x_bot.activity import (
     now_local,
 )
 from n3x_bot.achievements import register_achievement_commands, check_achievements
+from n3x_bot.cards import announce_achievements
 from n3x_bot.config import Settings
 from n3x_bot.format import format_number
 from n3x_bot.gates import build_gate_embed, parse_gate_message
@@ -82,6 +83,7 @@ def build_bot(settings: Settings, repo: StatsRepository) -> commands.Bot:
     bot._rank_last_posts = {}
     bot._target_last_posts = {}
     bot._gate_embed_msg_id = None
+    bot._milestone_cards = {}
     # Single-guild bot (N3X): voice_join_times is keyed by member.id alone.
     # voice_lock serialises the flush task against the leave/move handler so
     # they can't double-count or leave a phantom session behind.
@@ -327,9 +329,14 @@ async def handle_gate_input_message(bot, repo: StatsRepository, settings: Settin
         pass
     if inserted:
         await update_gate_stats_embed(bot, repo, settings)
-        await check_achievements(repo, message.author.id, f"gate_{gate_type}")
-        await check_achievements(repo, message.author.id, "gate_total")
-        await check_achievements(repo, message.author.id, "gate_cost_total")
+        newly = (await check_achievements(repo, message.author.id, f"gate_{gate_type}")
+                 + await check_achievements(repo, message.author.id, "gate_total")
+                 + await check_achievements(repo, message.author.id, "gate_cost_total"))
+        if newly:
+            try:
+                await announce_achievements(bot, settings, message.author, newly)
+            except Exception:
+                pass
 
 
 def _wire_events(bot, settings: Settings, repo: StatsRepository):
@@ -444,8 +451,13 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
             return
         author = message.author
         if not getattr(author, "bot", False) and getattr(author, "id", None) is not None:
-            await record_message_activity(repo, settings, author.id,
-                                          now_local(settings))
+            newly = await record_message_activity(repo, settings, author.id,
+                                                  now_local(settings))
+            if newly:
+                try:
+                    await announce_achievements(bot, settings, author, newly)
+                except Exception:
+                    pass
         if settings.gate_input_channel_id and message.channel.id == settings.gate_input_channel_id:
             await handle_gate_input_message(bot, repo, settings, message)
         if message.content.startswith(settings.command_prefix):

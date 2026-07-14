@@ -9,6 +9,7 @@ dependencies = [
     "sqlalchemy[asyncio]>=2.0",
     "asyncpg>=0.29",
     "aiosqlite>=0.20",
+    "pillow>=10.0",
 ]
 
 [dependency-groups]
@@ -26,3 +27,10 @@ addopts = "-q"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["n3x_bot"]
+# Bundled render assets are loaded at runtime via importlib.resources; force
+# their inclusion so the wheel ships them regardless of VCS-tracking state
+# (otherwise cards.py raises FileNotFoundError under the Docker/AMP image).
+force-include = { "n3x_bot/assets/card_bg.webp" = "n3x_bot/assets/card_bg.webp", "n3x_bot/assets/DejaVuSans-Bold.ttf" = "n3x_bot/assets/DejaVuSans-Bold.ttf" }
