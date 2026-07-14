@@ -162,6 +162,11 @@ async def check_achievements(repo: StatsRepository, discord_id: int,
 
 def build_overview_embed(holders: dict[int, set[str]], user_ids: list[int],
                          page: int) -> discord.Embed:
+    if not user_ids:
+        return discord.Embed(
+            title="🏆 Achievement-Übersicht",
+            description="Noch keine Achievements freigeschaltet",
+            color=discord.Color.gold())
     idx = page % len(user_ids)
     uid = user_ids[idx]
     count = len(holders.get(uid, set()))
@@ -171,7 +176,10 @@ def build_overview_embed(holders: dict[int, set[str]], user_ids: list[int],
     embed = discord.Embed(
         title="🏆 Achievement-Übersicht",
         color=discord.Color.gold())
+    # Render the page's user as a Discord mention so each page identifies WHO it
+    # shows — the client resolves <@id> to the name, no async member lookup here.
     embed.description = (
+        f"<@{uid}>\n"
         f"**{count}/{TOTAL_ACHIEVEMENTS}** Achievements freigeschaltet\n"
         f"{bar}\n"
         f"Seite {idx + 1}/{len(user_ids)}")
@@ -190,6 +198,20 @@ async def post_overview(bot, repo: StatsRepository, settings: Settings) -> None:
     if channel is None:
         return
     embed = build_overview_embed(holders, user_ids, page)
+    # Re-use the tracked overview message if one still exists: EDIT it back to
+    # page 0 instead of spamming a fresh message (which would orphan the nav
+    # reactions on the old, now-dead message). Only post anew when nothing is
+    # tracked or the old message is gone (fetch_message raises).
+    state = getattr(bot, "_overview_state", None)
+    if state:
+        try:
+            msg = await channel.fetch_message(state["message_id"])
+            await msg.edit(embed=embed)
+            bot._overview_state = {"message_id": msg.id, "page": page,
+                                   "user_ids": user_ids}
+            return
+        except Exception:
+            pass
     msg = await channel.send(embed=embed)
     await msg.add_reaction("⬅️")
     await msg.add_reaction("➡️")

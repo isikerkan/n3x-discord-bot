@@ -155,6 +155,25 @@ def test_build_overview_embed_shows_page_indicator():
     assert "1" in text and "2" in text
 
 
+def test_build_overview_embed_identifies_the_page_user():
+    # each page must identify WHICH user it shows (a Discord mention the client
+    # resolves), otherwise two users with the same count render identically.
+    holders = {10: {"a_5", "voice_3600"}, 20: {"msg_1000"}}
+    page0 = _embed_text(_mod().build_overview_embed(holders, [10, 20], 0))
+    page1 = _embed_text(_mod().build_overview_embed(holders, [10, 20], 1))
+    assert "<@10>" in page0
+    assert "<@20>" in page1
+    assert "<@20>" not in page0
+
+
+def test_build_overview_embed_empty_user_ids_does_not_crash():
+    # public pure fn: an empty holder set must return a "no data" embed rather
+    # than raising ZeroDivisionError on page % len(user_ids).
+    embed = _mod().build_overview_embed({}, [], 0)
+    assert embed is not None
+    assert "Achievement" in _embed_text(embed)
+
+
 # ── post_overview ──────────────────────────────────────────────────────────
 
 async def test_post_overview_sends_embed_and_two_nav_reactions():
@@ -204,6 +223,52 @@ async def test_post_overview_is_noop_when_channel_unset():
     await _mod().post_overview(bot, repo, settings)
 
     channel.send.assert_not_called()
+    await repo.close()
+
+
+async def test_post_overview_reuses_existing_message_instead_of_spamming():
+    repo = await _flatfile_repo()
+    settings = _settings(overview_channel_id=4242)
+    bot = build_bot(settings, repo)
+    channel, sent = _overview_channel()
+    bot.get_channel = MagicMock(return_value=channel)
+
+    await repo.unlock_achievement(10, "a_5")
+
+    await _mod().post_overview(bot, repo, settings)      # first: posts fresh
+    first_id = bot._overview_state["message_id"]
+
+    await _mod().post_overview(bot, repo, settings)      # second: must reuse
+
+    # only ONE message ever sent; the second call edited it back to page 0.
+    channel.send.assert_awaited_once()
+    assert len(sent) == 1
+    sent[0].edit.assert_awaited_once()
+    # tracker still points at the same, live message (not an orphaned one).
+    assert bot._overview_state["message_id"] == first_id
+    assert bot._overview_state["page"] == 0
+    await repo.close()
+
+
+async def test_post_overview_posts_fresh_when_tracked_message_gone():
+    repo = await _flatfile_repo()
+    settings = _settings(overview_channel_id=4242)
+    bot = build_bot(settings, repo)
+    channel, sent = _overview_channel()
+    bot.get_channel = MagicMock(return_value=channel)
+
+    await repo.unlock_achievement(10, "a_5")
+
+    # stale tracker pointing at a message the channel can no longer fetch.
+    bot._overview_state = {"message_id": 999999, "page": 3, "user_ids": [10]}
+
+    await _mod().post_overview(bot, repo, settings)
+
+    # fetch of the dead id failed -> a fresh message was posted with nav.
+    channel.send.assert_awaited_once()
+    assert len(sent) == 1
+    assert sent[0].add_reaction.await_count == 2
+    assert bot._overview_state["message_id"] == sent[0].id
     await repo.close()
 
 

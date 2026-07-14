@@ -77,6 +77,9 @@ async def apply_voice_roles(bot, settings: Settings, member,
     grant_id, other_ids = voice_role_transition([a.id for a in newly], role_map)
     if grant_id is None:
         return
+    # Best-effort by contract: if remove_roles raises after add_roles succeeded
+    # the member may briefly hold two tiers — acceptable, the next transition
+    # reconciles it. We never re-raise (role automation must not break voice).
     try:
         grant_role = member.guild.get_role(grant_id)
         if grant_role is not None:

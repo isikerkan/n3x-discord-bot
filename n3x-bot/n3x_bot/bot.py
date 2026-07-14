@@ -498,7 +498,13 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
 
     @bot.event
     async def on_raw_reaction_add(payload):
-        await handle_activity_reaction(bot, repo, settings, payload)
+        # Both handlers are independent best-effort side-channels; wrap each so a
+        # failure in one (e.g. the activity counter) can't skip the other (the
+        # overview nav), and vice versa.
+        try:
+            await handle_activity_reaction(bot, repo, settings, payload)
+        except Exception:
+            pass
         try:
             await handle_overview_reaction(bot, repo, settings, payload)
         except Exception:

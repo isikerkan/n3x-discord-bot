@@ -33,12 +33,20 @@ Assumptions pinned here (flag for the Architect):
     member doesn't have is not passed to ``remove_roles``.
 """
 
+import asyncio
 import importlib
+import os
+import tempfile
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
+from zoneinfo import ZoneInfo
 
 from n3x_bot.achievements import ACHIEVEMENTS
+from n3x_bot.bot import build_bot
 from n3x_bot.config import Settings
+from n3x_bot.seed import seed_defaults
+from n3x_bot.storage.json_repo import JsonRepository
 
 BASE_SETTINGS_KWARGS = dict(
     discord_token="tok",
@@ -64,6 +72,21 @@ def _mod():
 
 def _ach(achievement_id: str):
     return next(a for a in ACHIEVEMENTS if a.id == achievement_id)
+
+
+async def _flatfile_repo() -> JsonRepository:
+    fd, path = tempfile.mkstemp(suffix=".json")
+    os.close(fd)
+    os.remove(path)
+    repo = JsonRepository(path)
+    await repo.connect()
+    await seed_defaults(repo)
+    return repo
+
+
+def _vs(channel):
+    """Fake discord.VoiceState: only ``.channel`` is read by the handler."""
+    return SimpleNamespace(channel=channel)
 
 
 class _Role:
@@ -216,3 +239,58 @@ async def test_apply_is_best_effort_when_add_roles_raises():
 
     # must swallow the error rather than propagate.
     await _mod().apply_voice_roles(bot, settings, member, [_ach("voice_36000")])
+
+
+# ── end-to-end wiring: the two call sites that actually grant the role ───────
+# apply_voice_roles is unit-tested above, but nothing proved the two live call
+# sites (handle_voice_state_update on leave, flush_voice_times on a still-
+# connected member) are wired to it — a refactor could silently drop the grant.
+
+
+async def test_leave_crossing_voice_tier_grants_mapped_role_end_to_end():
+    from n3x_bot.bot import handle_voice_state_update
+    repo = await _flatfile_repo()
+    settings = _settings(voice_achievement_roles="voice_3600:901")
+    bot = build_bot(settings, repo)
+
+    member = _member(held_role_ids=(), known_role_ids=(901,))
+    chan = SimpleNamespace(id=100)
+    t0 = datetime(2026, 7, 13, 20, 0, tzinfo=ZoneInfo(settings.timezone))
+
+    await handle_voice_state_update(bot, repo, settings, member,
+                                    _vs(None), _vs(chan), t0)            # join
+    await handle_voice_state_update(  # leave after crossing the 3600s tier
+        bot, repo, settings, member,
+        _vs(chan), _vs(None), t0 + timedelta(seconds=3700))
+
+    assert await repo.get_activity(7, "voice_seconds") == 3700
+    assert await repo.has_achievement(7, "voice_3600") is True
+    member.add_roles.assert_awaited_once()
+    assert getattr(member.add_roles.await_args.args[0], "id", None) == 901
+    await repo.close()
+
+
+async def test_flush_crossing_voice_tier_grants_mapped_role_end_to_end():
+    from n3x_bot.activity import flush_voice_times
+    repo = await _flatfile_repo()
+    settings = _settings(voice_achievement_roles="voice_3600:901")
+
+    member = _member(held_role_ids=(), known_role_ids=(901,))
+    guild = MagicMock()
+    guild.get_member = MagicMock(return_value=member)
+
+    t0 = datetime(2026, 7, 13, 20, 0, tzinfo=ZoneInfo(settings.timezone))
+    bot = MagicMock()
+    bot.voice_lock = asyncio.Lock()
+    bot.voice_join_times = {7: t0}
+    bot.n3x_settings = settings
+    bot.guilds = [guild]
+
+    # still-connected member crosses the 3600s tier via the flush loop (no leave)
+    await flush_voice_times(bot, repo, t0 + timedelta(seconds=3700))
+
+    assert await repo.get_activity(7, "voice_seconds") == 3700
+    assert await repo.has_achievement(7, "voice_3600") is True
+    member.add_roles.assert_awaited_once()
+    assert getattr(member.add_roles.await_args.args[0], "id", None) == 901
+    await repo.close()
