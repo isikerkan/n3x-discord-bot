@@ -397,12 +397,19 @@ async def handle_delta_confirmation(bot, repo: StatsRepository,
         return
     if payload.user_id != pending["user_id"]:
         return
+    # Claim the pending entry ATOMICALLY before any await: a redelivered event
+    # or a ✅-then-❎ within the window would otherwise both pass the guards
+    # above and each store the delta (double gate_entries row on a suspending
+    # SQL backend). pop() has no await, so only one dispatch wins; the rest are
+    # clean no-ops.
+    pending = bot._pending_delta.pop(payload.message_id, None)
+    if pending is None:
+        return
     laser = emoji == "✅"
     before = await repo.gate_record("d")
     inserted = await repo.add_gate_entry(
         "d", pending["cost"], pending["user_id"], pending["username"],
         laser_dropped=laser)
-    del bot._pending_delta[payload.message_id]
     if inserted:
         after = await repo.gate_record("d")
         await _announce_records(bot, settings, "d",
@@ -427,6 +434,11 @@ async def _announce_records(bot, settings: Settings, gate_type: str,
     if channel is None:
         return
     name = GATE_NAMES.get(gate_type, gate_type.upper())
+    # First entry / single holder: both records move to the SAME user. Announce
+    # only once (the Glückspilz) instead of two messages naming the same person.
+    if ("min" in changed and "max" in changed
+            and record["min_user"] == record["max_user"]):
+        changed = {"min"}
     try:
         if "min" in changed:
             await channel.send(

@@ -24,6 +24,7 @@ Behaviour also pinned (via existing symbols):
     ✅ + ❎ WITHOUT storing; a/b/c still store immediately.
 """
 
+import asyncio
 import os
 import tempfile
 from types import SimpleNamespace
@@ -246,6 +247,171 @@ async def test_delta_confirmation_by_non_author_is_ignored():
     assert await repo.list_gate_costs("d") == []
 
     await repo.close()
+
+
+# ── atomic-claim: concurrent confirmations store exactly one delta ───────────
+
+class _SuspendingDeltaRepo:
+    """add_gate_entry suspends between the dedup-check and the insert, mimicking
+    a SQL backend's I/O so two concurrent handle_delta_confirmation calls for
+    the same pending message can genuinely interleave (the SHOULD-1 race)."""
+    def __init__(self):
+        self.rows: list = []
+
+    async def gate_record(self, gate_type):
+        rows = [r for r in self.rows if r[0] == gate_type]
+        if not rows:
+            return None
+        mn = min(rows, key=lambda r: r[1])
+        mx = max(rows, key=lambda r: r[1])
+        return {"min_cost": mn[1], "min_user": mn[2],
+                "max_cost": mx[1], "max_user": mx[2]}
+
+    async def add_gate_entry(self, gate_type, cost, user_id, username,
+                             dedup_window_seconds=30, laser_dropped=None):
+        for r in self.rows:
+            if r[0] == gate_type and r[1] == cost and r[2] == user_id:
+                return False
+        await asyncio.sleep(0.005)  # real suspension point (SQL I/O)
+        self.rows.append((gate_type, cost, user_id, username, laser_dropped))
+        return True
+
+    # minimal stubs so the post-insert path resolves
+    async def get_user_achievements(self, discord_id):
+        return set()
+
+    async def unlock_achievement(self, *a):
+        return True
+
+    async def user_gate_counts(self, uid):
+        return {}
+
+    async def user_gate_cost_total(self, uid):
+        return 0
+
+    async def gate_totals(self):
+        return {}
+
+
+async def test_concurrent_delta_confirmations_store_exactly_one(monkeypatch):
+    # SHOULD-1: check-then-act race — two confirmations (e.g. ✅ then ❎ within
+    # the window, or a redelivered event) for the SAME pending message must
+    # store exactly ONE delta, not two gate_entries rows, and the losing
+    # dispatch must be a clean no-op (no swallowed KeyError).
+    from n3x_bot import bot as botmod
+    from n3x_bot.bot import handle_delta_confirmation
+    monkeypatch.setattr(botmod, "update_gate_stats_embed", AsyncMock())
+    monkeypatch.setattr(botmod, "check_achievements", AsyncMock(return_value=[]))
+    monkeypatch.setattr(botmod, "announce_achievements", AsyncMock())
+
+    settings = _settings(gate_input_channel_id=777)
+    repo = _SuspendingDeltaRepo()
+    bot = build_bot(settings, repo)
+    bot.get_channel = MagicMock(return_value=None)
+    bot._pending_delta = {5001: {"cost": 250000, "user_id": 7,
+                                 "username": "Erkan"}}
+
+    p_check = _fake_reaction_payload(message_id=5001, user_id=7,
+                                     emoji="✅", channel_id=777)
+    p_cross = _fake_reaction_payload(message_id=5001, user_id=7,
+                                     emoji="❎", channel_id=777)
+
+    await asyncio.gather(
+        handle_delta_confirmation(bot, repo, settings, p_check),
+        handle_delta_confirmation(bot, repo, settings, p_cross),
+    )
+
+    assert len(repo.rows) == 1                # exactly one delta stored
+    assert 5001 not in bot._pending_delta     # pending claimed exactly once
+
+
+# ── _announce_records: milestone Discord path ────────────────────────────────
+
+def _fake_milestone(settings, *, channel=None):
+    """Build a bot whose get_channel returns `channel` for the milestone id."""
+    repo = MagicMock()
+    bot = build_bot(settings, repo)
+    bot.get_channel = MagicMock(return_value=channel)
+    return bot
+
+
+def _milestone_channel():
+    channel = MagicMock()
+    channel.send = AsyncMock()
+    return channel
+
+
+async def test_announce_new_low_sends_gluckspilz_only():
+    from n3x_bot.bot import _announce_records
+    settings = _settings(milestone_channel_id=888)
+    channel = _milestone_channel()
+    bot = _fake_milestone(settings, channel=channel)
+    record = {"min_cost": 50, "min_user": 3, "max_cost": 500, "max_user": 2}
+
+    await _announce_records(bot, settings, "d", {"min"}, record)
+
+    channel.send.assert_awaited_once()
+    msg = channel.send.await_args.args[0]
+    assert "Glückspilz" in msg and "<@3>" in msg
+
+
+async def test_announce_new_high_sends_pechvogel_only():
+    from n3x_bot.bot import _announce_records
+    settings = _settings(milestone_channel_id=888)
+    channel = _milestone_channel()
+    bot = _fake_milestone(settings, channel=channel)
+    record = {"min_cost": 100, "min_user": 1, "max_cost": 600, "max_user": 4}
+
+    await _announce_records(bot, settings, "d", {"max"}, record)
+
+    channel.send.assert_awaited_once()
+    msg = channel.send.await_args.args[0]
+    assert "Pechvogel" in msg and "<@4>" in msg
+
+
+async def test_announce_first_entry_single_holder_sends_once():
+    # CONSIDER-2: first entry moves BOTH records to the same user; announce
+    # once (the Glückspilz), not two messages naming the same person.
+    from n3x_bot.bot import _announce_records
+    settings = _settings(milestone_channel_id=888)
+    channel = _milestone_channel()
+    bot = _fake_milestone(settings, channel=channel)
+    record = {"min_cost": 250000, "min_user": 7, "max_cost": 250000,
+              "max_user": 7}
+
+    await _announce_records(bot, settings, "d", {"min", "max"}, record)
+
+    channel.send.assert_awaited_once()
+    msg = channel.send.await_args.args[0]
+    assert "Glückspilz" in msg and "<@7>" in msg
+
+
+async def test_announce_both_records_distinct_holders_sends_two():
+    # Both records move in the same add but to DIFFERENT users -> two messages.
+    from n3x_bot.bot import _announce_records
+    settings = _settings(milestone_channel_id=888)
+    channel = _milestone_channel()
+    bot = _fake_milestone(settings, channel=channel)
+    record = {"min_cost": 40, "min_user": 3, "max_cost": 900, "max_user": 9}
+
+    await _announce_records(bot, settings, "d", {"min", "max"}, record)
+
+    assert channel.send.await_count == 2
+    sent = [c.args[0] for c in channel.send.await_args_list]
+    assert any("Glückspilz" in m and "<@3>" in m for m in sent)
+    assert any("Pechvogel" in m and "<@9>" in m for m in sent)
+
+
+async def test_announce_no_send_when_milestone_channel_unset():
+    from n3x_bot.bot import _announce_records
+    settings = _settings(milestone_channel_id=0)
+    channel = _milestone_channel()
+    bot = _fake_milestone(settings, channel=channel)
+    record = {"min_cost": 50, "min_user": 3, "max_cost": 500, "max_user": 2}
+
+    await _announce_records(bot, settings, "d", {"min", "max"}, record)
+
+    channel.send.assert_not_awaited()
 
 
 # ── pure record-change detection (changed_records) ───────────────────────────

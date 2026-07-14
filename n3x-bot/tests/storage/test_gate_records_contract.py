@@ -115,6 +115,22 @@ async def test_gate_record_recomputes_after_deleting_record_holder(repo):
     assert record["max_cost"] == 500  # unchanged
 
 
+async def test_gate_record_tie_returns_oldest_holder(repo):
+    # On tied min (and tied max) costs across two users, the oldest holder —
+    # the lowest gate_entries.id, i.e. the first to reach that cost — is
+    # returned. Same result on json + sqlite (+ postgres).
+    await repo.add_gate_entry("a", 100, 11, "first_low")   # id 1: tied min
+    await repo.add_gate_entry("a", 500, 22, "first_high")  # id 2: tied max
+    await repo.add_gate_entry("a", 100, 33, "second_low")  # id 3: tied min
+    await repo.add_gate_entry("a", 500, 44, "second_high")  # id 4: tied max
+
+    record = await repo.gate_record("a")
+    assert record["min_cost"] == 100
+    assert record["min_user"] == 11   # oldest of the tied min holders
+    assert record["max_cost"] == 500
+    assert record["max_user"] == 22   # oldest of the tied max holders
+
+
 async def test_gate_record_covers_delta_gate(repo):
     await repo.add_gate_entry("d", 60000, 5, "cheap", laser_dropped=True)
     await repo.add_gate_entry("d", 90000, 6, "pricey", laser_dropped=False)

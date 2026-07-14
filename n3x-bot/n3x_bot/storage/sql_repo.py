@@ -381,7 +381,9 @@ class SqlRepository(StatsRepository):
                 select(sc.gate_entries.c.cost, sc.gate_entries.c.user_id)
                 .where(sc.gate_entries.c.gate_type == gate_type)
                 .order_by(sc.gate_entries.c.cost.desc(), sc.gate_entries.c.id.asc())
-                .limit(1))).one()
+                .limit(1))).one_or_none()
+            if max_row is None:
+                return None
             return {"min_cost": int(min_row.cost), "min_user": int(min_row.user_id),
                     "max_cost": int(max_row.cost), "max_user": int(max_row.user_id)}
 
