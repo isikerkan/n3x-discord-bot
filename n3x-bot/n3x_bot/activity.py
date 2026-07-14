@@ -163,9 +163,11 @@ async def flush_voice_times(bot, repo: StatsRepository, now: datetime) -> None:
     for member_id in credited:
         newly = await check_achievements(repo, member_id, "voice_seconds")
         if newly:
-            member = next(
-                (g.get_member(member_id) for g in bot.guilds
-                 if g.get_member(member_id) is not None), None)
+            member = None
+            for g in bot.guilds:
+                member = g.get_member(member_id)
+                if member is not None:
+                    break
             if member is not None:
                 try:
                     await announce_achievements(bot, settings, member, newly)

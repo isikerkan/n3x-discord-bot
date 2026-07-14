@@ -200,6 +200,121 @@ async def test_announce_deletes_prior_same_category_card_before_sending():
     await repo.close()
 
 
+# ── announce_achievements: distinct progression lines never collide ─────────
+
+async def test_announce_different_gate_metrics_do_not_delete_each_other():
+    # gate_a and gate_b share category "gate" but are distinct progression
+    # lines; unlocking gate_b must NOT delete the still-valid gate_a card.
+    announce = _announce()
+    repo = await _flatfile_repo()
+    settings = _settings(milestone_channel_id=4242)
+    bot = build_bot(settings, repo)
+    channel, sent = _milestone_channel()
+    bot.get_channel = MagicMock(return_value=channel)
+
+    member = _member()
+    await announce(bot, settings, member, [_ach("a_5")])      # gate_a card
+    gate_a_card = sent[0]
+    await announce(bot, settings, member, [_ach("b_5")])      # gate_b card
+
+    assert channel.send.await_count == 2
+    gate_a_card.delete.assert_not_awaited()
+    await repo.close()
+
+
+async def test_announce_batch_two_gate_metrics_posts_two_and_deletes_neither():
+    # One gate submission can fire both a gate_<type> tier and a gate_total
+    # tier in a single ``newly`` list; both cards must be posted and neither
+    # deleted (the pre-fix bug posted card #1 then deleted it on iteration #2).
+    announce = _announce()
+    repo = await _flatfile_repo()
+    settings = _settings(milestone_channel_id=4242)
+    bot = build_bot(settings, repo)
+    channel, sent = _milestone_channel()
+    bot.get_channel = MagicMock(return_value=channel)
+
+    member = _member()
+    await announce(bot, settings, member, [_ach("a_5"), _ach("total_50")])
+
+    assert channel.send.await_count == 2
+    for msg in sent:
+        msg.delete.assert_not_awaited()
+    await repo.close()
+
+
+async def test_announce_batch_same_metric_two_tiers_keeps_only_highest():
+    # Two tiers of the SAME metric in one batch (rare): collapse to the highest
+    # tier — a single card posted, nothing post-then-deleted within the batch.
+    announce = _announce()
+    repo = await _flatfile_repo()
+    settings = _settings(milestone_channel_id=4242)
+    bot = build_bot(settings, repo)
+    channel, sent = _milestone_channel()
+    bot.get_channel = MagicMock(return_value=channel)
+
+    member = _member()
+    await announce(bot, settings, member, [_ach("a_5"), _ach("a_10")])
+
+    assert channel.send.await_count == 1
+    sent[0].delete.assert_not_awaited()
+    await repo.close()
+
+
+# ── announce_achievements: best-effort prior-card delete never blocks send ──
+
+async def test_announce_still_sends_when_prior_card_fetch_raises_notfound():
+    announce = _announce()
+    repo = await _flatfile_repo()
+    settings = _settings(milestone_channel_id=4242)
+    bot = build_bot(settings, repo)
+    channel, sent = _milestone_channel()
+    bot.get_channel = MagicMock(return_value=channel)
+
+    member = _member()
+    await announce(bot, settings, member, [_ach("a_5")])          # store a card
+    # The prior card was deleted out-of-band; re-fetching it 404s.
+    resp = SimpleNamespace(status=404, reason="Not Found")
+    channel.fetch_message = AsyncMock(side_effect=discord.NotFound(resp, "gone"))
+    await announce(bot, settings, member, [_ach("a_10")])         # same metric
+
+    assert channel.send.await_count == 2
+    await repo.close()
+
+
+async def test_announce_still_sends_when_prior_card_delete_raises_notfound():
+    announce = _announce()
+    repo = await _flatfile_repo()
+    settings = _settings(milestone_channel_id=4242)
+    bot = build_bot(settings, repo)
+    channel, sent = _milestone_channel()
+    bot.get_channel = MagicMock(return_value=channel)
+
+    member = _member()
+    await announce(bot, settings, member, [_ach("a_5")])
+    resp = SimpleNamespace(status=404, reason="Not Found")
+    sent[0].delete = AsyncMock(side_effect=discord.NotFound(resp, "gone"))
+    await announce(bot, settings, member, [_ach("a_10")])
+
+    assert channel.send.await_count == 2
+    await repo.close()
+
+
+async def test_announce_still_sends_when_avatar_read_raises():
+    announce = _announce()
+    repo = await _flatfile_repo()
+    settings = _settings(milestone_channel_id=4242)
+    bot = build_bot(settings, repo)
+    channel, _ = _milestone_channel()
+    bot.get_channel = MagicMock(return_value=channel)
+
+    member = _member()
+    member.display_avatar.read = AsyncMock(side_effect=RuntimeError("boom"))
+    await announce(bot, settings, member, [_ach("a_5")])
+
+    channel.send.assert_awaited_once()
+    await repo.close()
+
+
 # ── announce_achievements: no-op guards ────────────────────────────────────
 
 async def test_announce_is_noop_when_milestone_channel_unset():

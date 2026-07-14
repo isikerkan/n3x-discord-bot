@@ -91,6 +91,18 @@ def test_render_with_none_avatar_does_not_crash_and_is_valid_png():
     assert img.format == "PNG"
 
 
+def test_render_with_garbage_avatar_bytes_falls_back_to_placeholder():
+    # Corrupt/non-image avatar bytes must not raise: the render swallows the
+    # decode error and draws the grey placeholder, still returning a valid PNG.
+    cards = _cards()
+    out = cards.render_achievement_card(
+        b"this is definitely not a PNG", "5 Alpha Gates", "Erkan",
+        "Alpha Bronze Pilot", (205, 127, 50))
+    img = Image.open(BytesIO(out))
+    img.load()
+    assert img.format == "PNG"
+
+
 def test_render_with_real_png_avatar_is_valid_png():
     cards = _cards()
     avatar = _png_bytes(size=(128, 128), color=(200, 10, 10))

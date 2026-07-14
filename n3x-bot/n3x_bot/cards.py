@@ -22,6 +22,10 @@ ACTIVITY_CATEGORY_COLORS: dict[str, tuple[int, int, int]] = {
     "reaction": (255, 165, 0),
 }
 
+# Order matters: substring keys that overlap must list the more specific one
+# first (e.g. "grandmaster" before "master", "millionär" before "million") so
+# the loop below matches it first. This list is the single source of truth for
+# every gate tier colour.
 GATE_TIER_COLORS: list[tuple[str, tuple[int, int, int]]] = [
     ("bronze", (205, 127, 50)),
     ("silber", (192, 192, 192)),
@@ -41,13 +45,7 @@ GATE_TIER_COLORS: list[tuple[str, tuple[int, int, int]]] = [
 
 def _gate_tier_color(title: str) -> tuple[int, int, int]:
     t = title.lower()
-    if "grandmaster" in t:
-        return (148, 0, 211)
-    if "master" in t:
-        return (255, 69, 0)
     for key, color in GATE_TIER_COLORS:
-        if key in ("grandmaster", "master"):
-            continue
         if key in t:
             return color
     return (255, 255, 255)
@@ -56,7 +54,7 @@ def _gate_tier_color(title: str) -> tuple[int, int, int]:
 def tier_color(achievement: Achievement) -> tuple[int, int, int]:
     if achievement.category == "gate":
         return _gate_tier_color(achievement.title)
-    return ACTIVITY_CATEGORY_COLORS[achievement.category]
+    return ACTIVITY_CATEGORY_COLORS.get(achievement.category, (255, 255, 255))
 
 
 def _milestone_line(achievement: Achievement) -> str:
@@ -64,7 +62,7 @@ def _milestone_line(achievement: Achievement) -> str:
     threshold = achievement.threshold
     if metric in ("gate_a", "gate_b", "gate_c", "gate_d"):
         gtype = metric.split("_")[1]
-        return f"{threshold} {GATE_NAMES[gtype]} Gates"
+        return f"{threshold} {GATE_NAMES.get(gtype, gtype.upper())} Gates"
     if metric == "gate_total":
         return "Erster Gate" if threshold == 1 else f"{threshold} Gates Gesamt"
     if metric == "gate_cost_total":
@@ -87,15 +85,38 @@ def card_texts(achievement: Achievement,
     return (_milestone_line(achievement), member_display_name, achievement.title)
 
 
+# Lazily decoded once and reused: the 2.6MB background webp and the font bytes
+# are immutable, so we decode/read them a single time and hand out a fresh
+# ``.copy()`` of the template per render (Pillow draws mutate in place).
+_BG_TEMPLATE: Image.Image | None = None
+_FONT_BYTES: bytes | None = None
+
+
+def _bg_template() -> Image.Image:
+    global _BG_TEMPLATE
+    if _BG_TEMPLATE is None:
+        with ir.files("n3x_bot").joinpath("assets/card_bg.webp").open("rb") as f:
+            img = Image.open(f).convert("RGBA")
+            img.load()
+            _BG_TEMPLATE = img
+    return _BG_TEMPLATE.copy()
+
+
+def _font_bytes() -> bytes:
+    global _FONT_BYTES
+    if _FONT_BYTES is None:
+        _FONT_BYTES = ir.files("n3x_bot").joinpath(
+            "assets/DejaVuSans-Bold.ttf").read_bytes()
+    return _FONT_BYTES
+
+
 def render_achievement_card(avatar_bytes: bytes | None, title: str,
                             subtitle: str, footer: str,
                             tier_color: tuple[int, int, int]) -> bytes:
-    with ir.files("n3x_bot").joinpath("assets/card_bg.webp").open("rb") as f:
-        bg = Image.open(f).convert("RGBA")
+    bg = _bg_template()
     draw = ImageDraw.Draw(bg)
 
-    font_bytes = ir.files("n3x_bot").joinpath(
-        "assets/DejaVuSans-Bold.ttf").read_bytes()
+    font_bytes = _font_bytes()
     font_s = ImageFont.truetype(BytesIO(font_bytes), _FONT_SIZE_SMALL)
     font_h = ImageFont.truetype(BytesIO(font_bytes), _FONT_SIZE_HUGE)
     font_m = ImageFont.truetype(BytesIO(font_bytes), _FONT_SIZE_MEDIUM)
@@ -169,12 +190,24 @@ async def announce_achievements(bot, settings: Settings, member,
     if store is None:
         store = bot._milestone_cards = {}
 
+    # Each progression line is keyed by its metric (not category) so distinct
+    # gate lines — gate_a / gate_b / gate_total / … all share category "gate" —
+    # get their own card and never delete one another. Within a single batch we
+    # collapse multiple tiers of the SAME metric to the highest one, so we post
+    # at most one card per metric and never post-then-delete a card in the same
+    # call; only the latest tier of that metric survives.
+    highest_per_metric: dict[str, Achievement] = {}
     for ach in newly:
+        current = highest_per_metric.get(ach.metric)
+        if current is None or ach.threshold > current.threshold:
+            highest_per_metric[ach.metric] = ach
+
+    for ach in highest_per_metric.values():
         title, subtitle, footer = card_texts(ach, member.display_name)
         png = render_achievement_card(avatar_bytes, title, subtitle, footer,
                                       tier_color(ach))
 
-        key = (member.id, ach.category)
+        key = (member.id, ach.metric)
         old_id = store.get(key)
         if old_id is not None:
             try:
@@ -185,5 +218,5 @@ async def announce_achievements(bot, settings: Settings, member,
 
         msg = await channel.send(file=discord.File(
             BytesIO(png),
-            filename=f"achievement_{member.id}_{ach.category}.png"))
+            filename=f"achievement_{member.id}_{ach.metric}.png"))
         store[key] = msg.id
