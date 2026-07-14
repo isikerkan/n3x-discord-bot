@@ -25,17 +25,25 @@ async def send_kodex_dm(bot, repo: StatsRepository, member) -> None:
         return
     try:
         msg = await member.send(KODEX_TEXT)
+        # Persist the mapping BEFORE seeding the reaction: if add_reaction hits a
+        # rate limit the member can still confirm manually and be recorded. The
+        # save stays after a successful send, so a closed-DM failure records
+        # nothing. Best-effort — a failure here must not abort the bulk loop.
+        await repo.save_kodex_message(msg.id, member.id)
+        await msg.add_reaction(KODEX_EMOJI)
     except Exception:
         return
-    await msg.add_reaction(KODEX_EMOJI)
-    await repo.save_kodex_message(msg.id, member.id)
 
 
 async def handle_kodex_confirmation(bot, repo: StatsRepository, payload) -> None:
     if str(payload.emoji) != KODEX_EMOJI:
         return
     user_id = await repo.get_kodex_message_user(payload.message_id)
-    if user_id is None:
+    # Only the tracked member may confirm their own kodex DM. This also excludes
+    # the bot's own seed reaction (add_reaction in send_kodex_dm), which Discord
+    # dispatches back here — without this guard every member would be
+    # auto-confirmed the instant the DM is sent.
+    if user_id is None or payload.user_id != user_id:
         return
     await repo.confirm_kodex(user_id)
 

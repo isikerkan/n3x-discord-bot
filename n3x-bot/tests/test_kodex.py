@@ -186,6 +186,22 @@ async def test_handle_kodex_confirmation_ignores_untracked_message():
     await repo.close()
 
 
+async def test_handle_kodex_confirmation_ignores_bot_seed_reaction():
+    # send_kodex_dm seeds the DM with the bot's own ✅; Discord dispatches that
+    # back here. Only the tracked member may confirm — a reactor that is NOT the
+    # tracked user (the bot, or anyone else) must record nothing.
+    from n3x_bot import kodex
+    repo = await _flatfile_repo()
+    await repo.save_kodex_message(9001, 111)
+    payload = _reaction_payload(9001, 999)  # reactor 999 != tracked member 111
+
+    await kodex.handle_kodex_confirmation(MagicMock(), repo, payload)
+
+    assert await repo.has_confirmed_kodex(111) is False
+
+    await repo.close()
+
+
 async def test_handle_kodex_confirmation_ignores_non_checkmark_emoji():
     from n3x_bot import kodex
     repo = await _flatfile_repo()
@@ -297,6 +313,37 @@ async def test_kodex_command_admin_dms_each_non_bot_member():
     m1.send.assert_awaited_once_with(kodex.KODEX_TEXT)
     m2.send.assert_awaited_once_with(kodex.KODEX_TEXT)
     bot_m.send.assert_not_awaited()
+
+    await repo.close()
+
+
+async def test_kodex_command_continues_bulk_loop_when_one_members_reaction_fails():
+    # A rate-limit / HTTPException on one member's add_reaction (or a storage
+    # error on save) must NOT abort the whole !kodex loop — remaining members
+    # still get DM'd. And because the mapping is saved before the reaction is
+    # seeded, the failing member's message is still recorded so a manual ✅ works.
+    from n3x_bot import kodex
+    repo = await _flatfile_repo()
+    settings = _settings(admin_role_id=42)
+    bot = build_bot(settings, repo)
+    kodex.register_kodex_commands(bot, repo, settings)
+
+    m1 = _dm_member(member_id=1, msg_id=101)
+    m1._sent_msg.add_reaction.side_effect = RuntimeError("rate limited")
+    m2 = _dm_member(member_id=2, msg_id=102)
+    ctx = MagicMock()
+    ctx.author = _member(member_id=9, role_ids=(42,))  # admin
+    ctx.guild = SimpleNamespace(members=[m1, m2])
+    ctx.send = AsyncMock()
+
+    await bot.get_command("kodex").callback(ctx)  # must not raise
+
+    # m1's reaction failed but the loop reached m2...
+    m2.send.assert_awaited_once_with(kodex.KODEX_TEXT)
+    m2._sent_msg.add_reaction.assert_awaited_once_with(kodex.KODEX_EMOJI)
+    # ...and m1's mapping was still persisted (durable before the seed reaction).
+    assert await repo.get_kodex_message_user(101) == 1
+    assert await repo.get_kodex_message_user(102) == 2
 
     await repo.close()
 
