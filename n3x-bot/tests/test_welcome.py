@@ -264,6 +264,61 @@ async def test_send_welcome_card_swallows_send_error():
     await repo.close()
 
 
+async def test_send_welcome_card_returns_true_on_success():
+    send_welcome_card = _welcome().send_welcome_card
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+    channel, _ = _fake_channel()
+    bot.get_channel = MagicMock(return_value=channel)
+
+    assert await send_welcome_card(bot, settings, _fake_member()) is True
+
+    await repo.close()
+
+
+async def test_send_welcome_card_returns_false_when_channel_missing():
+    send_welcome_card = _welcome().send_welcome_card
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+    bot.get_channel = MagicMock(return_value=None)
+
+    assert await send_welcome_card(bot, settings, _fake_member()) is False
+
+    await repo.close()
+
+
+async def test_send_welcome_card_returns_false_on_send_error():
+    send_welcome_card = _welcome().send_welcome_card
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+    channel = MagicMock()
+    channel.send = AsyncMock(side_effect=RuntimeError("discord down"))
+    bot.get_channel = MagicMock(return_value=channel)
+
+    assert await send_welcome_card(bot, settings, _fake_member()) is False
+
+    await repo.close()
+
+
+async def test_send_welcome_card_bot_member_returns_false_posts_nothing():
+    send_welcome_card = _welcome().send_welcome_card
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+    channel, sent = _fake_channel()
+    bot.get_channel = MagicMock(return_value=channel)
+
+    result = await send_welcome_card(bot, settings, _fake_member(is_bot=True))
+
+    assert result is False
+    channel.send.assert_not_called()
+
+    await repo.close()
+
+
 # ── register_welcome_commands / !sync_welcome ──────────────────────────────
 
 def _admin_ctx(members, channel=None, is_admin=True, admin_role_id=4242):
@@ -323,7 +378,8 @@ async def test_sync_welcome_non_admin_refused_posts_no_cards():
     await repo.close()
 
 
-async def test_sync_welcome_admin_posts_one_card_per_non_bot_member():
+async def test_sync_welcome_admin_posts_one_card_per_non_bot_member(monkeypatch):
+    monkeypatch.setattr("n3x_bot.welcome.asyncio.sleep", AsyncMock())
     register = _welcome().register_welcome_commands
     repo = await _flatfile_repo()
     settings = _settings(admin_role_id=4242)
@@ -343,7 +399,8 @@ async def test_sync_welcome_admin_posts_one_card_per_non_bot_member():
     await repo.close()
 
 
-async def test_sync_welcome_admin_reports_count():
+async def test_sync_welcome_admin_reports_count(monkeypatch):
+    monkeypatch.setattr("n3x_bot.welcome.asyncio.sleep", AsyncMock())
     register = _welcome().register_welcome_commands
     repo = await _flatfile_repo()
     settings = _settings(admin_role_id=4242)
@@ -364,7 +421,30 @@ async def test_sync_welcome_admin_reports_count():
     await repo.close()
 
 
-async def test_sync_welcome_skips_bot_members():
+async def test_sync_welcome_missing_channel_reports_zero(monkeypatch):
+    """A misconfigured/deleted welcome channel must NOT report a false success:
+    send_welcome_card returns False for every member, so the count is 0."""
+    monkeypatch.setattr("n3x_bot.welcome.asyncio.sleep", AsyncMock())
+    register = _welcome().register_welcome_commands
+    repo = await _flatfile_repo()
+    settings = _settings(admin_role_id=4242)
+    bot = build_bot(settings, repo)
+    bot.get_channel = MagicMock(return_value=None)  # channel missing
+    register(bot, settings)
+
+    members = [_fake_member(mid=1), _fake_member(mid=2)]
+    ctx = _admin_ctx(members, is_admin=True, admin_role_id=4242)
+
+    await bot.get_command("sync_welcome").callback(ctx)
+
+    reported = " ".join(str(c.args[0]) for c in ctx.send.await_args_list)
+    assert "0" in reported and "2" not in reported
+
+    await repo.close()
+
+
+async def test_sync_welcome_skips_bot_members(monkeypatch):
+    monkeypatch.setattr("n3x_bot.welcome.asyncio.sleep", AsyncMock())
     register = _welcome().register_welcome_commands
     repo = await _flatfile_repo()
     settings = _settings(admin_role_id=4242)
@@ -429,6 +509,66 @@ async def test_on_member_join_still_registers_user_when_posting_card(monkeypatch
     user = await repo.get_user(4321)
     assert user is not None and user.display_name == "Registered"
     assert any(isinstance(m.file, discord.File) for m in sent)
+
+    await repo.close()
+
+
+async def test_on_member_join_bot_posts_no_welcome_card(monkeypatch):
+    monkeypatch.setattr("n3x_bot.bot.asyncio.sleep", AsyncMock())
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+    channel, sent = _fake_channel()
+    bot.get_channel = MagicMock(return_value=channel)
+
+    member = _join_member(member_id=99, is_bot=True)
+    await bot.on_member_join(member)
+
+    channel.send.assert_not_called()  # bots get no public welcome card
+    assert sent == []
+
+    await repo.close()
+
+
+async def test_on_member_join_still_sends_kodex_dm(monkeypatch):
+    monkeypatch.setattr("n3x_bot.bot.asyncio.sleep", AsyncMock())
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+    channel, _ = _fake_channel()
+    bot.get_channel = MagicMock(return_value=channel)
+
+    member = _join_member(member_id=5150)
+    await bot.on_member_join(member)
+
+    # send_kodex_dm DMs the joining (non-bot) member.
+    member.send.assert_awaited()
+
+    await repo.close()
+
+
+async def test_on_member_join_still_runs_enforce_prefix(monkeypatch):
+    """Pin that the welcome-card replacement did not drop enforce_prefix from the
+    join path: a role-holder without the prefix gets nicked end to end."""
+    monkeypatch.setattr("n3x_bot.bot.asyncio.sleep", AsyncMock())
+    repo = await _flatfile_repo()
+    settings = _settings()  # target_role_id=1, prefix_str="[N3X]"
+    bot = build_bot(settings, repo)
+    channel, _ = _fake_channel()
+    bot.get_channel = MagicMock(return_value=channel)
+
+    guild_me = SimpleNamespace(
+        guild_permissions=SimpleNamespace(manage_nicknames=True), top_role=10)
+    guild = SimpleNamespace(owner=object(), me=guild_me)
+    member = SimpleNamespace(
+        id=6161, display_name="Rookie", bot=False, mention="<@6161>",
+        guild=guild, roles=[SimpleNamespace(id=settings.target_role_id)],
+        top_role=1, send=AsyncMock(), edit=AsyncMock())
+
+    await bot.on_member_join(member)
+
+    member.edit.assert_awaited_once()
+    assert member.edit.await_args.kwargs["nick"].startswith(settings.prefix_str)
 
     await repo.close()
 

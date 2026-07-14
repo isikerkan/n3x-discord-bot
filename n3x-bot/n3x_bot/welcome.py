@@ -1,3 +1,4 @@
+import asyncio
 import importlib.resources as ir
 from io import BytesIO
 
@@ -76,18 +77,21 @@ def strip_prefix(display_name: str, prefix_str: str) -> str:
     return display_name
 
 
-async def send_welcome_card(bot, settings: Settings, member) -> None:
+async def send_welcome_card(bot, settings: Settings, member) -> bool:
+    if getattr(member, "bot", False):
+        return False
     channel = bot.get_channel(settings.welcome_channel_id)
     if channel is None:
-        return
+        return False
     try:
         name = strip_prefix(member.display_name, settings.prefix_str)
         png = render_welcome_card(name)
         await channel.send(
             f"Willkommen {member.mention}!",
             file=discord.File(BytesIO(png), filename=f"welcome_{member.id}.png"))
+        return True
     except Exception:
-        return
+        return False
 
 
 def register_welcome_commands(bot, settings: Settings) -> None:
@@ -102,8 +106,9 @@ def register_welcome_commands(bot, settings: Settings) -> None:
         for member in ctx.guild.members:
             if getattr(member, "bot", False):
                 continue
-            await send_welcome_card(bot, settings, member)
-            count += 1
+            if await send_welcome_card(bot, settings, member):
+                count += 1
+                await asyncio.sleep(1)
         await ctx.send(f"✅ {count} Willkommenskarten verschickt.", delete_after=5)
 
     bot.add_command(commands.Command(_sync_welcome_cmd, name="sync_welcome"))
