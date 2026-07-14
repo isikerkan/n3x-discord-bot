@@ -30,6 +30,7 @@ class JsonRepository(StatsRepository):
             "target_stats": {}, "gate_entries": [],
             "activity_counters": {}, "streak_stats": {}, "night_stats": {},
             "achievements": {},
+            "kodex_confirmations": [], "kodex_messages": {},
         }
 
     async def connect(self) -> None:
@@ -396,6 +397,26 @@ class JsonRepository(StatsRepository):
         return {int(did): set(ids)
                 for did, ids in self._db["achievements"].items() if ids}
 
+    # ── kodex ──────────────────────────────────────────────────────────────
+    async def confirm_kodex(self, discord_id):
+        lst = self._db["kodex_confirmations"]
+        if discord_id not in lst:
+            lst.append(discord_id)
+            self._flush()
+
+    async def has_confirmed_kodex(self, discord_id):
+        return discord_id in self._db["kodex_confirmations"]
+
+    async def list_kodex_confirmed(self):
+        return set(self._db["kodex_confirmations"])
+
+    async def save_kodex_message(self, message_id, discord_id):
+        self._db["kodex_messages"][str(message_id)] = discord_id
+        self._flush()
+
+    async def get_kodex_message_user(self, message_id):
+        return self._db["kodex_messages"].get(str(message_id))
+
     # ── bulk export / import ───────────────────────────────────────────────
     @staticmethod
     def _max_id(rows) -> int:
@@ -429,6 +450,8 @@ class JsonRepository(StatsRepository):
             "night_stats": copy.deepcopy(self._db["night_stats"]),
             "achievements": {did: sorted(ids)
                              for did, ids in self._db["achievements"].items() if ids},
+            "kodex_confirmations": sorted(self._db["kodex_confirmations"]),
+            "kodex_messages": copy.deepcopy(self._db["kodex_messages"]),
             "seq": {
                 "user": self._max_id(users),
                 "message": self._max_id(messages),
@@ -450,6 +473,10 @@ class JsonRepository(StatsRepository):
         self._db["streak_stats"] = copy.deepcopy(snapshot.get("streak_stats", {}))
         self._db["night_stats"] = copy.deepcopy(snapshot.get("night_stats", {}))
         self._db["achievements"] = copy.deepcopy(snapshot.get("achievements", {}))
+        self._db["kodex_confirmations"] = copy.deepcopy(
+            snapshot.get("kodex_confirmations", []))
+        self._db["kodex_messages"] = copy.deepcopy(
+            snapshot.get("kodex_messages", {}))
         self._db["seq"] = dict(snapshot["seq"])
         self._flush()
 

@@ -540,6 +540,44 @@ class SqlRepository(StatsRepository):
                 out.setdefault(r.discord_id, set()).add(r.achievement_id)
         return out
 
+    # ── kodex ──────────────────────────────────────────────────────────────
+    async def confirm_kodex(self, discord_id):
+        async with self.engine.begin() as conn:
+            exists = (await conn.execute(select(sc.kodex_confirmations).where(
+                sc.kodex_confirmations.c.discord_id == discord_id))).one_or_none()
+            if exists is None:
+                await conn.execute(insert(sc.kodex_confirmations).values(
+                    discord_id=discord_id))
+
+    async def has_confirmed_kodex(self, discord_id):
+        async with self.engine.connect() as conn:
+            r = (await conn.execute(select(sc.kodex_confirmations).where(
+                sc.kodex_confirmations.c.discord_id == discord_id))).one_or_none()
+            return r is not None
+
+    async def list_kodex_confirmed(self):
+        async with self.engine.connect() as conn:
+            rows = await conn.execute(select(sc.kodex_confirmations.c.discord_id))
+            return {r.discord_id for r in rows}
+
+    async def save_kodex_message(self, message_id, discord_id):
+        async with self.engine.begin() as conn:
+            exists = (await conn.execute(select(sc.kodex_messages).where(
+                sc.kodex_messages.c.message_id == message_id))).one_or_none()
+            if exists is None:
+                await conn.execute(insert(sc.kodex_messages).values(
+                    message_id=message_id, discord_id=discord_id))
+            else:
+                await conn.execute(update(sc.kodex_messages)
+                                   .where(sc.kodex_messages.c.message_id == message_id)
+                                   .values(discord_id=discord_id))
+
+    async def get_kodex_message_user(self, message_id):
+        async with self.engine.connect() as conn:
+            r = (await conn.execute(select(sc.kodex_messages.c.discord_id).where(
+                sc.kodex_messages.c.message_id == message_id))).one_or_none()
+            return int(r.discord_id) if r else None
+
     # ── bulk export / import ───────────────────────────────────────────────
     @staticmethod
     def _dt(dt: datetime | None) -> str | None:
@@ -613,6 +651,15 @@ class SqlRepository(StatsRepository):
             for r in await conn.execute(select(sc.achievements)):
                 achievements.setdefault(str(r.discord_id), []).append(r.achievement_id)
             achievements = {did: sorted(ids) for did, ids in achievements.items()}
+            kodex_confirmations = [
+                r.discord_id for r in await conn.execute(
+                    select(sc.kodex_confirmations)
+                    .order_by(sc.kodex_confirmations.c.discord_id.asc()))
+            ]
+            kodex_messages = {
+                str(r.message_id): r.discord_id
+                for r in await conn.execute(select(sc.kodex_messages))
+            }
             seq = {}
             for key, table in (("user", sc.users), ("message", sc.messages),
                                ("stat", sc.stats), ("gate", sc.gate_entries)):
@@ -624,7 +671,9 @@ class SqlRepository(StatsRepository):
             "stat_last_post": stat_last_post, "target_stats": target_stats,
             "gate_entries": gate_entries,
             "activity_counters": activity_counters, "streak_stats": streak_stats,
-            "night_stats": night_stats, "achievements": achievements, "seq": seq,
+            "night_stats": night_stats, "achievements": achievements,
+            "kodex_confirmations": kodex_confirmations,
+            "kodex_messages": kodex_messages, "seq": seq,
         }
 
     async def import_all(self, snapshot: dict) -> None:
@@ -683,6 +732,12 @@ class SqlRepository(StatsRepository):
                 for aid in ids:
                     await conn.execute(insert(sc.achievements).values(
                         discord_id=int(did), achievement_id=aid))
+            for did in snapshot.get("kodex_confirmations", []):
+                await conn.execute(insert(sc.kodex_confirmations).values(
+                    discord_id=did))
+            for mid, did in snapshot.get("kodex_messages", {}).items():
+                await conn.execute(insert(sc.kodex_messages).values(
+                    message_id=int(mid), discord_id=did))
             if self.engine.dialect.name == "postgresql":
                 for tbl, key in (("users", "user"), ("messages", "message"),
                                  ("stats", "stat"), ("gate_entries", "gate")):
@@ -697,5 +752,6 @@ class SqlRepository(StatsRepository):
                           sc.gate_entries, sc.user_stats, sc.stat_totals,
                           sc.stat_last_post, sc.target_stats, sc.stats,
                           sc.users, sc.messages,
-                          sc.activity_counters, sc.streak_stats, sc.night_stats):
+                          sc.activity_counters, sc.streak_stats, sc.night_stats,
+                          sc.kodex_confirmations, sc.kodex_messages):
                 await conn.execute(delete(table))

@@ -99,3 +99,14 @@ achievements = Table(
     Column("discord_id", BigInteger, primary_key=True),
     Column("achievement_id", String(50), primary_key=True),
 )
+
+kodex_confirmations = Table(
+    "kodex_confirmations", metadata,
+    Column("discord_id", BigInteger, primary_key=True),
+)
+
+kodex_messages = Table(
+    "kodex_messages", metadata,
+    Column("message_id", BigInteger, primary_key=True),
+    Column("discord_id", BigInteger, nullable=False),
+)
