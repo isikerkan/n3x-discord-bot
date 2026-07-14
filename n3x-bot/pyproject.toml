@@ -33,4 +33,4 @@ packages = ["n3x_bot"]
 # Bundled render assets are loaded at runtime via importlib.resources; force
 # their inclusion so the wheel ships them regardless of VCS-tracking state
 # (otherwise cards.py raises FileNotFoundError under the Docker/AMP image).
-force-include = { "n3x_bot/assets/card_bg.webp" = "n3x_bot/assets/card_bg.webp", "n3x_bot/assets/DejaVuSans-Bold.ttf" = "n3x_bot/assets/DejaVuSans-Bold.ttf" }
+force-include = { "n3x_bot/assets/card_bg.webp" = "n3x_bot/assets/card_bg.webp", "n3x_bot/assets/DejaVuSans-Bold.ttf" = "n3x_bot/assets/DejaVuSans-Bold.ttf", "n3x_bot/assets/welcome_bg.jpg" = "n3x_bot/assets/welcome_bg.jpg" }

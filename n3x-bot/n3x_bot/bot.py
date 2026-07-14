@@ -36,6 +36,7 @@ from n3x_bot.kodex import (
 )
 from n3x_bot.models import render_output
 from n3x_bot.storage.base import StatsRepository
+from n3x_bot.welcome import register_welcome_commands, send_welcome_card
 
 log = logging.getLogger("N3X-Bot")
 
@@ -107,6 +108,7 @@ def build_bot(settings: Settings, repo: StatsRepository) -> commands.Bot:
     register_achievement_commands(bot, repo, settings)
     register_overview_and_sync_commands(bot, repo, settings)
     register_kodex_commands(bot, repo, settings)
+    register_welcome_commands(bot, settings)
     return bot
 
 
@@ -622,13 +624,10 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
     async def on_member_join(member):
         if not member.bot:
             await repo.upsert_user(member.id, member.display_name)
-        channel = bot.get_channel(settings.welcome_channel_id)
-        if channel:
-            try:
-                await channel.send(
-                    f"Willkommen {member.mention} bei N3X - Night Shadow!")
-            except Exception:
-                pass
+        try:
+            await send_welcome_card(bot, settings, member)
+        except Exception:
+            pass
         try:
             await send_kodex_dm(bot, repo, member)
         except Exception:
