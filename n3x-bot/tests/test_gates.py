@@ -21,7 +21,12 @@ def test_parse_gate_message_accepts_b_and_c():
 
 
 def test_parse_gate_message_invalid_gate_type_returns_none():
-    assert parse_gate_message("d 100") is None
+    # 'd' (Delta) is now a valid gate type; a genuinely unknown type is not.
+    assert parse_gate_message("z 100") is None
+
+
+def test_parse_gate_message_delta_is_now_valid():
+    assert parse_gate_message("d 100") == ("d", 100)
 
 
 def test_parse_gate_message_missing_cost_returns_none():
