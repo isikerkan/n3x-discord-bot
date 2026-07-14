@@ -21,7 +21,10 @@ from n3x_bot.activity import (
     flush_voice_times,
     now_local,
 )
-from n3x_bot.achievements import register_achievement_commands, check_achievements
+from n3x_bot.achievements import (
+    register_achievement_commands, check_achievements,
+    post_overview, handle_overview_reaction, sync_all_achievements,
+)
 from n3x_bot.cards import announce_achievements
 from n3x_bot.config import Settings
 from n3x_bot.format import format_number
@@ -89,13 +92,34 @@ def build_bot(settings: Settings, repo: StatsRepository) -> commands.Bot:
     # they can't double-count or leave a phantom session behind.
     bot.voice_join_times = {}
     bot.voice_lock = asyncio.Lock()
+    bot._overview_state = None
 
     _wire_events(bot, settings, repo)
     register_gate_commands(bot, repo, settings)
     register_admin_commands(bot, repo, settings)
     register_activity(bot, repo, settings)
     register_achievement_commands(bot, repo, settings)
+    register_overview_and_sync_commands(bot, repo, settings)
     return bot
+
+
+def register_overview_and_sync_commands(bot, repo: StatsRepository,
+                                        settings: Settings) -> None:
+    if bot.get_command("overview") is None:
+        async def _overview_cmd(ctx):
+            await post_overview(bot, repo, settings)
+        bot.add_command(commands.Command(_overview_cmd, name="overview"))
+
+    if bot.get_command("sync_achievements") is None:
+        async def _sync_cmd(ctx):
+            if not is_admin(ctx.author, settings):
+                await ctx.send("❌ Keine Berechtigung.", delete_after=5)
+                return
+            summary = await sync_all_achievements(repo)
+            await ctx.send(
+                f"✅ Sync: {summary['users_processed']} Nutzer, "
+                f"{summary['achievements_added']} neue Achievements.")
+        bot.add_command(commands.Command(_sync_cmd, name="sync_achievements"))
 
 
 async def _send_or_update(bot, repo, settings, stat_key: str, text: str):
@@ -474,7 +498,17 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
 
     @bot.event
     async def on_raw_reaction_add(payload):
-        await handle_activity_reaction(bot, repo, settings, payload)
+        # Both handlers are independent best-effort side-channels; wrap each so a
+        # failure in one (e.g. the activity counter) can't skip the other (the
+        # overview nav), and vice versa.
+        try:
+            await handle_activity_reaction(bot, repo, settings, payload)
+        except Exception:
+            pass
+        try:
+            await handle_overview_reaction(bot, repo, settings, payload)
+        except Exception:
+            pass
 
     @bot.event
     async def on_member_update(before, after):

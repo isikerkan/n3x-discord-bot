@@ -360,6 +360,24 @@ async def test_reaction_skipped_in_gate_stats_channel():
     await repo.close()
 
 
+async def test_reaction_skipped_in_overview_channel():
+    # Pass C / B9: the overview channel's ⬅️/➡️ nav reactions are UI controls,
+    # not engagement, so a reaction there must NOT bump the reaction counter.
+    from n3x_bot.bot import register_activity, handle_activity_reaction
+    repo = await _flatfile_repo()
+    settings = _settings(gate_input_channel_id=777, gate_stats_channel_id=888,
+                         overview_channel_id=1234)
+    bot = build_bot(settings, repo)
+    register_activity(bot, repo, settings)
+
+    payload = SimpleNamespace(user_id=7, channel_id=1234,
+                              member=SimpleNamespace(id=7, bot=False))
+    await handle_activity_reaction(bot, repo, settings, payload)
+
+    assert await repo.get_activity(7, "reactions") == 0
+    await repo.close()
+
+
 # ── handler: voice MOVE + bot skip ─────────────────────────────────────────
 
 async def test_voice_move_credits_both_segments():

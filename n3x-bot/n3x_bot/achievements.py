@@ -158,6 +158,125 @@ async def check_achievements(repo: StatsRepository, discord_id: int,
     return unlocked
 
 
+# ── overview embed ─────────────────────────────────────────────────────────
+
+def build_overview_embed(holders: dict[int, set[str]], user_ids: list[int],
+                         page: int) -> discord.Embed:
+    if not user_ids:
+        return discord.Embed(
+            title="🏆 Achievement-Übersicht",
+            description="Noch keine Achievements freigeschaltet",
+            color=discord.Color.gold())
+    idx = page % len(user_ids)
+    uid = user_ids[idx]
+    count = len(holders.get(uid, set()))
+    segments = 10
+    filled = round(count / TOTAL_ACHIEVEMENTS * segments) if TOTAL_ACHIEVEMENTS else 0
+    bar = "█" * filled + "░" * (segments - filled)
+    embed = discord.Embed(
+        title="🏆 Achievement-Übersicht",
+        color=discord.Color.gold())
+    # Render the page's user as a Discord mention so each page identifies WHO it
+    # shows — the client resolves <@id> to the name, no async member lookup here.
+    embed.description = (
+        f"<@{uid}>\n"
+        f"**{count}/{TOTAL_ACHIEVEMENTS}** Achievements freigeschaltet\n"
+        f"{bar}\n"
+        f"Seite {idx + 1}/{len(user_ids)}")
+    return embed
+
+
+async def post_overview(bot, repo: StatsRepository, settings: Settings) -> None:
+    if settings.overview_channel_id == 0:
+        return
+    holders = await repo.list_achievement_holders()
+    if not holders:
+        return
+    user_ids = sorted(holders.keys())
+    page = 0
+    channel = bot.get_channel(settings.overview_channel_id)
+    if channel is None:
+        return
+    embed = build_overview_embed(holders, user_ids, page)
+    # Re-use the tracked overview message if one still exists: EDIT it back to
+    # page 0 instead of spamming a fresh message (which would orphan the nav
+    # reactions on the old, now-dead message). Only post anew when nothing is
+    # tracked or the old message is gone (fetch_message raises).
+    state = getattr(bot, "_overview_state", None)
+    if state:
+        try:
+            msg = await channel.fetch_message(state["message_id"])
+            await msg.edit(embed=embed)
+            bot._overview_state = {"message_id": msg.id, "page": page,
+                                   "user_ids": user_ids}
+            return
+        except Exception:
+            pass
+    msg = await channel.send(embed=embed)
+    await msg.add_reaction("⬅️")
+    await msg.add_reaction("➡️")
+    bot._overview_state = {"message_id": msg.id, "page": page, "user_ids": user_ids}
+
+
+async def handle_overview_reaction(bot, repo: StatsRepository, settings: Settings,
+                                   payload) -> None:
+    state = getattr(bot, "_overview_state", None)
+    if not state:
+        return
+    if payload.channel_id != settings.overview_channel_id:
+        return
+    if payload.message_id != state["message_id"]:
+        return
+    if str(payload.emoji) not in ("⬅️", "➡️"):
+        return
+    member = getattr(payload, "member", None)
+    if member is None or getattr(member, "bot", False):
+        return
+    delta = 1 if str(payload.emoji) == "➡️" else -1
+    user_ids = state["user_ids"]
+    new_page = (state["page"] + delta) % len(user_ids)
+    holders = await repo.list_achievement_holders()
+    embed = build_overview_embed(holders, user_ids, new_page)
+    channel = bot.get_channel(settings.overview_channel_id)
+    if channel is None:
+        return
+    msg = await channel.fetch_message(state["message_id"])
+    await msg.edit(embed=embed)
+    state["page"] = new_page
+    try:
+        await msg.remove_reaction(payload.emoji, member)
+    except Exception:
+        pass
+
+
+# ── additive sync ──────────────────────────────────────────────────────────
+
+async def recompute_user_achievements(repo: StatsRepository,
+                                      discord_id: int) -> list[Achievement]:
+    metrics = sorted({a.metric for a in ACHIEVEMENTS})
+    newly: list[Achievement] = []
+    for metric in metrics:
+        newly += await check_achievements(repo, discord_id, metric)
+    return newly
+
+
+async def sync_all_achievements(repo: StatsRepository) -> dict:
+    snap = await repo.export_all()
+    user_ids: set[int] = set()
+    for key in ("achievements", "activity_counters", "streak_stats", "night_stats"):
+        user_ids.update(int(k) for k in snap.get(key, {}))
+    for row in snap.get("gate_entries", []):
+        user_ids.add(int(row["user_id"]))
+    users_processed = 0
+    achievements_added = 0
+    for uid in sorted(user_ids):
+        newly = await recompute_user_achievements(repo, uid)
+        users_processed += 1
+        achievements_added += len(newly)
+    return {"users_processed": users_processed,
+            "achievements_added": achievements_added}
+
+
 def register_achievement_commands(bot, repo: StatsRepository,
                                   settings: Settings) -> None:
     if bot.get_command("erfolge") is not None:
