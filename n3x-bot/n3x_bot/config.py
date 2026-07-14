@@ -30,6 +30,7 @@ class Settings(BaseSettings):
 
     milestone_channel_id: int = 0
     overview_channel_id: int = 0
+    kodex_check_channel_id: int = 0
     voice_achievement_roles: str = ""
 
     @model_validator(mode="after")

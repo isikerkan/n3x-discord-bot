@@ -31,6 +31,9 @@ from n3x_bot.format import format_number
 from n3x_bot.gates import (
     build_gate_embed, parse_gate_message, changed_records, GATE_NAMES,
 )
+from n3x_bot.kodex import (
+    register_kodex_commands, send_kodex_dm, handle_kodex_confirmation,
+)
 from n3x_bot.models import render_output
 from n3x_bot.storage.base import StatsRepository
 
@@ -103,6 +106,7 @@ def build_bot(settings: Settings, repo: StatsRepository) -> commands.Bot:
     register_activity(bot, repo, settings)
     register_achievement_commands(bot, repo, settings)
     register_overview_and_sync_commands(bot, repo, settings)
+    register_kodex_commands(bot, repo, settings)
     return bot
 
 
@@ -604,6 +608,10 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
             await handle_delta_confirmation(bot, repo, settings, payload)
         except Exception:
             pass
+        try:
+            await handle_kodex_confirmation(bot, repo, payload)
+        except Exception:
+            pass
 
     @bot.event
     async def on_member_update(before, after):
@@ -621,6 +629,10 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
                     f"Willkommen {member.mention} bei N3X - Night Shadow!")
             except Exception:
                 pass
+        try:
+            await send_kodex_dm(bot, repo, member)
+        except Exception:
+            pass
         await asyncio.sleep(5)
         await enforce_prefix(member)
 

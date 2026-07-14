@@ -184,6 +184,22 @@ class StatsRepository(ABC):
         """Every discord_id with >=1 unlock -> its set of achievement ids."""
         ...
 
+    # kodex
+    @abstractmethod
+    async def confirm_kodex(self, discord_id: int) -> None:
+        """Mark `discord_id` as having confirmed the Kodex (idempotent
+        insert-or-ignore).
+        """
+        ...
+    @abstractmethod
+    async def has_confirmed_kodex(self, discord_id: int) -> bool: ...
+    @abstractmethod
+    async def list_kodex_confirmed(self) -> set[int]: ...
+    @abstractmethod
+    async def save_kodex_message(self, message_id: int, discord_id: int) -> None: ...
+    @abstractmethod
+    async def get_kodex_message_user(self, message_id: int) -> int | None: ...
+
     # bulk export / import
     @abstractmethod
     async def export_all(self) -> dict:
