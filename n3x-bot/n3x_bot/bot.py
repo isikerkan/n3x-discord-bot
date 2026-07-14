@@ -36,6 +36,7 @@ from n3x_bot.kodex import (
 )
 from n3x_bot.models import render_output
 from n3x_bot.storage.base import StatsRepository
+from n3x_bot.timers import register_timer_commands, start_timer_overview_loop
 from n3x_bot.welcome import register_welcome_commands, send_welcome_card
 
 log = logging.getLogger("N3X-Bot")
@@ -100,6 +101,7 @@ def build_bot(settings: Settings, repo: StatsRepository) -> commands.Bot:
     bot.voice_join_times = {}
     bot.voice_lock = asyncio.Lock()
     bot._overview_state = None
+    bot._timer_overview_loop = None
 
     _wire_events(bot, settings, repo)
     register_gate_commands(bot, repo, settings)
@@ -109,6 +111,7 @@ def build_bot(settings: Settings, repo: StatsRepository) -> commands.Bot:
     register_overview_and_sync_commands(bot, repo, settings)
     register_kodex_commands(bot, repo, settings)
     register_welcome_commands(bot, settings)
+    register_timer_commands(bot, repo, settings)
     return bot
 
 
@@ -526,6 +529,7 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
                         bot.voice_join_times.setdefault(m.id, now_local(settings))
         if not voice_flush_task.is_running():
             voice_flush_task.start()
+        start_timer_overview_loop(bot, repo, settings)
         if settings.gate_stats_channel_id:
             await update_gate_stats_embed(bot, repo, settings)
         # Publish the /admin ... slash group (and any other app commands) to

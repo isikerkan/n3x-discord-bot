@@ -31,6 +31,7 @@ class JsonRepository(StatsRepository):
             "activity_counters": {}, "streak_stats": {}, "night_stats": {},
             "achievements": {},
             "kodex_confirmations": [], "kodex_messages": {},
+            "base_timers": {},
         }
 
     async def connect(self) -> None:
@@ -417,6 +418,28 @@ class JsonRepository(StatsRepository):
     async def get_kodex_message_user(self, message_id):
         return self._db["kodex_messages"].get(str(message_id))
 
+    # ── base timers ────────────────────────────────────────────────────────
+    async def set_base_timer(self, map_name, end_time):
+        self._db["base_timers"][map_name] = end_time.isoformat()
+        self._flush()
+
+    async def remove_base_timer(self, map_name):
+        existed = map_name in self._db["base_timers"]
+        self._db["base_timers"].pop(map_name, None)
+        self._flush()
+        return existed
+
+    async def list_base_timers(self):
+        return {m: _parse_dt(v) for m, v in self._db["base_timers"].items()}
+
+    async def purge_expired_base_timers(self, now):
+        removed = [m for m, v in self._db["base_timers"].items()
+                   if _parse_dt(v) <= now]
+        for m in removed:
+            del self._db["base_timers"][m]
+        self._flush()
+        return removed
+
     # ── bulk export / import ───────────────────────────────────────────────
     @staticmethod
     def _max_id(rows) -> int:
@@ -452,6 +475,7 @@ class JsonRepository(StatsRepository):
                              for did, ids in self._db["achievements"].items() if ids},
             "kodex_confirmations": sorted(self._db["kodex_confirmations"]),
             "kodex_messages": copy.deepcopy(self._db["kodex_messages"]),
+            "base_timers": copy.deepcopy(self._db["base_timers"]),
             "seq": {
                 "user": self._max_id(users),
                 "message": self._max_id(messages),
@@ -477,6 +501,7 @@ class JsonRepository(StatsRepository):
             snapshot.get("kodex_confirmations", []))
         self._db["kodex_messages"] = copy.deepcopy(
             snapshot.get("kodex_messages", {}))
+        self._db["base_timers"] = copy.deepcopy(snapshot.get("base_timers", {}))
         self._db["seq"] = dict(snapshot["seq"])
         self._flush()
 

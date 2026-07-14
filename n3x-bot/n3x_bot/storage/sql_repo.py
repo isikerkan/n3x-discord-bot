@@ -578,6 +578,47 @@ class SqlRepository(StatsRepository):
                 sc.kodex_messages.c.message_id == message_id))).one_or_none()
             return int(r.discord_id) if r else None
 
+    # ── base timers ────────────────────────────────────────────────────────
+    async def set_base_timer(self, map_name, end_time):
+        stored = _as_aware_utc(end_time).astimezone(timezone.utc)
+        async with self.engine.begin() as conn:
+            exists = (await conn.execute(select(sc.base_timers.c.map_name)
+                      .where(sc.base_timers.c.map_name == map_name))).one_or_none()
+            if exists is None:
+                await conn.execute(insert(sc.base_timers).values(
+                    map_name=map_name, end_time=stored))
+            else:
+                await conn.execute(update(sc.base_timers)
+                                   .where(sc.base_timers.c.map_name == map_name)
+                                   .values(end_time=stored))
+
+    async def remove_base_timer(self, map_name):
+        async with self.engine.begin() as conn:
+            exists = (await conn.execute(select(sc.base_timers.c.map_name)
+                      .where(sc.base_timers.c.map_name == map_name))).one_or_none()
+            if exists is None:
+                return False
+            await conn.execute(delete(sc.base_timers)
+                               .where(sc.base_timers.c.map_name == map_name))
+            return True
+
+    async def list_base_timers(self):
+        async with self.engine.connect() as conn:
+            rows = await conn.execute(select(sc.base_timers))
+            return {r.map_name: _as_aware_utc(r.end_time) for r in rows}
+
+    async def purge_expired_base_timers(self, now):
+        threshold = _as_aware_utc(now)
+        async with self.engine.begin() as conn:
+            rows = (await conn.execute(select(sc.base_timers.c.map_name,
+                                              sc.base_timers.c.end_time))).all()
+            removed = [r.map_name for r in rows
+                       if _as_aware_utc(r.end_time) <= threshold]
+            if removed:
+                await conn.execute(delete(sc.base_timers)
+                                   .where(sc.base_timers.c.map_name.in_(removed)))
+            return removed
+
     # ── bulk export / import ───────────────────────────────────────────────
     @staticmethod
     def _dt(dt: datetime | None) -> str | None:
@@ -660,6 +701,10 @@ class SqlRepository(StatsRepository):
                 str(r.message_id): r.discord_id
                 for r in await conn.execute(select(sc.kodex_messages))
             }
+            base_timers = {
+                r.map_name: self._dt(r.end_time)
+                for r in await conn.execute(select(sc.base_timers))
+            }
             seq = {}
             for key, table in (("user", sc.users), ("message", sc.messages),
                                ("stat", sc.stats), ("gate", sc.gate_entries)):
@@ -673,7 +718,8 @@ class SqlRepository(StatsRepository):
             "activity_counters": activity_counters, "streak_stats": streak_stats,
             "night_stats": night_stats, "achievements": achievements,
             "kodex_confirmations": kodex_confirmations,
-            "kodex_messages": kodex_messages, "seq": seq,
+            "kodex_messages": kodex_messages, "base_timers": base_timers,
+            "seq": seq,
         }
 
     async def import_all(self, snapshot: dict) -> None:
@@ -738,6 +784,10 @@ class SqlRepository(StatsRepository):
             for mid, did in snapshot.get("kodex_messages", {}).items():
                 await conn.execute(insert(sc.kodex_messages).values(
                     message_id=int(mid), discord_id=did))
+            for map_name, iso in snapshot.get("base_timers", {}).items():
+                await conn.execute(insert(sc.base_timers).values(
+                    map_name=map_name,
+                    end_time=_as_aware_utc(_parse_dt(iso)).astimezone(timezone.utc)))
             if self.engine.dialect.name == "postgresql":
                 for tbl, key in (("users", "user"), ("messages", "message"),
                                  ("stats", "stat"), ("gate_entries", "gate")):
@@ -753,5 +803,6 @@ class SqlRepository(StatsRepository):
                           sc.stat_last_post, sc.target_stats, sc.stats,
                           sc.users, sc.messages,
                           sc.activity_counters, sc.streak_stats, sc.night_stats,
-                          sc.kodex_confirmations, sc.kodex_messages):
+                          sc.kodex_confirmations, sc.kodex_messages,
+                          sc.base_timers):
                 await conn.execute(delete(table))
