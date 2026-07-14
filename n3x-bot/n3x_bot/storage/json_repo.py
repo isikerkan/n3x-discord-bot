@@ -29,6 +29,7 @@ class JsonRepository(StatsRepository):
             "user_stats": {}, "stat_totals": {}, "stat_last_post": {},
             "target_stats": {}, "gate_entries": [],
             "activity_counters": {}, "streak_stats": {}, "night_stats": {},
+            "achievements": {},
         }
 
     async def connect(self) -> None:
@@ -306,6 +307,17 @@ class JsonRepository(StatsRepository):
                           "avg": round(sum(costs) / count) if count else 0}
         return out
 
+    async def user_gate_counts(self, discord_id):
+        out: dict[str, int] = {}
+        for r in self._db["gate_entries"]:
+            if r["user_id"] == discord_id:
+                out[r["gate_type"]] = out.get(r["gate_type"], 0) + 1
+        return out
+
+    async def user_gate_cost_total(self, discord_id):
+        return sum(r["cost"] for r in self._db["gate_entries"]
+                   if r["user_id"] == discord_id)
+
     # ── activity ───────────────────────────────────────────────────────────
     async def add_activity(self, discord_id, metric, amount):
         d = self._db["activity_counters"].setdefault(str(discord_id), {})
@@ -344,6 +356,25 @@ class JsonRepository(StatsRepository):
             "last_night_date": last_night_date}
         self._flush()
 
+    # ── achievements ───────────────────────────────────────────────────────
+    async def unlock_achievement(self, discord_id, achievement_id):
+        lst = self._db["achievements"].setdefault(str(discord_id), [])
+        if achievement_id in lst:
+            return False
+        lst.append(achievement_id)
+        self._flush()
+        return True
+
+    async def has_achievement(self, discord_id, achievement_id):
+        return achievement_id in self._db["achievements"].get(str(discord_id), [])
+
+    async def get_user_achievements(self, discord_id):
+        return set(self._db["achievements"].get(str(discord_id), []))
+
+    async def list_achievement_holders(self):
+        return {int(did): set(ids)
+                for did, ids in self._db["achievements"].items() if ids}
+
     # ── bulk export / import ───────────────────────────────────────────────
     @staticmethod
     def _max_id(rows) -> int:
@@ -371,6 +402,8 @@ class JsonRepository(StatsRepository):
             "activity_counters": copy.deepcopy(self._db["activity_counters"]),
             "streak_stats": copy.deepcopy(self._db["streak_stats"]),
             "night_stats": copy.deepcopy(self._db["night_stats"]),
+            "achievements": {did: sorted(ids)
+                             for did, ids in self._db["achievements"].items() if ids},
             "seq": {
                 "user": self._max_id(users),
                 "message": self._max_id(messages),
@@ -391,6 +424,7 @@ class JsonRepository(StatsRepository):
         self._db["activity_counters"] = copy.deepcopy(snapshot.get("activity_counters", {}))
         self._db["streak_stats"] = copy.deepcopy(snapshot.get("streak_stats", {}))
         self._db["night_stats"] = copy.deepcopy(snapshot.get("night_stats", {}))
+        self._db["achievements"] = copy.deepcopy(snapshot.get("achievements", {}))
         self._db["seq"] = dict(snapshot["seq"])
         self._flush()
 

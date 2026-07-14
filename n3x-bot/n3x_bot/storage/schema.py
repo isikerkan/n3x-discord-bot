@@ -92,3 +92,9 @@ night_stats = Table(
     Column("night_count", Integer, nullable=False),
     Column("last_night_date", String(10), nullable=False),
 )
+
+achievements = Table(
+    "achievements", metadata,
+    Column("discord_id", BigInteger, primary_key=True),
+    Column("achievement_id", String(50), primary_key=True),
+)

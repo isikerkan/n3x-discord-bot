@@ -21,6 +21,7 @@ from n3x_bot.activity import (
     flush_voice_times,
     now_local,
 )
+from n3x_bot.achievements import register_achievement_commands, check_achievements
 from n3x_bot.config import Settings
 from n3x_bot.format import format_number
 from n3x_bot.gates import build_gate_embed, parse_gate_message
@@ -91,6 +92,7 @@ def build_bot(settings: Settings, repo: StatsRepository) -> commands.Bot:
     register_gate_commands(bot, repo, settings)
     register_admin_commands(bot, repo, settings)
     register_activity(bot, repo, settings)
+    register_achievement_commands(bot, repo, settings)
     return bot
 
 
@@ -325,6 +327,9 @@ async def handle_gate_input_message(bot, repo: StatsRepository, settings: Settin
         pass
     if inserted:
         await update_gate_stats_embed(bot, repo, settings)
+        await check_achievements(repo, message.author.id, f"gate_{gate_type}")
+        await check_achievements(repo, message.author.id, "gate_total")
+        await check_achievements(repo, message.author.id, "gate_cost_total")
 
 
 def _wire_events(bot, settings: Settings, repo: StatsRepository):

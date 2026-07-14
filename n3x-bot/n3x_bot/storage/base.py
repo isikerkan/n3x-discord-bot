@@ -121,6 +121,16 @@ class StatsRepository(ABC):
         that has at least one entry.
         """
         ...
+    @abstractmethod
+    async def user_gate_counts(self, discord_id: int) -> dict[str, int]:
+        """`{gate_type: count}` over that user's `gate_entries` rows; only
+        gate types the user actually has appear.
+        """
+        ...
+    @abstractmethod
+    async def user_gate_cost_total(self, discord_id: int) -> int:
+        """Sum of `cost` over that user's `gate_entries` rows (0 if none)."""
+        ...
 
     # activity
     @abstractmethod
@@ -139,6 +149,22 @@ class StatsRepository(ABC):
     @abstractmethod
     async def set_night(self, discord_id: int, night_count: int,
                         last_night_date: str) -> None: ...
+
+    # achievements
+    @abstractmethod
+    async def unlock_achievement(self, discord_id: int, achievement_id: str) -> bool:
+        """Insert `(discord_id, achievement_id)`; return True if newly
+        inserted, False if the row already existed.
+        """
+        ...
+    @abstractmethod
+    async def has_achievement(self, discord_id: int, achievement_id: str) -> bool: ...
+    @abstractmethod
+    async def get_user_achievements(self, discord_id: int) -> set[str]: ...
+    @abstractmethod
+    async def list_achievement_holders(self) -> dict[int, set[str]]:
+        """Every discord_id with >=1 unlock -> its set of achievement ids."""
+        ...
 
     # bulk export / import
     @abstractmethod

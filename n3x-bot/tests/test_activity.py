@@ -448,6 +448,17 @@ class _AwaitingRepo:
         self.credited[key] = self.credited.get(key, 0) + amount
         return self.credited[key]
 
+    # Minimal stubs so the voice handler's post-credit check_achievements() call
+    # resolves; they don't affect the double-count/phantom race invariant.
+    async def get_activity(self, member_id, metric):
+        return self.credited.get((member_id, metric), 0)
+
+    async def get_user_achievements(self, discord_id):
+        return set()
+
+    async def unlock_achievement(self, discord_id, achievement_id):
+        return True
+
 
 async def test_flush_voice_times_credits_elapsed_and_resets_join():
     from n3x_bot.activity import flush_voice_times
@@ -463,6 +474,56 @@ async def test_flush_voice_times_credits_elapsed_and_resets_join():
 
     assert await repo.get_activity(7, "voice_seconds") == 120   # elapsed credited
     assert bot.voice_join_times[7] == flush_now                 # reset, still tracked
+    await repo.close()
+
+
+async def test_flush_unlocks_voice_achievement_when_threshold_crossed():
+    # SHOULD-1: a continuously-connected member crosses a voice threshold via
+    # the 5-min flush loop (never leaving), so the flush itself must unlock the
+    # achievement — otherwise !erfolge omits it until the member leaves/moves.
+    from n3x_bot.activity import flush_voice_times
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+
+    t0 = datetime(2026, 7, 13, 20, 0, tzinfo=ZoneInfo(settings.timezone))
+    bot.voice_join_times[7] = t0
+    flush_now = t0 + timedelta(seconds=3700)   # crosses the 3600s voice_3600 tier
+
+    await flush_voice_times(bot, repo, flush_now)
+
+    assert await repo.get_activity(7, "voice_seconds") == 3700
+    assert await repo.has_achievement(7, "voice_3600") is True
+    await repo.close()
+
+
+async def test_message_rechecks_streak_night_only_when_they_change(monkeypatch):
+    # SHOULD-2: streak/night change at most once per day, so their achievement
+    # check must fire only on the message that actually moved the value — a
+    # same-day repeat message re-runs neither (behaviour-preserving optimisation).
+    act = _act()
+    repo = await _flatfile_repo()
+    settings = _settings()
+
+    checked: list[str] = []
+
+    async def _spy(_repo, _member_id, metric):
+        checked.append(metric)
+        return []
+
+    monkeypatch.setattr(act, "check_achievements", _spy)
+
+    # night-window instant so both streak and night can move on the first message
+    now = datetime(2026, 7, 13, 2, 0, tzinfo=ZoneInfo(settings.timezone))
+    await act.record_message_activity(repo, settings, 7, now)
+    # first message: streak starts (change) + night counted (change) + messages
+    assert checked == ["messages", "streak", "night"]
+
+    checked.clear()
+    later = now + timedelta(minutes=1)  # same day, same night window
+    await act.record_message_activity(repo, settings, 7, later)
+    # second same-day message: only the message counter moved
+    assert checked == ["messages"]
     await repo.close()
 
 
