@@ -65,18 +65,26 @@ async def record_message_activity(repo: StatsRepository, settings: Settings,
     today = now.date()
     prev = await repo.get_streak(member_id)
     new = next_streak(prev, today)
-    if new != prev:
+    streak_changed = new != prev
+    if streak_changed:
         await repo.set_streak(member_id, new["current_streak"],
                               new["last_active_date"], new["max_streak"])
+    night_changed = False
     if is_night(now):
         prev_n = await repo.get_night(member_id)
         new_n = next_night(prev_n, today)
         if new_n is not None and new_n != prev_n:
+            night_changed = True
             await repo.set_night(member_id, new_n["night_count"],
                                  new_n["last_night_date"])
+    # The message counter changes every message, so its check always runs.
+    # streak/night change at most once per day: only (re)check when the
+    # underlying value actually moved — a same-day repeat message can never
+    # unlock a new streak/night tier, so skipping it is behaviour-preserving.
     await check_achievements(repo, member_id, "messages")
-    await check_achievements(repo, member_id, "streak")
-    if is_night(now):
+    if streak_changed:
+        await check_achievements(repo, member_id, "streak")
+    if night_changed:
         await check_achievements(repo, member_id, "night")
 
 
@@ -128,6 +136,7 @@ async def flush_voice_times(bot, repo: StatsRepository, now: datetime) -> None:
     forever. The pop-recompute + re-check-before-reset below is a second line
     of defence: a key that vanished mid-iteration is never resurrected.
     """
+    credited: list[int] = []
     async with bot.voice_lock:
         for member_id in list(bot.voice_join_times.keys()):
             join = bot.voice_join_times.get(member_id)
@@ -136,8 +145,15 @@ async def flush_voice_times(bot, repo: StatsRepository, now: datetime) -> None:
             secs = elapsed_seconds(join, now)
             if secs > 0:
                 await repo.add_activity(member_id, "voice_seconds", secs)
+                credited.append(member_id)
             if member_id in bot.voice_join_times:
                 bot.voice_join_times[member_id] = now
+    # Unlock voice achievements OUTSIDE voice_lock (mirrors the leave path in
+    # handle_voice_state_update, keeping the lock cheap). Without this a
+    # continuously-connected member crosses a voice threshold via this flush
+    # loop but the achievement stays locked until they leave/move.
+    for member_id in credited:
+        await check_achievements(repo, member_id, "voice_seconds")
 
 
 async def handle_activity_reaction(bot, repo: StatsRepository, settings: Settings,

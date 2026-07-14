@@ -26,6 +26,9 @@ MILESTONE_LEVELS = {5: "Bronze", 10: "Silber", 25: "Gold", 50: "Platin",
 def _build_achievements() -> list[Achievement]:
     out: list[Achievement] = []
 
+    # NOTE: the "d"/Delta gate tier defs are deliberately kept for v3 fidelity
+    # and the later delta-gate port. They stay inert (gate_d has no live source
+    # yet, so !erfolge caps at 51/59) until that port lands — do NOT delete.
     for gtype in ("a", "b", "c", "d"):
         for thr, level in MILESTONE_LEVELS.items():
             out.append(Achievement(
@@ -105,7 +108,9 @@ def _build_achievements() -> list[Achievement]:
 
 
 ACHIEVEMENTS: list[Achievement] = _build_achievements()
-TOTAL_ACHIEVEMENTS: int = 59
+# Derived from the definitions so it stays correct when achievements are
+# added/removed (currently 59). The two tests pinning 59 still hold.
+TOTAL_ACHIEVEMENTS: int = len(ACHIEVEMENTS)
 
 
 def newly_unlocked(defs_for_metric: list[Achievement], value: int,
@@ -139,6 +144,10 @@ async def check_achievements(repo: StatsRepository, discord_id: int,
                              metric: str) -> list[Achievement]:
     value = await user_metric_value(repo, discord_id, metric)
     defs = [a for a in ACHIEVEMENTS if a.metric == metric]
+    # Short-circuit: below the lowest threshold nothing can unlock, so skip the
+    # get_user_achievements read entirely (the common case for low-value users).
+    if not defs or value < min(a.threshold for a in defs):
+        return []
     already = await repo.get_user_achievements(discord_id)
     new_ids = newly_unlocked(defs, value, already)
     unlocked: list[Achievement] = []
