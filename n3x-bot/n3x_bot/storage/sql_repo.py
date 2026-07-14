@@ -386,6 +386,21 @@ class SqlRepository(StatsRepository):
                              "avg": round(avg) if avg else 0}
         return out
 
+    async def user_gate_counts(self, discord_id):
+        async with self.engine.connect() as conn:
+            rows = await conn.execute(
+                select(sc.gate_entries.c.gate_type, func.count())
+                .where(sc.gate_entries.c.user_id == discord_id)
+                .group_by(sc.gate_entries.c.gate_type))
+            return {gate_type: count for gate_type, count in rows}
+
+    async def user_gate_cost_total(self, discord_id):
+        async with self.engine.connect() as conn:
+            r = (await conn.execute(
+                select(func.coalesce(func.sum(sc.gate_entries.c.cost), 0))
+                .where(sc.gate_entries.c.user_id == discord_id))).scalar()
+            return int(r or 0)
+
     # ── activity ───────────────────────────────────────────────────────────
     async def add_activity(self, discord_id, metric, amount):
         async with self.engine.begin() as conn:
@@ -457,6 +472,39 @@ class SqlRepository(StatsRepository):
                                    .where(sc.night_stats.c.discord_id == discord_id)
                                    .values(**vals))
 
+    # ── achievements ───────────────────────────────────────────────────────
+    async def unlock_achievement(self, discord_id, achievement_id):
+        async with self.engine.begin() as conn:
+            exists = (await conn.execute(select(sc.achievements).where(
+                (sc.achievements.c.discord_id == discord_id) &
+                (sc.achievements.c.achievement_id == achievement_id)))).one_or_none()
+            if exists is not None:
+                return False
+            await conn.execute(insert(sc.achievements).values(
+                discord_id=discord_id, achievement_id=achievement_id))
+            return True
+
+    async def has_achievement(self, discord_id, achievement_id):
+        async with self.engine.connect() as conn:
+            r = (await conn.execute(select(sc.achievements).where(
+                (sc.achievements.c.discord_id == discord_id) &
+                (sc.achievements.c.achievement_id == achievement_id)))).one_or_none()
+            return r is not None
+
+    async def get_user_achievements(self, discord_id):
+        async with self.engine.connect() as conn:
+            rows = await conn.execute(
+                select(sc.achievements.c.achievement_id)
+                .where(sc.achievements.c.discord_id == discord_id))
+            return {r.achievement_id for r in rows}
+
+    async def list_achievement_holders(self):
+        out: dict[int, set[str]] = {}
+        async with self.engine.connect() as conn:
+            for r in await conn.execute(select(sc.achievements)):
+                out.setdefault(r.discord_id, set()).add(r.achievement_id)
+        return out
+
     # ── bulk export / import ───────────────────────────────────────────────
     @staticmethod
     def _dt(dt: datetime | None) -> str | None:
@@ -524,6 +572,10 @@ class SqlRepository(StatsRepository):
                                     "last_night_date": r.last_night_date}
                 for r in await conn.execute(select(sc.night_stats))
             }
+            achievements: dict[str, list[str]] = {}
+            for r in await conn.execute(select(sc.achievements)):
+                achievements.setdefault(str(r.discord_id), []).append(r.achievement_id)
+            achievements = {did: sorted(ids) for did, ids in achievements.items()}
             seq = {}
             for key, table in (("user", sc.users), ("message", sc.messages),
                                ("stat", sc.stats), ("gate", sc.gate_entries)):
@@ -535,7 +587,7 @@ class SqlRepository(StatsRepository):
             "stat_last_post": stat_last_post, "target_stats": target_stats,
             "gate_entries": gate_entries,
             "activity_counters": activity_counters, "streak_stats": streak_stats,
-            "night_stats": night_stats, "seq": seq,
+            "night_stats": night_stats, "achievements": achievements, "seq": seq,
         }
 
     async def import_all(self, snapshot: dict) -> None:
@@ -589,6 +641,10 @@ class SqlRepository(StatsRepository):
                 await conn.execute(insert(sc.night_stats).values(
                     discord_id=int(did), night_count=v["night_count"],
                     last_night_date=v["last_night_date"]))
+            for did, ids in snapshot.get("achievements", {}).items():
+                for aid in ids:
+                    await conn.execute(insert(sc.achievements).values(
+                        discord_id=int(did), achievement_id=aid))
             if self.engine.dialect.name == "postgresql":
                 for tbl, key in (("users", "user"), ("messages", "message"),
                                  ("stats", "stat"), ("gate_entries", "gate")):
@@ -599,7 +655,8 @@ class SqlRepository(StatsRepository):
 
     async def clear(self) -> None:
         async with self.engine.begin() as conn:
-            for table in (sc.gate_entries, sc.user_stats, sc.stat_totals,
+            for table in (sc.achievements,
+                          sc.gate_entries, sc.user_stats, sc.stat_totals,
                           sc.stat_last_post, sc.target_stats, sc.stats,
                           sc.users, sc.messages,
                           sc.activity_counters, sc.streak_stats, sc.night_stats):

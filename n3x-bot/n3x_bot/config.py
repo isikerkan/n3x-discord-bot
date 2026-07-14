@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     gate_delete_role_id: int = 0
     gate_rewards: str = "a:46892,b:93820,c:139522"
 
+    milestone_channel_id: int = 0
+    overview_channel_id: int = 0
+    voice_achievement_roles: str = ""
+
     @model_validator(mode="after")
     def _require_db_url(self) -> "Settings":
         if self.storage_backend in ("sqlite", "postgres") and not self.database_url:

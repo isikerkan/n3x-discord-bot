@@ -68,3 +68,30 @@ async def test_list_achievement_holders_maps_every_user_to_their_unlocks(repo):
     await repo.unlock_achievement(2, "streak_7")
     holders = await repo.list_achievement_holders()
     assert holders == {1: {"msg_1000", "voice_3600"}, 2: {"streak_7"}}
+
+
+# ── per-user gate aggregates (backs check_achievements on SQL in prod) ──────
+
+async def test_user_gate_counts_are_isolated_and_grouped_per_user(repo):
+    await repo.add_gate_entry("a", 100, 1, "u1")
+    await repo.add_gate_entry("a", 200, 1, "u1")
+    await repo.add_gate_entry("b", 300, 1, "u1")
+    await repo.add_gate_entry("a", 400, 2, "u2")
+    assert await repo.user_gate_counts(1) == {"a": 2, "b": 1}
+    assert await repo.user_gate_counts(2) == {"a": 1}
+
+
+async def test_user_gate_counts_empty_without_entries(repo):
+    assert await repo.user_gate_counts(99) == {}
+
+
+async def test_user_gate_cost_total_sums_only_that_users_costs(repo):
+    await repo.add_gate_entry("a", 400000, 1, "u1")
+    await repo.add_gate_entry("b", 600000, 1, "u1")
+    await repo.add_gate_entry("a", 999, 2, "u2")
+    assert await repo.user_gate_cost_total(1) == 1000000
+    assert await repo.user_gate_cost_total(2) == 999
+
+
+async def test_user_gate_cost_total_zero_without_entries(repo):
+    assert await repo.user_gate_cost_total(99) == 0

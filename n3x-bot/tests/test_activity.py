@@ -448,6 +448,17 @@ class _AwaitingRepo:
         self.credited[key] = self.credited.get(key, 0) + amount
         return self.credited[key]
 
+    # Minimal stubs so the voice handler's post-credit check_achievements() call
+    # resolves; they don't affect the double-count/phantom race invariant.
+    async def get_activity(self, member_id, metric):
+        return self.credited.get((member_id, metric), 0)
+
+    async def get_user_achievements(self, discord_id):
+        return set()
+
+    async def unlock_achievement(self, discord_id, achievement_id):
+        return True
+
 
 async def test_flush_voice_times_credits_elapsed_and_resets_join():
     from n3x_bot.activity import flush_voice_times

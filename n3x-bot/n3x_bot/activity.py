@@ -5,6 +5,7 @@ from zoneinfo import ZoneInfo
 import discord
 from discord.ext import commands
 
+from n3x_bot.achievements import check_achievements
 from n3x_bot.config import Settings
 from n3x_bot.storage.base import StatsRepository
 
@@ -73,6 +74,10 @@ async def record_message_activity(repo: StatsRepository, settings: Settings,
         if new_n is not None and new_n != prev_n:
             await repo.set_night(member_id, new_n["night_count"],
                                  new_n["last_night_date"])
+    await check_achievements(repo, member_id, "messages")
+    await check_achievements(repo, member_id, "streak")
+    if is_night(now):
+        await check_achievements(repo, member_id, "night")
 
 
 async def handle_voice_state_update(bot, repo: StatsRepository, settings: Settings,
@@ -85,6 +90,7 @@ async def handle_voice_state_update(bot, repo: StatsRepository, settings: Settin
     # against `flush_voice_times`; without it a leave landing mid-flush-await
     # would double-count the interval and resurrect the popped key as a
     # phantom session. See flush_voice_times for the full rationale.
+    credited = False
     async with bot.voice_lock:
         times = bot.voice_join_times
         # NOTE: keyed by member.id alone (single-guild bot — N3X). If the bot
@@ -97,13 +103,17 @@ async def handle_voice_state_update(bot, repo: StatsRepository, settings: Settin
                 secs = elapsed_seconds(join, now)
                 if secs > 0:
                     await repo.add_activity(member.id, "voice_seconds", secs)
+                    credited = True
         elif b is not None and a is not None and b.id != a.id:
             join = times.pop(member.id, None)
             if join is not None:
                 secs = elapsed_seconds(join, now)
                 if secs > 0:
                     await repo.add_activity(member.id, "voice_seconds", secs)
+                    credited = True
             times[member.id] = now
+    if credited:
+        await check_achievements(repo, member.id, "voice_seconds")
 
 
 async def flush_voice_times(bot, repo: StatsRepository, now: datetime) -> None:
@@ -141,6 +151,7 @@ async def handle_activity_reaction(bot, repo: StatsRepository, settings: Setting
     # Reactions on bot-UI messages (reminder/welcome) still count — a design
     # choice: any reaction is treated as engagement, not filtered by target.
     await repo.add_activity(payload.user_id, "reactions", 1)
+    await check_achievements(repo, payload.user_id, "reactions")
 
 
 def _format_voice(vsecs: int) -> str:

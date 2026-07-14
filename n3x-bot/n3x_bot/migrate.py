@@ -25,7 +25,7 @@ def _build_repo(backend: str, location: str) -> StatsRepository:
 _DATA_TABLES = (
     "users", "messages", "stats", "gate_entries",
     "user_stats", "stat_totals", "target_stats", "stat_last_post",
-    "activity_counters", "streak_stats", "night_stats",
+    "activity_counters", "streak_stats", "night_stats", "achievements",
 )
 
 
