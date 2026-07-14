@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select, insert, update, delete, text
+from sqlalchemy import func, select, insert, update, delete, text, case
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from n3x_bot.models import User, Stat, Message
@@ -336,7 +336,7 @@ class SqlRepository(StatsRepository):
 
     # ── gate tracker ───────────────────────────────────────────────────────
     async def add_gate_entry(self, gate_type, cost, user_id, username,
-                             dedup_window_seconds=30):
+                             dedup_window_seconds=30, laser_dropped=None):
         threshold = _now() - timedelta(seconds=dedup_window_seconds)
         async with self.engine.begin() as conn:
             candidates = await conn.execute(select(sc.gate_entries.c.created_at).where(
@@ -349,8 +349,43 @@ class SqlRepository(StatsRepository):
                     return False
             await conn.execute(insert(sc.gate_entries).values(
                 gate_type=gate_type, cost=cost, user_id=user_id,
-                username=username, created_at=_now()))
+                username=username, laser_dropped=laser_dropped,
+                created_at=_now()))
             return True
+
+    async def delta_stats(self):
+        async with self.engine.connect() as conn:
+            r = (await conn.execute(
+                select(func.count(sc.gate_entries.c.id),
+                       func.avg(sc.gate_entries.c.cost),
+                       func.sum(case(
+                           (sc.gate_entries.c.laser_dropped == True, 1),
+                           else_=0)))
+                .where(sc.gate_entries.c.gate_type == "d"))).one()
+            count, avg, laser = r[0], r[1], r[2]
+            count = count or 0
+            avg = round(avg) if avg else 0
+            laser_rate = 100 * (laser or 0) / count if count else 0
+            return {"count": count, "avg": avg, "laser_rate": laser_rate}
+
+    async def gate_record(self, gate_type):
+        async with self.engine.connect() as conn:
+            min_row = (await conn.execute(
+                select(sc.gate_entries.c.cost, sc.gate_entries.c.user_id)
+                .where(sc.gate_entries.c.gate_type == gate_type)
+                .order_by(sc.gate_entries.c.cost.asc(), sc.gate_entries.c.id.asc())
+                .limit(1))).one_or_none()
+            if min_row is None:
+                return None
+            max_row = (await conn.execute(
+                select(sc.gate_entries.c.cost, sc.gate_entries.c.user_id)
+                .where(sc.gate_entries.c.gate_type == gate_type)
+                .order_by(sc.gate_entries.c.cost.desc(), sc.gate_entries.c.id.asc())
+                .limit(1))).one_or_none()
+            if max_row is None:
+                return None
+            return {"min_cost": int(min_row.cost), "min_user": int(min_row.user_id),
+                    "max_cost": int(max_row.cost), "max_user": int(max_row.user_id)}
 
     async def list_gate_costs(self, gate_type):
         async with self.engine.connect() as conn:
@@ -554,6 +589,8 @@ class SqlRepository(StatsRepository):
             gate_entries = [
                 {"id": r.id, "gate_type": r.gate_type, "cost": r.cost,
                  "user_id": r.user_id, "username": r.username,
+                 "laser_dropped": (None if r.laser_dropped is None
+                                   else bool(r.laser_dropped)),
                  "created_at": self._dt(r.created_at)}
                 for r in await conn.execute(
                     select(sc.gate_entries).order_by(sc.gate_entries.c.id.asc()))
@@ -627,6 +664,7 @@ class SqlRepository(StatsRepository):
                 await conn.execute(insert(sc.gate_entries).values(
                     id=r["id"], gate_type=r["gate_type"], cost=r["cost"],
                     user_id=r["user_id"], username=r["username"],
+                    laser_dropped=r.get("laser_dropped"),
                     created_at=_parse_dt(r["created_at"])))
             for did, metrics in snapshot.get("activity_counters", {}).items():
                 for metric, count in metrics.items():

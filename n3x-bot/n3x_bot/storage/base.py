@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from n3x_bot.models import User, Stat, Message
 
-GATE_TYPES: tuple[str, ...] = ("a", "b", "c")
+GATE_TYPES: tuple[str, ...] = ("a", "b", "c", "d")
 
 
 class StatsRepository(ABC):
@@ -99,10 +99,28 @@ class StatsRepository(ABC):
     # gate tracker
     @abstractmethod
     async def add_gate_entry(self, gate_type: str, cost: int, user_id: int,
-                             username: str, dedup_window_seconds: int = 30) -> bool:
+                             username: str, dedup_window_seconds: int = 30,
+                             laser_dropped: bool | None = None) -> bool:
         """Insert a gate cost entry unless an identical (user_id, gate_type,
         cost) row was inserted within `dedup_window_seconds`. Returns True if
         inserted, False if rejected as a duplicate.
+
+        `laser_dropped` is only meaningful for `gate_type == "d"`; a/b/c
+        entries store it as None.
+        """
+        ...
+    @abstractmethod
+    async def delta_stats(self) -> dict:
+        """`{"count": int, "avg": int, "laser_rate": float}` over the "d"
+        (Delta) gate. `laser_rate = 100 * (# laser_dropped True) / count`,
+        0 when count is 0.
+        """
+        ...
+    @abstractmethod
+    async def gate_record(self, gate_type: str) -> dict | None:
+        """`{"min_cost", "min_user", "max_cost", "max_user"}` for `gate_type`,
+        computed ON-DEMAND from `gate_entries`; `min_user`/`max_user` are int
+        discord user ids. None when the gate type has no entries.
         """
         ...
     @abstractmethod

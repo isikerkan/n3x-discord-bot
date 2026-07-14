@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     gate_input_channel_id: int = 0
     gate_stats_channel_id: int = 0
     gate_delete_role_id: int = 0
-    gate_rewards: str = "a:46892,b:93820,c:139522"
+    gate_rewards: str = "a:46892,b:93820,c:139522,d:75361"
 
     milestone_channel_id: int = 0
     overview_channel_id: int = 0

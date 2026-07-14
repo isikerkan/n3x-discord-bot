@@ -28,7 +28,9 @@ from n3x_bot.achievements import (
 from n3x_bot.cards import announce_achievements
 from n3x_bot.config import Settings
 from n3x_bot.format import format_number
-from n3x_bot.gates import build_gate_embed, parse_gate_message
+from n3x_bot.gates import (
+    build_gate_embed, parse_gate_message, changed_records, GATE_NAMES,
+)
 from n3x_bot.models import render_output
 from n3x_bot.storage.base import StatsRepository
 
@@ -86,6 +88,7 @@ def build_bot(settings: Settings, repo: StatsRepository) -> commands.Bot:
     bot._rank_last_posts = {}
     bot._target_last_posts = {}
     bot._gate_embed_msg_id = None
+    bot._pending_delta = {}
     bot._milestone_cards = {}
     # Single-guild bot (N3X): voice_join_times is keyed by member.id alone.
     # voice_lock serialises the flush task against the leave/move handler so
@@ -262,8 +265,9 @@ async def update_gate_stats_embed(bot, repo: StatsRepository, settings: Settings
         return
     totals = await repo.gate_totals()
     rewards = settings.gate_rewards_map()
+    delta = await repo.delta_stats()
     now_str = datetime.now().strftime("%d.%m.%Y %H:%M")
-    embed = build_gate_embed(totals, rewards, now_str)
+    embed = build_gate_embed(totals, rewards, now_str, delta)
     if bot._gate_embed_msg_id is not None:
         try:
             msg = await channel.fetch_message(bot._gate_embed_msg_id)
@@ -290,7 +294,7 @@ def _chunk_gate_lines(lines: list[str], limit: int = GATE_STAT_CHUNK_LIMIT) -> l
 async def _handle_gate_stat(ctx, repo: StatsRepository, settings: Settings, gate_type: str):
     gtype = gate_type.lower()
     if gtype not in settings.gate_rewards_map():
-        await ctx.send("Ungültiger Gate-Typ. Bitte nutze a, b oder c.", delete_after=5)
+        await ctx.send("Ungültiger Gate-Typ. Bitte nutze a, b, c oder d.", delete_after=5)
         return
     costs = await repo.list_gate_costs(gtype)
     if not costs:
@@ -346,12 +350,26 @@ async def handle_gate_input_message(bot, repo: StatsRepository, settings: Settin
                 pass
         return
     gate_type, cost = parsed
+    if gate_type == "d":
+        bot._pending_delta[message.id] = {"cost": cost,
+                                          "user_id": message.author.id,
+                                          "username": message.author.name}
+        try:
+            await message.add_reaction("✅")
+            await message.add_reaction("❎")
+        except Exception:
+            pass
+        return
+    before = await repo.gate_record(gate_type)
     inserted = await repo.add_gate_entry(gate_type, cost, message.author.id, message.author.name)
     try:
         await message.add_reaction("✅" if inserted else "⏳")
     except Exception:
         pass
     if inserted:
+        after = await repo.gate_record(gate_type)
+        await _announce_records(bot, settings, gate_type,
+                                changed_records(before, after), after)
         await update_gate_stats_embed(bot, repo, settings)
         newly = (await check_achievements(repo, message.author.id, f"gate_{gate_type}")
                  + await check_achievements(repo, message.author.id, "gate_total")
@@ -361,6 +379,79 @@ async def handle_gate_input_message(bot, repo: StatsRepository, settings: Settin
                 await announce_achievements(bot, settings, message.author, newly)
             except Exception:
                 pass
+
+
+async def handle_delta_confirmation(bot, repo: StatsRepository,
+                                    settings: Settings, payload) -> None:
+    """Store a pending delta on the author's ✅/❎ reaction.
+
+    ✅ -> laser_dropped=True, ❎ -> laser_dropped=False. Only the message
+    author may confirm their own delta; any other reactor (incl. the bot's
+    own seeding reactions) is ignored.
+    """
+    pending = bot._pending_delta.get(payload.message_id)
+    if pending is None:
+        return
+    emoji = str(payload.emoji)
+    if emoji not in ("✅", "❎"):
+        return
+    if payload.user_id != pending["user_id"]:
+        return
+    # Claim the pending entry ATOMICALLY before any await: a redelivered event
+    # or a ✅-then-❎ within the window would otherwise both pass the guards
+    # above and each store the delta (double gate_entries row on a suspending
+    # SQL backend). pop() has no await, so only one dispatch wins; the rest are
+    # clean no-ops.
+    pending = bot._pending_delta.pop(payload.message_id, None)
+    if pending is None:
+        return
+    laser = emoji == "✅"
+    before = await repo.gate_record("d")
+    inserted = await repo.add_gate_entry(
+        "d", pending["cost"], pending["user_id"], pending["username"],
+        laser_dropped=laser)
+    if inserted:
+        after = await repo.gate_record("d")
+        await _announce_records(bot, settings, "d",
+                                changed_records(before, after), after)
+        await update_gate_stats_embed(bot, repo, settings)
+        member = getattr(payload, "member", None)
+        newly = (await check_achievements(repo, pending["user_id"], "gate_d")
+                 + await check_achievements(repo, pending["user_id"], "gate_total")
+                 + await check_achievements(repo, pending["user_id"], "gate_cost_total"))
+        if newly:
+            try:
+                await announce_achievements(bot, settings, member, newly)
+            except Exception:
+                pass
+
+
+async def _announce_records(bot, settings: Settings, gate_type: str,
+                            changed: set[str], record: dict) -> None:
+    if not changed or not settings.milestone_channel_id:
+        return
+    channel = bot.get_channel(settings.milestone_channel_id)
+    if channel is None:
+        return
+    name = GATE_NAMES.get(gate_type, gate_type.upper())
+    # First entry / single holder: both records move to the SAME user. Announce
+    # only once (the Glückspilz) instead of two messages naming the same person.
+    if ("min" in changed and "max" in changed
+            and record["min_user"] == record["max_user"]):
+        changed = {"min"}
+    try:
+        if "min" in changed:
+            await channel.send(
+                f"🍀 **Neuer Glückspilz!** <@{record['min_user']}> hat den "
+                f"neuen Tiefpreis-Rekord für das **{name}** aufgestellt: "
+                f"**{format_number(record['min_cost'])}**")
+        if "max" in changed:
+            await channel.send(
+                f"💀 **Neuer Pechvogel!** <@{record['max_user']}> hat den "
+                f"neuen Höchstpreis-Rekord für das **{name}** aufgestellt: "
+                f"**{format_number(record['max_cost'])}**")
+    except Exception:
+        pass
 
 
 def _wire_events(bot, settings: Settings, repo: StatsRepository):
@@ -507,6 +598,10 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
             pass
         try:
             await handle_overview_reaction(bot, repo, settings, payload)
+        except Exception:
+            pass
+        try:
+            await handle_delta_confirmation(bot, repo, settings, payload)
         except Exception:
             pass
 

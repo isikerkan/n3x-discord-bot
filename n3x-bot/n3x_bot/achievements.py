@@ -26,9 +26,8 @@ MILESTONE_LEVELS = {5: "Bronze", 10: "Silber", 25: "Gold", 50: "Platin",
 def _build_achievements() -> list[Achievement]:
     out: list[Achievement] = []
 
-    # NOTE: the "d"/Delta gate tier defs are deliberately kept for v3 fidelity
-    # and the later delta-gate port. They stay inert (gate_d has no live source
-    # yet, so !erfolge caps at 51/59) until that port lands — do NOT delete.
+    # The "d"/Delta gate tiers are live: reaction-confirmed delta entries feed
+    # the gate_d metric, so all 8 d_* achievements can unlock (!erfolge 59/59).
     for gtype in ("a", "b", "c", "d"):
         for thr, level in MILESTONE_LEVELS.items():
             out.append(Achievement(
