@@ -270,7 +270,7 @@ class JsonRepository(StatsRepository):
 
     # ── gate tracker ───────────────────────────────────────────────────────
     async def add_gate_entry(self, gate_type, cost, user_id, username,
-                             dedup_window_seconds=30):
+                             dedup_window_seconds=30, laser_dropped=None):
         threshold = datetime.now(timezone.utc) - timedelta(seconds=dedup_window_seconds)
         for r in self._db["gate_entries"]:
             if (r["gate_type"] == gate_type and r["cost"] == cost
@@ -279,10 +279,31 @@ class JsonRepository(StatsRepository):
                 if created is not None and created > threshold:
                     return False
         row = {"id": self._next("gate"), "gate_type": gate_type, "cost": cost,
-               "user_id": user_id, "username": username, "created_at": _now()}
+               "user_id": user_id, "username": username,
+               "laser_dropped": laser_dropped, "created_at": _now()}
         self._db["gate_entries"].append(row)
         self._flush()
         return True
+
+    async def delta_stats(self):
+        costs = [r["cost"] for r in self._db["gate_entries"]
+                 if r["gate_type"] == "d"]
+        count = len(costs)
+        avg = round(sum(costs) / count) if count else 0
+        laser = sum(1 for r in self._db["gate_entries"]
+                    if r["gate_type"] == "d" and r.get("laser_dropped"))
+        laser_rate = 100 * laser / count if count else 0
+        return {"count": count, "avg": avg, "laser_rate": laser_rate}
+
+    async def gate_record(self, gate_type):
+        rows = [r for r in self._db["gate_entries"]
+                if r["gate_type"] == gate_type]
+        if not rows:
+            return None
+        min_row = min(rows, key=lambda r: r["cost"])
+        max_row = max(rows, key=lambda r: r["cost"])
+        return {"min_cost": min_row["cost"], "min_user": min_row["user_id"],
+                "max_cost": max_row["cost"], "max_user": max_row["user_id"]}
 
     async def list_gate_costs(self, gate_type):
         return [r["cost"] for r in self._db["gate_entries"]
@@ -390,6 +411,10 @@ class JsonRepository(StatsRepository):
             s.setdefault("targeted", False)
         gate_entries = copy.deepcopy(
             sorted(self._db["gate_entries"], key=lambda r: r["id"]))
+        # backfill the laser flag absent from pre-feature (legacy) gate rows so
+        # the snapshot is always fully shaped for any importing backend.
+        for g in gate_entries:
+            g.setdefault("laser_dropped", None)
         return {
             "users": users,
             "messages": messages,
