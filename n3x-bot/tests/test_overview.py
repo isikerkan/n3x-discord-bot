@@ -188,7 +188,7 @@ async def test_post_overview_records_message_id_in_overview_state():
 
     # the posted message id is tracked somewhere in bot._overview_state so the
     # reaction handler can recognise its own message later.
-    assert sent[0].id in str(getattr(bot, "_overview_state", None))
+    assert str(sent[0].id) in str(getattr(bot, "_overview_state", None))
     await repo.close()
 
 

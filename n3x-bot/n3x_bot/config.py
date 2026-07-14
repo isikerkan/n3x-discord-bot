@@ -62,3 +62,14 @@ class Settings(BaseSettings):
                 k, v = pair.split(":", 1)
                 out[k.strip()] = int(v)
         return out
+
+    def voice_role_map(self) -> dict[str, int]:
+        out = {}
+        for pair in self.voice_achievement_roles.split(","):
+            if ":" in pair:
+                k, v = pair.split(":", 1)
+                try:
+                    out[k.strip()] = int(v)
+                except ValueError:
+                    continue
+        return out

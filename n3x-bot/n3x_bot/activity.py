@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 import discord
 from discord.ext import commands
 
-from n3x_bot.achievements import Achievement, check_achievements
+from n3x_bot.achievements import ACHIEVEMENTS, Achievement, check_achievements
 from n3x_bot.cards import announce_achievements
 from n3x_bot.config import Settings
 from n3x_bot.storage.base import StatsRepository
@@ -53,6 +53,41 @@ def now_local(settings: Settings) -> datetime:
 
 def today_local(settings: Settings) -> date:
     return now_local(settings).date()
+
+
+# ── voice-tier roles ───────────────────────────────────────────────────────
+
+def voice_role_transition(newly_ids: list[str],
+                          role_map: dict[str, int]) -> tuple[int | None, list[int]]:
+    mapped = [aid for aid in newly_ids if aid in role_map]
+    if not mapped:
+        return (None, [])
+    highest_id = max(
+        mapped, key=lambda aid: next(a for a in ACHIEVEMENTS if a.id == aid).threshold)
+    grant = role_map[highest_id]
+    others = [rid for rid in role_map.values() if rid != grant]
+    return (grant, others)
+
+
+async def apply_voice_roles(bot, settings: Settings, member,
+                            newly: list[Achievement]) -> None:
+    role_map = settings.voice_role_map()
+    if not role_map:
+        return
+    grant_id, other_ids = voice_role_transition([a.id for a in newly], role_map)
+    if grant_id is None:
+        return
+    try:
+        grant_role = member.guild.get_role(grant_id)
+        if grant_role is not None:
+            await member.add_roles(grant_role)
+        held = {r.id for r in member.roles}
+        to_remove = [role for rid in other_ids
+                     if (role := member.guild.get_role(rid)) is not None and rid in held]
+        if to_remove:
+            await member.remove_roles(*to_remove)
+    except Exception:
+        pass
 
 
 # ── event helpers ──────────────────────────────────────────────────────────
@@ -129,6 +164,7 @@ async def handle_voice_state_update(bot, repo: StatsRepository, settings: Settin
                 await announce_achievements(bot, settings, member, newly)
             except Exception:
                 pass
+            await apply_voice_roles(bot, settings, member, newly)
 
 
 async def flush_voice_times(bot, repo: StatsRepository, now: datetime) -> None:
@@ -173,6 +209,7 @@ async def flush_voice_times(bot, repo: StatsRepository, now: datetime) -> None:
                     await announce_achievements(bot, settings, member, newly)
                 except Exception:
                     pass
+                await apply_voice_roles(bot, settings, member, newly)
 
 
 async def handle_activity_reaction(bot, repo: StatsRepository, settings: Settings,
@@ -181,7 +218,8 @@ async def handle_activity_reaction(bot, repo: StatsRepository, settings: Setting
     if member is None or getattr(member, "bot", False):
         return
     if payload.channel_id in (settings.gate_input_channel_id,
-                              settings.gate_stats_channel_id):
+                              settings.gate_stats_channel_id,
+                              settings.overview_channel_id):
         return
     # Reactions on bot-UI messages (reminder/welcome) still count — a design
     # choice: any reaction is treated as engagement, not filtered by target.
