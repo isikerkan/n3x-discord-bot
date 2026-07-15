@@ -1,3 +1,4 @@
+from n3x_bot.format import format_number
 from n3x_bot.gates import build_gate_embed, parse_gate_message
 
 
@@ -100,7 +101,9 @@ def test_gate_names_include_ezk():
     assert GATE_NAMES["k"] == "Kappa Gate"
 
 
-# ── build_gate_embed: Epsilon / Zeta / Kappa fields (no reward line) ─────────
+# ── build_gate_embed: Epsilon / Zeta / Kappa fields (now WITH reward line) ───
+# BEHAVIOR FLIP: e/z/k previously carried no Belohnung/Gewinn; they now render
+# Belohnung + Gewinn (uniform with a/b/c) ALONGSIDE their drop rate line(s).
 
 def _field_by_name(embed, needle):
     for f in embed.fields:
@@ -109,9 +112,9 @@ def _field_by_name(embed, needle):
     return None
 
 
-def test_build_gate_embed_renders_epsilon_field_with_lf4_rate_no_reward():
+def test_build_gate_embed_renders_epsilon_field_with_lf4_rate_and_reward():
     totals = {"a": {"count": 1, "avg": 100}}
-    rewards = {"a": 46892}
+    rewards = {"a": 46892, "e": 46719}
     epsilon = {"count": 4, "avg": 46892, "rates": {"lf4": 25.0}}
 
     embed = build_gate_embed(totals, rewards, "05.07.2026 12:00", epsilon=epsilon)
@@ -119,13 +122,15 @@ def test_build_gate_embed_renders_epsilon_field_with_lf4_rate_no_reward():
     field = _field_by_name(embed, "Epsilon Gate")
     assert field is not None
     assert "🟦 Epsilon Gate" == field.name
-    assert "LF4: 25.0 %" in field.value
-    assert "Belohnung" not in field.value  # e/z/k carry no reward
+    assert "LF4: 25.0 %" in field.value          # drop line still present
+    assert "Belohnung" in field.value            # e/z/k now carry a reward
+    assert format_number(46719) in field.value   # from rewards.get("e")
+    assert "Gewinn" in field.value
 
 
-def test_build_gate_embed_renders_zeta_field_with_havoc_rate_no_reward():
+def test_build_gate_embed_renders_zeta_field_with_havoc_rate_and_reward():
     totals = {}
-    rewards = {}
+    rewards = {"z": 66661}
     zeta = {"count": 2, "avg": 1234, "rates": {"havoc": 50.0}}
 
     embed = build_gate_embed(totals, rewards, "05.07.2026 12:00", zeta=zeta)
@@ -134,12 +139,14 @@ def test_build_gate_embed_renders_zeta_field_with_havoc_rate_no_reward():
     assert field is not None
     assert "🟪 Zeta Gate" == field.name
     assert "Havoc: 50.0 %" in field.value
-    assert "Belohnung" not in field.value
+    assert "Belohnung" in field.value
+    assert format_number(66661) in field.value
+    assert "Gewinn" in field.value
 
 
-def test_build_gate_embed_renders_kappa_field_with_two_rates_no_reward():
+def test_build_gate_embed_renders_kappa_field_with_two_rates_and_reward():
     totals = {}
-    rewards = {}
+    rewards = {"k": 62955}
     kappa = {"count": 3, "avg": 500,
              "rates": {"hercules": 66.7, "lf4u": 33.3}}
 
@@ -150,12 +157,45 @@ def test_build_gate_embed_renders_kappa_field_with_two_rates_no_reward():
     assert "🟩 Kappa Gate" == field.name
     assert "Hercules: 66.7 %" in field.value
     assert "LF4-U: 33.3 %" in field.value
-    assert "Belohnung" not in field.value
+    assert "Belohnung" in field.value
+    assert format_number(62955) in field.value
+    assert "Gewinn" in field.value
+
+
+def test_build_gate_embed_epsilon_belohnung_value_uses_rewards_get():
+    # The Belohnung number is exactly format_number(rewards.get("e")), rendered
+    # on its own "Belohnung: ..." line.
+    embed = build_gate_embed(
+        {}, {"e": 46719}, "05.07.2026 12:00",
+        epsilon={"count": 4, "avg": 40000, "rates": {"lf4": 25.0}})
+    field = _field_by_name(embed, "Epsilon Gate")
+    assert f"Belohnung: {format_number(46719)}" in field.value
+
+
+def test_build_gate_embed_epsilon_profit_green_when_reward_at_or_above_avg():
+    # reward 46719 >= avg 40000 -> Gewinn positive -> 🟢
+    embed = build_gate_embed(
+        {}, {"e": 46719}, "05.07.2026 12:00",
+        epsilon={"count": 4, "avg": 40000, "rates": {"lf4": 25.0}})
+    field = _field_by_name(embed, "Epsilon Gate")
+    assert "Gewinn" in field.value
+    assert "🟢" in field.value
+    assert "🔴" not in field.value
+
+
+def test_build_gate_embed_zeta_profit_red_when_avg_above_reward():
+    # avg 90000 > reward 66661 -> Gewinn negative -> 🔴
+    embed = build_gate_embed(
+        {}, {"z": 66661}, "05.07.2026 12:00",
+        zeta={"count": 2, "avg": 90000, "rates": {"havoc": 50.0}})
+    field = _field_by_name(embed, "Zeta Gate")
+    assert "Gewinn" in field.value
+    assert "🔴" in field.value
+    assert "🟢" not in field.value
 
 
 def test_build_gate_embed_delta_field_still_carries_reward():
-    # Regression guard for the generalization: Delta keeps its Belohnung line
-    # even once e/z/k (rewardless) fields exist.
+    # Regression guard: Delta keeps its Belohnung line even as it gains Gewinn.
     totals = {}
     rewards = {"d": 75361}
     delta = {"count": 2, "avg": 75000, "laser_rate": 50.0}
@@ -165,6 +205,31 @@ def test_build_gate_embed_delta_field_still_carries_reward():
     field = _field_by_name(embed, "Delta Gate")
     assert field is not None
     assert "Belohnung" in field.value
+
+
+def test_build_gate_embed_delta_now_shows_gewinn_alongside_reward_and_laser():
+    # BEHAVIOR FLIP: Delta previously had Belohnung + Laser but NO Gewinn line.
+    totals = {}
+    rewards = {"d": 75361}
+    delta = {"count": 2, "avg": 75000, "laser_rate": 50.0}
+
+    embed = build_gate_embed(totals, rewards, "05.07.2026 12:00", delta=delta)
+
+    field = _field_by_name(embed, "Delta Gate")
+    assert "Belohnung" in field.value
+    assert "Gewinn" in field.value       # newly added
+    assert "Laser: 50.0 %" in field.value
+
+
+def test_build_gate_embed_delta_profit_green_when_reward_above_avg():
+    # reward 75361 >= avg 70000 -> 🟢
+    embed = build_gate_embed(
+        {}, {"d": 75361}, "05.07.2026 12:00",
+        delta={"count": 2, "avg": 70000, "laser_rate": 50.0})
+    field = _field_by_name(embed, "Delta Gate")
+    assert "Gewinn" in field.value
+    assert "🟢" in field.value
+    assert "🔴" not in field.value
 
 
 # ── build_gate_embed: NEW uniform German inline-field grid ───────────────────
@@ -190,7 +255,8 @@ def _full_embed(now_str: str = "05.07.2026 12:00"):
         "b": {"count": 1, "avg": 90000},   # reward 93820 > avg -> 🟢
         "c": {"count": 3, "avg": 140000},  # reward 139522 < avg -> 🔴
     }
-    rewards = {"a": 46892, "b": 93820, "c": 139522, "d": 75361}
+    rewards = {"a": 46892, "b": 93820, "c": 139522, "d": 75361,
+               "e": 46719, "z": 66661, "k": 62955}
     delta = {"count": 2, "avg": 75000, "laser_rate": 50.0}
     epsilon = {"count": 4, "avg": 46892, "rates": {"lf4": 25.0}}
     zeta = {"count": 2, "avg": 1234, "rates": {"havoc": 50.0}}
@@ -276,21 +342,25 @@ def test_build_gate_embed_abc_fields_have_reward_and_profit_no_drops():
         assert "%" not in field.value  # a/b/c carry no drop lines
 
 
-def test_build_gate_embed_ezk_fields_have_drops_and_no_reward():
+def test_build_gate_embed_ezk_fields_have_drops_and_reward():
+    # BEHAVIOR FLIP: e/z/k now carry Belohnung + Gewinn (uniform with a/b/c)
+    # IN ADDITION to their drop rate line(s).
     embed = _full_embed()
     for needle in ("Epsilon Gate", "Zeta Gate", "Kappa Gate"):
         field = _field_by_name(embed, needle)
         assert field is not None
         assert "Läufe" in field.value
         assert "Ø Kosten" in field.value
-        assert "Belohnung" not in field.value
-        assert "Gewinn" not in field.value
+        assert "Belohnung" in field.value
+        assert "Gewinn" in field.value
+        assert "%" in field.value  # drop line(s) still present too
 
 
-def test_build_gate_embed_delta_shows_reward_and_laser_drop():
+def test_build_gate_embed_delta_shows_reward_gewinn_and_laser_drop():
     field = _field_by_name(_full_embed(), "Delta Gate")
     assert field.name == "💎 Delta Gate"
     assert "Belohnung" in field.value
+    assert "Gewinn" in field.value  # newly added alongside Belohnung + Laser
     assert "Laser: 50.0 %" in field.value
 
 
