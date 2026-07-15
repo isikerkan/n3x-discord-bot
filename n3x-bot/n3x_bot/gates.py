@@ -1,8 +1,7 @@
 """Gate tracker: message parsing + stats embed rendering.
 
-Parsing (`parse_gate_message`) and the totals->content math
-(`build_gate_content`) are Discord-free and unit-testable in isolation;
-only `build_gate_embed` touches `discord.Embed`.
+Parsing (`parse_gate_message`) is Discord-free and unit-testable in
+isolation; only `build_gate_embed` touches `discord.Embed`.
 """
 import re
 
@@ -16,9 +15,14 @@ GATE_NAMES = {"a": "Alpha Gate", "b": "Beta Gate", "c": "Gamma Gate",
               "d": "Delta Gate", "e": "Epsilon Gate", "z": "Zeta Gate",
               "k": "Kappa Gate"}
 
-_DROP_LABELS = {"laser": "Laser Drop Rate", "lf4": "LF4 Drop Rate",
-                "havoc": "Havoc Drop Rate", "hercules": "Hercules Drop Rate",
-                "lf4u": "LF4-U Drop Rate"}
+_FIELD_NAMES = {"a": "🅰 Alpha Gate", "b": "🅱 Beta Gate", "c": "🇨 Gamma Gate",
+                "d": "💎 Delta Gate", "e": "🟦 Epsilon Gate",
+                "z": "🟪 Zeta Gate", "k": "🟩 Kappa Gate"}
+
+_DROP_LABELS = {"laser": "Laser", "lf4": "LF4", "havoc": "Havoc",
+                "hercules": "Hercules", "lf4u": "LF4-U"}
+
+_ZWSP = "​"
 
 
 def parse_gate_message(content: str) -> tuple[str, int] | None:
@@ -56,32 +60,6 @@ def changed_records(before: dict | None, after: dict) -> set[str]:
     return out
 
 
-def build_gate_content(totals: dict, rewards: dict) -> str:
-    """Render the totals/reward-diff body text shared by the stats embed.
-
-    `totals` is `StatsRepository.gate_totals()`'s return shape
-    (`{gate_type: {"count": int, "avg": int}}`); `rewards` is
-    `Settings.gate_rewards_map()`'s return shape (`{gate_type: int}`).
-    Missing gate types default to a zeroed row / zero reward.
-    """
-    content = ""
-    for gate_type in ("a", "b", "c"):
-        gdata = totals.get(gate_type, {"count": 0, "avg": 0})
-        reward = rewards.get(gate_type, 0)
-        diff = reward - gdata["avg"] if gdata["count"] > 0 else 0
-        diff_color = "🟢" if diff >= 0 else "🔴"
-        name = GATE_NAMES.get(gate_type, gate_type.upper())
-        content += (
-            f"**{name}**\n\n"
-            f"Total Gates: {gdata['count']}\n\n"
-            f"Average Cost:\n{format_number(gdata['avg'])}\n\n"
-            f"Reward:\n{format_number(reward)}\n\n"
-            f"Difference: {diff_color}\n{format_number(diff)}\n\n"
-            "══════════════════════\n\n"
-        )
-    return content
-
-
 def _drop_rate_lines(stats: dict) -> str:
     return "".join(f"\n{_DROP_LABELS.get(item, item)}: {rate:.1f} %"
                    for item, rate in stats["rates"].items())
@@ -94,31 +72,52 @@ def build_gate_embed(totals: dict, rewards: dict, now_str: str,
     """Build the live gate-stats embed. `now_str` is caller-supplied (no
     `datetime.now()` inside) so the render is deterministic/testable.
 
-    When `delta` (a `delta_stats()` dict) is given, a separate Delta Gate
-    field is appended (it keeps its Reward line). Each of `epsilon`/`zeta`/
-    `kappa` (a `gate_drop_stats()` dict) that is given adds a rewardless field
-    listing its per-item drop rates.
+    Every gate is a uniform German inline field; there is no description blob.
+    a/b/c carry Läufe/Ø Kosten/Belohnung/Gewinn rows; Delta keeps its Belohnung
+    line plus a Laser drop rate; Epsilon/Zeta/Kappa are rewardless and list
+    their per-item drop rates. A zero-width spacer field pads the grid so Zeta
+    and Kappa begin a fresh row. When `delta`/`epsilon`/`zeta`/`kappa` are all
+    None (legacy call), only the a/b/c fields are emitted (no spacer).
     """
-    embed = discord.Embed(title="📊 Gate Statistics", color=discord.Color.blue())
-    embed.description = build_gate_content(totals, rewards)
+    embed = discord.Embed(title="📊 Gate Statistik", color=discord.Color.blue())
+    for gate_type in ("a", "b", "c"):
+        gdata = totals.get(gate_type, {"count": 0, "avg": 0})
+        reward = rewards.get(gate_type, 0)
+        diff = reward - gdata["avg"] if gdata["count"] > 0 else 0
+        diff_color = "🟢" if diff >= 0 else "🔴"
+        embed.add_field(
+            name=_FIELD_NAMES[gate_type],
+            value=(f"Läufe: {gdata['count']}\n"
+                   f"Ø Kosten: {format_number(gdata['avg'])}\n"
+                   f"Belohnung: {format_number(reward)}\n"
+                   f"Gewinn: {diff_color} {format_number(diff)}"),
+            inline=True)
     if delta is not None:
         embed.add_field(
-            name="💎 Delta Gate",
-            value=(f"Runs: {delta['count']}\n"
-                   f"Avg. Cost: {format_number(delta['avg'])}\n"
-                   f"Reward: {format_number(rewards.get('d', 0))}\n"
-                   f"Drop Rate: {delta['laser_rate']:.1f} %"),
+            name=_FIELD_NAMES["d"],
+            value=(f"Läufe: {delta['count']}\n"
+                   f"Ø Kosten: {format_number(delta['avg'])}\n"
+                   f"Belohnung: {format_number(rewards.get('d', 0))}\n"
+                   f"Laser: {delta['laser_rate']:.1f} %"),
             inline=True)
-    for name, stats in (("🔷 Epsilon Gate", epsilon), ("🔷 Zeta Gate", zeta),
-                        ("🔷 Kappa Gate", kappa)):
+    if epsilon is not None:
+        embed.add_field(
+            name=_FIELD_NAMES["e"],
+            value=(f"Läufe: {epsilon['count']}\n"
+                   f"Ø Kosten: {format_number(epsilon['avg'])}"
+                   f"{_drop_rate_lines(epsilon)}"),
+            inline=True)
+    if zeta is not None or kappa is not None:
+        embed.add_field(name=_ZWSP, value=_ZWSP, inline=True)
+    for gate_type, stats in (("z", zeta), ("k", kappa)):
         if stats is not None:
             embed.add_field(
-                name=name,
-                value=(f"Runs: {stats['count']}\n"
-                       f"Avg. Cost: {format_number(stats['avg'])}"
+                name=_FIELD_NAMES[gate_type],
+                value=(f"Läufe: {stats['count']}\n"
+                       f"Ø Kosten: {format_number(stats['avg'])}"
                        f"{_drop_rate_lines(stats)}"),
                 inline=True)
-    embed.set_footer(text=f"Last Update: {now_str}")
+    embed.set_footer(text=f"Letztes Update: {now_str}")
     return embed
 
 
