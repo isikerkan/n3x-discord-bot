@@ -35,6 +35,7 @@ from n3x_bot.kodex import (
     register_kodex_commands, send_kodex_dm, handle_kodex_confirmation,
 )
 from n3x_bot.models import render_output
+from n3x_bot.nicknames import enforce_nick
 from n3x_bot.storage.base import StatsRepository
 from n3x_bot.timers import register_timer_commands, start_timer_overview_loop
 from n3x_bot.welcome import register_welcome_commands, send_welcome_card
@@ -466,29 +467,6 @@ async def _announce_records(bot, settings: Settings, gate_type: str,
 def _wire_events(bot, settings: Settings, repo: StatsRepository):
     reminder_h, reminder_m = settings.reminder_hm()
 
-    async def enforce_prefix(member: discord.Member):
-        if member.bot or member == member.guild.owner:
-            return
-        if not member.guild.me.guild_permissions.manage_nicknames:
-            return
-        if member.guild.me.top_role <= member.top_role:
-            return
-        has_role = any(r.id == settings.target_role_id for r in member.roles)
-        current = member.display_name
-        if has_role and not current.startswith(settings.prefix_str):
-            base = current.replace("R3X", "").replace(settings.prefix_str, "").strip()
-            try:
-                await member.edit(nick=f"{settings.prefix_str}{base}"[:32],
-                                  reason="N3X Prefix Enforcement")
-            except Exception:
-                pass
-        elif not has_role and current.startswith(settings.prefix_str):
-            try:
-                await member.edit(nick=current[len(settings.prefix_str):],
-                                  reason="N3X Prefix Removal")
-            except Exception:
-                pass
-
     @tasks.loop(time=time(hour=reminder_h, minute=reminder_m))
     async def event_reminder_task():
         weekday = datetime.now().weekday()
@@ -516,7 +494,7 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
             for m in members:
                 if not m.bot:
                     await repo.upsert_user(m.id, m.display_name)
-                await enforce_prefix(m)
+                await enforce_nick(m, settings)
         if not event_reminder_task.is_running():
             event_reminder_task.start()
         for guild in bot.guilds:
@@ -622,7 +600,7 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
     @bot.event
     async def on_member_update(before, after):
         if before.roles != after.roles or before.display_name != after.display_name:
-            await enforce_prefix(after)
+            await enforce_nick(after, settings)
 
     @bot.event
     async def on_member_join(member):
@@ -637,7 +615,7 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
         except Exception:
             pass
         await asyncio.sleep(5)
-        await enforce_prefix(member)
+        await enforce_nick(member, settings)
 
     @bot.event
     async def on_member_remove(member):
