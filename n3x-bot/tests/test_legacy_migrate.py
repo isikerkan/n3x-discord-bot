@@ -400,6 +400,98 @@ async def test_run_migration_folder_routes_legacy_flatfile_to_json_importer(tmp_
     await repo.close()
 
 
+# ── failure paths: safe-failure must NOT rename the irreplaceable source ─────
+
+async def test_unreadable_db_returns_failed_summary_without_raising(tmp_path):
+    # A path _connect_ro can't open -> migrate_legacy_sqlite must flag ok False
+    # and NOT raise (startup must survive).
+    from n3x_bot.legacy_migrate import migrate_legacy_sqlite
+
+    repo = await _dest_repo(tmp_path)
+    summary = await migrate_legacy_sqlite(
+        repo, os.path.join(str(tmp_path), "does_not_exist.db"))
+    assert summary["ok"] is False
+    assert summary["errors"] >= 1
+    assert summary["users"] == 0
+    await repo.close()
+
+
+async def test_garbage_db_does_not_rename_and_a_later_good_run_still_imports(tmp_path):
+    # A non-sqlite file opens read-only but every table read fails -> flagged
+    # failed. run_migration_folder must NOT raise and must leave the db in place
+    # (not renamed aside), so a subsequent good db can still import on retry.
+    from n3x_bot.legacy_migrate import run_migration_folder
+
+    mig_dir = os.path.join(str(tmp_path), "migration")
+    os.makedirs(mig_dir)
+    db_path = os.path.join(mig_dir, "bot_data.db")
+    with open(db_path, "wb") as f:
+        f.write(b"this is not a sqlite database at all")
+    repo = await _dest_repo(tmp_path)
+    settings = types.SimpleNamespace(migration_dir=mig_dir)
+
+    summary = await run_migration_folder(repo, settings)  # must NOT raise
+    assert summary is not None and summary["ok"] is False
+    # left in place for retry, NOT renamed aside
+    assert os.path.exists(db_path)
+    assert not os.path.exists(db_path + ".imported")
+
+    # retry with a genuine v3 db -> imports and renames aside
+    os.remove(db_path)
+    _build_v3_db(db_path)
+    summary2 = await run_migration_folder(repo, settings)
+    assert summary2["ok"] is True and summary2["errors"] == 0
+    assert await repo.get_total("tit") == 3
+    assert not os.path.exists(db_path)
+    assert os.path.exists(db_path + ".imported")
+    await repo.close()
+
+
+async def test_write_time_exception_is_caught_and_db_not_renamed(tmp_path):
+    # A write-phase failure mid-loop (add_gate_entry raising) must be caught,
+    # flag the summary failed, NOT raise out of run_migration_folder, and leave
+    # the db in place (unrenamed) for retry.
+    from n3x_bot.legacy_migrate import run_migration_folder
+
+    mig_dir = os.path.join(str(tmp_path), "migration")
+    os.makedirs(mig_dir)
+    db_path = os.path.join(mig_dir, "bot_data.db")
+    _build_v3_db(db_path)
+    repo = await _dest_repo(tmp_path)
+
+    async def _boom(*args, **kwargs):
+        raise RuntimeError("simulated write failure")
+
+    repo.add_gate_entry = _boom  # explode partway through the write body
+
+    settings = types.SimpleNamespace(migration_dir=mig_dir)
+    summary = await run_migration_folder(repo, settings)  # must NOT raise
+    assert summary is not None and summary["ok"] is False
+    assert summary["errors"] >= 1
+    assert os.path.exists(db_path)                 # not renamed aside
+    assert not os.path.exists(db_path + ".imported")
+    await repo.close()
+
+
+async def test_happy_path_still_reports_ok_and_renames(tmp_path):
+    # Regression: a clean import stays a single run — ok True, errors 0, renamed.
+    from n3x_bot.legacy_migrate import run_migration_folder
+
+    mig_dir = os.path.join(str(tmp_path), "migration")
+    os.makedirs(mig_dir)
+    db_path = os.path.join(mig_dir, "bot_data.db")
+    _build_v3_db(db_path)
+    repo = await _dest_repo(tmp_path)
+    settings = types.SimpleNamespace(migration_dir=mig_dir)
+
+    summary = await run_migration_folder(repo, settings)
+    assert summary["ok"] is True and summary["errors"] == 0
+    assert os.path.exists(db_path + ".imported")
+    second = await run_migration_folder(repo, settings)
+    assert second is None
+    await repo.close()
+
+
 # ── Settings.migration_dir config ───────────────────────────────────────────
 
 _BASE = dict(
