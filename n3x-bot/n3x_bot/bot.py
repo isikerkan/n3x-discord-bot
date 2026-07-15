@@ -51,9 +51,12 @@ GATE_STAT_CHUNK_LIMIT = 1900
 # Commands whose only required arg is NOT a member/user. A missing-argument
 # error on these gets a generic hint; everything else (the targeted stat
 # commands, which take a `member`) is told to specify a user. Covers the gate
-# commands and the admin CRUD subcommand tokens.
+# commands, the admin CRUD subcommand tokens, and the `!config` subcommands
+# (which take a purpose/value/key, never a user).
 _GENERIC_ARG_COMMANDS = frozenset(
-    {"stat", "del", "admin", "msg", "add", "edit", "archive", "rm", "list"})
+    {"stat", "del", "admin", "msg", "add", "edit", "archive", "rm", "list",
+     "channel", "role", "message", "gate-rewards", "allowed-maps",
+     "voice-roles", "reminder-time", "reset"})
 
 
 async def build_output(repo: StatsRepository, stat_key: str,

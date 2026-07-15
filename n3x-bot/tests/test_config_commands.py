@@ -294,6 +294,29 @@ async def test_config_channel_non_admin_refused_no_view():
     await _cleanup(repo)
 
 
+async def test_config_channel_select_refuses_non_author_no_write():
+    # The picker is author-locked: a non-author driving the admin's posted
+    # select must be refused ephemerally, with NO write and NO resolver refresh.
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = await _bot_with_config(settings, repo)
+    ctx = _ctx(_admin())  # author id == 5
+    await _config_sub(bot, "channel").callback(ctx, "welcome")
+    select = _select_of(_posted_view(ctx.send), discord.ui.ChannelSelect)
+    select._values = [_fake_channel(999)]
+    intruder = _fake_interaction(user=_member(member_id=99))
+
+    await select.callback(intruder)
+
+    intruder.response.send_message.assert_awaited_once()
+    assert "Nicht für dich" in intruder.response.send_message.await_args.args[0]
+    assert intruder.response.send_message.await_args.kwargs.get("ephemeral") is True
+    assert await repo.all_runtime_config() == {}  # no write
+    assert bot.runtime_config.welcome_channel_id == settings.welcome_channel_id
+
+    await _cleanup(repo)
+
+
 # ── 2. config role <purpose> ────────────────────────────────────────────────
 
 ROLE_MAP = {
@@ -349,6 +372,27 @@ async def test_all_role_purposes_map_to_expected_keys():
         select._values = [_fake_role(role_id)]
         await select.callback(_fake_interaction())
         assert await repo.get_runtime_config(key) == str(role_id), purpose
+
+    await _cleanup(repo)
+
+
+async def test_config_role_select_refuses_non_author_no_write():
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = await _bot_with_config(settings, repo)
+    ctx = _ctx(_admin())  # author id == 5
+    await _config_sub(bot, "role").callback(ctx, "target")
+    select = _select_of(_posted_view(ctx.send), discord.ui.RoleSelect)
+    select._values = [_fake_role(777)]
+    intruder = _fake_interaction(user=_member(member_id=99))
+
+    await select.callback(intruder)
+
+    intruder.response.send_message.assert_awaited_once()
+    assert "Nicht für dich" in intruder.response.send_message.await_args.args[0]
+    assert intruder.response.send_message.await_args.kwargs.get("ephemeral") is True
+    assert await repo.all_runtime_config() == {}  # no write
+    assert bot.runtime_config.target_role_id == settings.target_role_id
 
     await _cleanup(repo)
 
