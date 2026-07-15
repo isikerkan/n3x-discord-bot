@@ -470,6 +470,34 @@ class SqlRepository(StatsRepository):
                 .order_by(sc.gate_entries.c.id.asc()))
             return [r.cost for r in rows]
 
+    async def list_gate_entries(self, gate_type, since=None, until=None):
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                select(sc.gate_entries.c.cost, sc.gate_entries.c.drops,
+                       sc.gate_entries.c.laser_dropped,
+                       sc.gate_entries.c.created_at)
+                .where(sc.gate_entries.c.gate_type == gate_type)
+                .order_by(sc.gate_entries.c.created_at.asc(),
+                          sc.gate_entries.c.id.asc()))).all()
+        since = _as_aware_utc(since)
+        until = _as_aware_utc(until)
+        out = []
+        for r in rows:
+            created = _as_aware_utc(r.created_at)
+            if since is not None and created < since:
+                continue
+            if until is not None and created > until:
+                continue
+            if r.drops:
+                drop_map = json.loads(r.drops)
+            elif r.laser_dropped is not None:
+                drop_map = {"laser": bool(r.laser_dropped)}
+            else:
+                drop_map = {}
+            out.append({"cost": r.cost, "created_at": created,
+                        "drops": drop_map})
+        return out
+
     async def delete_gate_entry(self, gate_type, index):
         async with self.engine.begin() as conn:
             rows = (await conn.execute(

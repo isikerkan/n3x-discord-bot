@@ -16,6 +16,13 @@ def _parse_dt(v):
     return datetime.fromisoformat(v) if v else None
 
 
+def _as_aware_utc(dt):
+    """Coerce a naive datetime to tz-aware UTC (aware dt is returned as-is)."""
+    if dt is None:
+        return None
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+
+
 def _drops_of(row) -> dict:
     d = row.get("drops")
     if d:
@@ -360,6 +367,23 @@ class JsonRepository(StatsRepository):
     async def list_gate_costs(self, gate_type):
         return [r["cost"] for r in self._db["gate_entries"]
                 if r["gate_type"] == gate_type]
+
+    async def list_gate_entries(self, gate_type, since=None, until=None):
+        rows = [r for r in self._db["gate_entries"]
+                if r["gate_type"] == gate_type]
+        rows.sort(key=lambda r: (_parse_dt(r["created_at"]), r["id"]))
+        since = _as_aware_utc(since)
+        until = _as_aware_utc(until)
+        out = []
+        for r in rows:
+            created = _parse_dt(r["created_at"])
+            if since is not None and created < since:
+                continue
+            if until is not None and created > until:
+                continue
+            out.append({"cost": r["cost"], "created_at": created,
+                        "drops": _drops_of(r)})
+        return out
 
     async def delete_gate_entry(self, gate_type, index):
         matches = [r for r in self._db["gate_entries"] if r["gate_type"] == gate_type]

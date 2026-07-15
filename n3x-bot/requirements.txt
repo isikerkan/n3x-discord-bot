@@ -16,8 +16,14 @@ attrs==26.1.0
     # via aiohttp
 audioop-lts==0.2.2 ; python_full_version >= '3.13'
     # via discord-py
+contourpy==1.3.3
+    # via matplotlib
+cycler==0.12.1
+    # via matplotlib
 discord-py==2.7.1
     # via n3x-bot
+fonttools==4.63.0
+    # via matplotlib
 frozenlist==1.8.0
     # via
     #   aiohttp
@@ -26,12 +32,24 @@ greenlet==3.5.3
     # via sqlalchemy
 idna==3.18
     # via yarl
+kiwisolver==1.5.0
+    # via matplotlib
+matplotlib==3.11.0
+    # via n3x-bot
 multidict==6.7.1
     # via
     #   aiohttp
     #   yarl
+numpy==2.5.1
+    # via
+    #   contourpy
+    #   matplotlib
+packaging==26.2
+    # via matplotlib
 pillow==12.3.0
-    # via n3x-bot
+    # via
+    #   matplotlib
+    #   n3x-bot
 propcache==0.5.2
     # via
     #   aiohttp
@@ -42,8 +60,14 @@ pydantic-core==2.46.4
     # via pydantic
 pydantic-settings==2.14.2
     # via n3x-bot
+pyparsing==3.3.2
+    # via matplotlib
+python-dateutil==2.9.0.post0
+    # via matplotlib
 python-dotenv==1.2.2
     # via pydantic-settings
+six==1.17.0
+    # via python-dateutil
 sqlalchemy==2.0.51
     # via n3x-bot
 typing-extensions==4.16.0

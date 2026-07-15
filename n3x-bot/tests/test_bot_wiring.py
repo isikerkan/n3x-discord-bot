@@ -72,7 +72,7 @@ async def test_register_stat_commands_adds_one_command_per_stat_plus_rank():
     # discord.py's commands.Bot ships a default "help" command; "stat"/"del"
     # are wired by register_gate_commands (called from build_bot itself, not
     # register_stat_commands) — only count what THIS function wires.
-    wired = [c for c in bot.commands if c.name not in ("help", "stat", "del", "admin", "config", "activity", "erfolge", "overview", "sync_achievements", "kodex", "kodex_check", "sync_welcome", "base", "basestop")]
+    wired = [c for c in bot.commands if c.name not in ("help", "stat", "del", "gate", "admin", "config", "activity", "erfolge", "overview", "sync_achievements", "kodex", "kodex_check", "sync_welcome", "base", "basestop")]
     assert len(wired) == len(stats) + 1
 
     await repo.close()
@@ -87,8 +87,22 @@ async def test_register_stat_commands_is_idempotent():
     await register_stat_commands(bot, repo, settings)
 
     stats = await repo.list_stats()
-    wired = [c for c in bot.commands if c.name not in ("help", "stat", "del", "admin", "config", "activity", "erfolge", "overview", "sync_achievements", "kodex", "kodex_check", "sync_welcome", "base", "basestop")]
+    wired = [c for c in bot.commands if c.name not in ("help", "stat", "del", "gate", "admin", "config", "activity", "erfolge", "overview", "sync_achievements", "kodex", "kodex_check", "sync_welcome", "base", "basestop")]
     assert len(wired) == len(stats) + 1
+
+    await repo.close()
+
+
+async def test_build_bot_wires_gate_verlauf_group():
+    repo = await _flatfile_repo()
+    settings = _settings()
+
+    bot = build_bot(settings, repo)
+
+    group = bot.get_command("gate")
+    assert group is not None
+    assert isinstance(group, commands.Group)
+    assert group.get_command("verlauf") is not None
 
     await repo.close()
 
@@ -517,6 +531,28 @@ async def test_on_command_error_missing_arg_is_generic_for_admin_commands():
 
     ctx.send.assert_awaited_once()
     assert ctx.send.await_args.args[0] == "❌ Fehlendes Argument."
+
+    await repo.close()
+
+
+async def test_on_command_error_missing_arg_is_generic_for_gate_verlauf():
+    # `!gate verlauf` with no gate takes a gate token, never a user — a missing
+    # arg must get the generic hint, not the "specify a user" message.
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+
+    ctx = MagicMock()
+    ctx.send = AsyncMock()
+    ctx.command = SimpleNamespace(name="verlauf")
+    error = commands.MissingRequiredArgument.__new__(
+        commands.MissingRequiredArgument)
+
+    await bot.on_command_error(ctx, error)
+
+    ctx.send.assert_awaited_once()
+    assert ctx.send.await_args.args[0] == "❌ Fehlendes Argument."
+    assert ctx.send.await_args.args[0] != "❌ Bitte gib einen Nutzer an."
 
     await repo.close()
 
