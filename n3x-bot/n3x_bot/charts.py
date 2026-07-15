@@ -9,7 +9,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from datetime import datetime
+from datetime import datetime, time
 from io import BytesIO
 
 from n3x_bot.gates import GATE_NAMES, _DROP_LABELS
@@ -43,6 +43,14 @@ def render_gate_history_chart(gate_type: str, entries: list[dict],
                                  if e["drops"].get(item)]
                     ax.scatter(hit_dates, hit_costs, label=_DROP_LABELS[item])
             ax.legend()
+
+        # Clamp the x-axis to the requested date window so a date-range query
+        # shows that window, not just the extent of the returned data. When
+        # von/bis are None we leave matplotlib's auto-fit alone.
+        if von is not None:
+            ax.set_xlim(left=datetime.combine(von, time.min, tzinfo=now.tzinfo))
+        if bis is not None:
+            ax.set_xlim(right=datetime.combine(bis, time.max, tzinfo=now.tzinfo))
 
         buf = BytesIO()
         fig.savefig(buf, format="png")

@@ -168,6 +168,29 @@ def test_render_chart_kappa_partial_drop_renders():
     assert _open_png(png).format == "PNG"
 
 
+def test_render_chart_with_date_window_returns_valid_png():
+    # von/bis clamp the x-axis to the requested window; structural check only
+    # (can't read xlim back from PNG) — the render must still emit a valid PNG.
+    from n3x_bot.charts import render_gate_history_chart
+    tz = ZoneInfo("Europe/Berlin")
+    now = datetime(2026, 7, 15, tzinfo=tz)
+    png = render_gate_history_chart("a", _sample_entries("a"), now,
+                                    von=date(2026, 7, 1), bis=date(2026, 7, 31))
+    assert isinstance(png, bytes)
+    assert _open_png(png).format == "PNG"
+
+
+def test_render_chart_empty_data_with_date_window_returns_valid_png():
+    # Empty "keine Daten" path must keep working even with a date window set.
+    from n3x_bot.charts import render_gate_history_chart
+    tz = ZoneInfo("Europe/Berlin")
+    now = datetime(2026, 7, 15, tzinfo=tz)
+    png = render_gate_history_chart("a", [], now,
+                                    von=date(2026, 7, 1), bis=date(2026, 7, 31))
+    assert isinstance(png, bytes)
+    assert _open_png(png).format == "PNG"
+
+
 def test_render_chart_empty_entries_still_returns_valid_png():
     from n3x_bot.charts import render_gate_history_chart
     now = datetime(2026, 7, 15, tzinfo=ZoneInfo("Europe/Berlin"))
@@ -283,6 +306,36 @@ async def test_verlauf_date_range_filters_entries_by_parsed_window():
     assert (since_local.hour, since_local.minute, since_local.second) == (0, 0, 0)
     assert until_local.date() == date(2026, 7, 15)
     assert until_local.hour == 23 and until_local.minute == 59
+
+    await repo.close()
+
+
+async def test_verlauf_until_covers_whole_bis_day_to_last_microsecond():
+    # The `bis` bound must include the ENTIRE day: an entry recorded at
+    # 23:59:59.5 on `bis` is inside the inclusive window. list_gate_entries
+    # filters with `created > until`, so `until` has to reach 23:59:59.999999
+    # (not 23:59:59.000000, which would drop sub-second entries).
+    repo = await _flatfile_repo()
+    bot = build_bot(_settings(), repo)
+    await repo.add_gate_entry("a", 46000, 1, "u1")
+    ctx = _ctx()
+    tz = ZoneInfo("Europe/Berlin")
+
+    cmd = _verlauf_cmd(bot)
+    with patch.object(repo, "list_gate_entries",
+                      wraps=repo.list_gate_entries) as spy:
+        await cmd.callback(ctx, "a", "01.07.2026", "15.07.2026")
+
+    until = spy.await_args.kwargs.get(
+        "until", spy.await_args.args[2] if len(spy.await_args.args) > 2 else None)
+    assert until is not None
+    until_local = until.astimezone(tz)
+    assert until_local.date() == date(2026, 7, 15)
+    assert (until_local.hour, until_local.minute, until_local.second,
+            until_local.microsecond) == (23, 59, 59, 999999)
+    # An entry at 23:59:59.5 on the bis day is therefore included, not dropped.
+    entry_ts = datetime(2026, 7, 15, 23, 59, 59, 500000, tzinfo=tz)
+    assert entry_ts <= until
 
     await repo.close()
 

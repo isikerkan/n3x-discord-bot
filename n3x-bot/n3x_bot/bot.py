@@ -59,7 +59,7 @@ GATE_STAT_CHUNK_LIMIT = 1900
 _GENERIC_ARG_COMMANDS = frozenset(
     {"stat", "del", "admin", "msg", "add", "edit", "archive", "rm", "list",
      "channel", "role", "message", "gate-rewards", "allowed-maps",
-     "voice-roles", "reminder-time", "reset"})
+     "voice-roles", "reminder-time", "reset", "gate", "verlauf"})
 
 
 async def build_output(repo: StatsRepository, stat_key: str,
@@ -469,7 +469,7 @@ def register_gate_commands(bot, repo: StatsRepository, settings: Settings):
             tz = ZoneInfo(settings.timezone)
             since = (datetime.combine(von_d, time(0, 0, 0), tzinfo=tz)
                      if von_d is not None else None)
-            until = (datetime.combine(bis_d, time(23, 59, 59), tzinfo=tz)
+            until = (datetime.combine(bis_d, time(23, 59, 59, 999999), tzinfo=tz)
                      if bis_d is not None else None)
             entries = await repo.list_gate_entries(gtype, since, until)
             png = render_gate_history_chart(gtype, entries,

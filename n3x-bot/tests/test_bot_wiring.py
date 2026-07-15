@@ -535,6 +535,28 @@ async def test_on_command_error_missing_arg_is_generic_for_admin_commands():
     await repo.close()
 
 
+async def test_on_command_error_missing_arg_is_generic_for_gate_verlauf():
+    # `!gate verlauf` with no gate takes a gate token, never a user — a missing
+    # arg must get the generic hint, not the "specify a user" message.
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+
+    ctx = MagicMock()
+    ctx.send = AsyncMock()
+    ctx.command = SimpleNamespace(name="verlauf")
+    error = commands.MissingRequiredArgument.__new__(
+        commands.MissingRequiredArgument)
+
+    await bot.on_command_error(ctx, error)
+
+    ctx.send.assert_awaited_once()
+    assert ctx.send.await_args.args[0] == "❌ Fehlendes Argument."
+    assert ctx.send.await_args.args[0] != "❌ Bitte gib einen Nutzer an."
+
+    await repo.close()
+
+
 async def test_on_command_error_missing_arg_is_generic_for_config_subcommands():
     # The `!config` subcommands take a purpose/value/key, never a user, so a
     # missing arg must get the generic hint — not the "specify a user" message.
