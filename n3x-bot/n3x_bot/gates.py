@@ -228,13 +228,14 @@ class KappaConfirmView(discord.ui.View):
         if inserted:
             try:
                 from n3x_bot.bot import (update_gate_stats_embed,
-                                         _announce_records)
+                                         update_gate_chart, _announce_records)
                 from n3x_bot.achievements import check_achievements
                 from n3x_bot.cards import announce_achievements
                 after = await self.repo.gate_record("k")
                 await _announce_records(self.bot, self.settings, "k",
                                         changed_records(before, after), after)
                 await update_gate_stats_embed(self.bot, self.repo, self.settings)
+                await update_gate_chart(self.bot, self.repo, self.settings, "k")
                 newly = (await check_achievements(self.repo, self.user_id, "gate_k")
                          + await check_achievements(self.repo, self.user_id, "gate_total")
                          + await check_achievements(self.repo, self.user_id, "gate_cost_total"))

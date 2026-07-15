@@ -385,6 +385,53 @@ async def update_gate_stats_embed(bot, repo: StatsRepository, settings: Settings
     await repo.set_channel_message(GATE_STATS_KEY, new_msg.id, channel.id)
 
 
+async def update_gate_chart(bot, repo: StatsRepository, settings: Settings,
+                            gate_type: str) -> None:
+    """Refresh (or first-post) the live per-gate history chart IMAGE.
+
+    Mirrors `update_gate_stats_embed`, but the tracked message is an
+    ATTACHMENT: it is edited via `msg.edit(attachments=[discord.File(...)])`
+    and (re)posted via `channel.send(file=discord.File(...))`. The last-posted
+    message id is persisted via the `channel_messages` store under
+    `f"gate_chart_{gate_type}"` so the chart is edited in place across restarts.
+    Best-effort; never raises.
+    """
+    if not bot.runtime_config.gate_chart_channel_id:
+        return
+    channel = bot.get_channel(bot.runtime_config.gate_chart_channel_id)
+    if channel is None:
+        return
+    png = render_gate_history_chart(
+        gate_type, await repo.list_gate_entries(gate_type), now_local(settings))
+    filename = f"verlauf_{gate_type}.png"
+    key = f"gate_chart_{gate_type}"
+
+    stored = await repo.get_channel_message(key)
+    if stored is not None:
+        try:
+            msg = await channel.fetch_message(stored[0])
+            await msg.edit(attachments=[discord.File(BytesIO(png),
+                                                     filename=filename)])
+            return
+        except Exception:
+            pass
+
+    new_msg = await channel.send(file=discord.File(BytesIO(png),
+                                                   filename=filename))
+    await repo.set_channel_message(key, new_msg.id, channel.id)
+
+
+async def update_all_gate_charts(bot, repo: StatsRepository,
+                                 settings: Settings) -> None:
+    """Refresh every gate's live chart. One gate failing (module-global
+    `update_gate_chart` may be monkeypatched) never stops the others."""
+    for gate_type in GATE_TYPES:
+        try:
+            await update_gate_chart(bot, repo, settings, gate_type)
+        except Exception:
+            pass
+
+
 def _chunk_gate_lines(lines: list[str], limit: int = GATE_STAT_CHUNK_LIMIT) -> list[str]:
     chunks = []
     current = ""
@@ -528,6 +575,10 @@ async def handle_gate_input_message(bot, repo: StatsRepository, settings: Settin
         await _announce_records(bot, settings, gate_type,
                                 changed_records(before, after), after)
         await update_gate_stats_embed(bot, repo, settings)
+        try:
+            await update_gate_chart(bot, repo, settings, gate_type)
+        except Exception:
+            pass
         newly = (await check_achievements(repo, message.author.id, f"gate_{gate_type}")
                  + await check_achievements(repo, message.author.id, "gate_total")
                  + await check_achievements(repo, message.author.id, "gate_cost_total"))
@@ -579,6 +630,10 @@ async def handle_delta_confirmation(bot, repo: StatsRepository,
         await _announce_records(bot, settings, gate_type,
                                 changed_records(before, after), after)
         await update_gate_stats_embed(bot, repo, settings)
+        try:
+            await update_gate_chart(bot, repo, settings, gate_type)
+        except Exception:
+            pass
         member = getattr(payload, "member", None)
         newly = (await check_achievements(repo, pending["user_id"], f"gate_{gate_type}")
                  + await check_achievements(repo, pending["user_id"], "gate_total")
@@ -691,6 +746,10 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
         start_timer_overview_loop(bot, repo, settings)
         if bot.runtime_config.gate_stats_channel_id:
             await update_gate_stats_embed(bot, repo, settings)
+        try:
+            await update_all_gate_charts(bot, repo, settings)
+        except Exception:
+            log.exception("gate-chart update failed")
         try:
             await update_gate_input_help(bot, repo, settings)
         except Exception:
