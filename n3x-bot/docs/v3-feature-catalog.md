@@ -34,15 +34,19 @@ Legend — **NEW** (not in n3x_bot), **EXISTING** (already ported), **CHANGED** 
 
 Each becomes its own modular `n3x_bot/<feature>.py` + repo methods + tests (TDD pipeline). Config → Settings; no hardcoded IDs.
 
-1. **[ ] Activity tracking** (voice/message/streak/night/reaction) — foundation for achievements; highest value. **Fix timezone (B6) + async DB (B3) at design time.** (M)
-2. **[ ] Achievements + image cards** — headline feature; depends on #1. Thresholds as config; card rendering isolated + testable (render to bytes, not Discord). (L)
-3. **[ ] Delta gate + records/leaderboards** — extends our existing gate tracker; self-contained. (M)
-4. **[ ] Kodex / rules acceptance** — small, high governance value, independent. (S/M)
-5. **[ ] Welcome cards** — cosmetic, independent. (S/M)
-6. **[ ] Base timers** — needs DB persistence to be worth it (B12). (S/M)
-7. **[ ] Prefix/nickname enforcement** — reconcile with our join/leave model. (S)
+1. **[x] Activity tracking** (voice/message/streak/night/reaction) — foundation for achievements; highest value. **Fix timezone (B6) + async DB (B3) at design time.** (M) — DONE, PR #14.
+2. **[x] Achievements + image cards** — headline feature; depends on #1. Thresholds as config; card rendering isolated + testable (render to bytes, not Discord). (L) — DONE, PRs #15/#16/#17.
+3. **[x] Delta gate + records/leaderboards** — extends our existing gate tracker; self-contained. (M) — DONE, PR #18.
+4. **[x] Kodex / rules acceptance** — small, high governance value, independent. (S/M) — DONE, PR #19.
+5. **[x] Welcome cards** — cosmetic, independent. (S/M) — DONE, PR #20.
+6. **[x] Base timers** — needs DB persistence to be worth it (B12). (S/M) — DONE, PR #21.
+7. **[x] Prefix/nickname enforcement** — reconcile with our join/leave model. (S) — DONE, PR #22.
+8. **[ ] Command-list channel** (v3 system #9, `COMMAND_LIST_CHANNEL_ID` + `update_command_list_msg`) — a self-editing message in a dedicated channel listing all available commands, refreshed on ready. Mirrors the gate-stats/`!overview` self-editing-embed pattern we already have; needs `command_list_channel_id` Settings + a list builder + `last_messages` persistence + AMP field + `.env` line. **Build this DB-driven from the start** (enumerate the live command registry / DB-backed stats, not a hardcoded list) so it fits the dynamic-content direction below. (S/M)
 
 Defer/skip: event tracking (never implemented in v3), legacy `stats.json`/`send_or_update_msg`.
+
+### Cross-cutting initiative — dynamic DB-backed content (de-hardcode)
+**Direction (user, 2026-07-15):** progressively remove hardcoded content and serve **list elements + dynamic values from the database as objects** instead. Targets, roughly in order: achievement definitions (59, currently frozen dataclasses in `achievements.py` — decouple tier colour into the object, load from DB, reconcile with the unlocks table + `!sync_achievements`), narrative copy (Kodex/welcome/reminder/record strings), the command list (#8), and eventually milestone tiers/thresholds. Each becomes a DB-backed table with an admin/AMP editing surface (see §D), extending the existing `stats`/`messages` CRUD model to the rest of the content. This supersedes the "config-file/static" leanings in §D — the chosen source of truth is the DB (objects), edited via GUI/console, not flat files. Sequence after #8; biggest single piece is achievements-as-objects.
 
 ---
 
