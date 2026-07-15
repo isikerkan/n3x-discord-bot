@@ -268,6 +268,71 @@ def _add_targeted_stat_command(bot, repo, settings, key: str):
 # ── gate tracker ─────────────────────────────────────────────────────────────
 
 GATE_STATS_KEY = "gate_stats"
+GATE_INPUT_HELP_KEY = "gate_input_help"
+
+
+def build_gate_input_help() -> discord.Embed:
+    """Build the deterministic German Anleitung for entering gate costs.
+
+    Pure/deterministic: covers all seven gates (including the newer
+    Delta/Epsilon/Zeta/Kappa drop gates) plus the retained v3 hints. Posted as
+    a self-editing embed in the gate-input channel via `update_gate_input_help`.
+    """
+    description = (
+        "Bitte trage deine Gate-Kosten so ein: `<gate> <kosten>`\n"
+        "\n"
+        "**Beispiele:**\n"
+        "`a 58.000`  – Alpha Gate\n"
+        "`b 93.800`  – Beta Gate\n"
+        "`c 139.500` – Gamma Gate\n"
+        "`d 250.000` – Delta Gate (Laser)\n"
+        "`e 46.700`  – Epsilon Gate (LF4)\n"
+        "`z 66.600`  – Zeta Gate (Havoc)\n"
+        "`k 62.900`  – Kappa Gate (Hercules & LF4-U)\n"
+        "\n"
+        "⚠️ Bitte immer den exakten Wert eintragen!\n"
+        "\n"
+        "**Hinweise:**\n"
+        "• Punkte im Betrag sind optional (58000 oder 58.000)\n"
+        "• Alpha, Beta & Gamma werden sofort eingetragen\n"
+        "• Delta, Epsilon & Zeta bestätigen: ✅ (Drop erhalten) / ❎ (kein Drop)\n"
+        "• Kappa bestätigen: nutze die Buttons (Hercules / LF4-U)\n"
+        "• ✅ gespeichert · ⏳ Duplikat (30 s) · ❌ ungültige Eingabe\n"
+        "• Nachrichten werden nach 5 Minuten automatisch gelöscht\n"
+        "• Nur eine Eingabe pro Nachricht!"
+    )
+    return discord.Embed(
+        title="📝 Anleitung: Gate-Kosten eintragen",
+        description=description,
+        color=discord.Color.blue(),
+    )
+
+
+async def update_gate_input_help(bot, repo: StatsRepository, settings: Settings):
+    """Refresh (or first-post) the self-editing gate-input Anleitung.
+
+    Mirrors `update_gate_stats_embed`: the last-posted message id is persisted
+    via the `channel_messages` store under `GATE_INPUT_HELP_KEY` so the help is
+    edited in place across restarts. Best-effort; never raises.
+    """
+    if not bot.runtime_config.gate_input_channel_id:
+        return
+    channel = bot.get_channel(bot.runtime_config.gate_input_channel_id)
+    if channel is None:
+        return
+    embed = build_gate_input_help()
+
+    stored = await repo.get_channel_message(GATE_INPUT_HELP_KEY)
+    if stored is not None:
+        try:
+            msg = await channel.fetch_message(stored[0])
+            await msg.edit(embed=embed)
+            return
+        except Exception:
+            pass
+
+    new_msg = await channel.send(embed=embed)
+    await repo.set_channel_message(GATE_INPUT_HELP_KEY, new_msg.id, channel.id)
 
 
 async def update_gate_stats_embed(bot, repo: StatsRepository, settings: Settings):
@@ -555,6 +620,10 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
         start_timer_overview_loop(bot, repo, settings)
         if bot.runtime_config.gate_stats_channel_id:
             await update_gate_stats_embed(bot, repo, settings)
+        try:
+            await update_gate_input_help(bot, repo, settings)
+        except Exception:
+            log.exception("gate-input help update failed")
         # Publish the /admin ... slash group (and any other app commands) to
         # Discord. Global sync — the tree is only populated locally otherwise,
         # so the slash commands would never appear at runtime.
