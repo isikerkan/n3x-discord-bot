@@ -69,6 +69,7 @@ gate_entries = Table(
     Column("user_id", BigInteger, nullable=False),
     Column("username", String(100), nullable=False),
     Column("laser_dropped", Boolean, nullable=True),
+    Column("drops", Text, nullable=True),
     Column("created_at", DateTime(timezone=True), nullable=False),
 )
 

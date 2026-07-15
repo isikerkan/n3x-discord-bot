@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from n3x_bot.models import User, Stat, Message
 
-GATE_TYPES: tuple[str, ...] = ("a", "b", "c", "d")
+GATE_TYPES: tuple[str, ...] = ("a", "b", "c", "d", "e", "z", "k")
 
 
 class StatsRepository(ABC):
@@ -116,20 +116,33 @@ class StatsRepository(ABC):
     @abstractmethod
     async def add_gate_entry(self, gate_type: str, cost: int, user_id: int,
                              username: str, dedup_window_seconds: int = 30,
-                             laser_dropped: bool | None = None) -> bool:
+                             laser_dropped: bool | None = None,
+                             drops: dict[str, bool] | None = None) -> bool:
         """Insert a gate cost entry unless an identical (user_id, gate_type,
         cost) row was inserted within `dedup_window_seconds`. Returns True if
         inserted, False if rejected as a duplicate.
 
-        `laser_dropped` is only meaningful for `gate_type == "d"`; a/b/c
-        entries store it as None.
+        `drops` is a per-item drop map `{item: bool}` (d->laser, e->lf4,
+        z->havoc, k->hercules+lf4u; a/b/c->None). `laser_dropped` is a legacy
+        compat alias for the Delta laser drop: when given (and `drops` is None)
+        it is normalized to `drops={"laser": bool}`. For every d-entry both the
+        `drops` map and the legacy `laser_dropped` column are populated; e/z/k
+        populate `drops` only.
+        """
+        ...
+    @abstractmethod
+    async def gate_drop_stats(self, gate_type: str) -> dict:
+        """`{"count": int, "avg": int, "rates": {item: float_pct}}` for
+        `gate_type`. `rates[item] = 100 * (# entries with that item True) /
+        count`, one key per distinct drop-item observed among that gate's
+        entries. Empty gate -> count 0, avg 0, rates {}.
         """
         ...
     @abstractmethod
     async def delta_stats(self) -> dict:
         """`{"count": int, "avg": int, "laser_rate": float}` over the "d"
         (Delta) gate. `laser_rate = 100 * (# laser_dropped True) / count`,
-        0 when count is 0.
+        0 when count is 0. Delegates to `gate_drop_stats("d")`.
         """
         ...
     @abstractmethod

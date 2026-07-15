@@ -1139,7 +1139,7 @@ async def test_stat_command_rejects_unknown_gate_type():
     ctx.send = AsyncMock()
 
     cmd = bot.get_command("stat")
-    await cmd.callback(ctx, "z")
+    await cmd.callback(ctx, "y")
 
     ctx.send.assert_awaited_once()
     assert "Ungültiger Gate-Typ" in ctx.send.await_args.args[0]

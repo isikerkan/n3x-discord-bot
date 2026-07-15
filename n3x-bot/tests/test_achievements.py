@@ -118,12 +118,13 @@ def test_overview_channel_id_read_from_env(monkeypatch):
 
 # ── definitions ────────────────────────────────────────────────────────────
 
-def test_total_achievements_constant_is_59():
-    assert _ach().TOTAL_ACHIEVEMENTS == 59
+def test_total_achievements_constant_is_83():
+    # Grew 59 -> 83 with the E/Z/K gates: +8 tiers each for gate_e/z/k (+24).
+    assert _ach().TOTAL_ACHIEVEMENTS == 83
 
 
-def test_there_are_exactly_59_definitions():
-    assert len(_ach().ACHIEVEMENTS) == 59
+def test_there_are_exactly_83_definitions():
+    assert len(_ach().ACHIEVEMENTS) == 83
 
 
 def test_all_definition_ids_are_unique():
@@ -417,5 +418,90 @@ async def test_erfolge_reports_unlocked_count_and_total():
     await cmd.callback(ctx)
 
     text = _collect_text(ctx.send, ctx.author.send)
-    assert "2/59" in text
+    assert "2/83" in text  # total grew 59 -> 83 with the E/Z/K gates
     await repo.close()
+
+
+# ── E/Z/K gate milestone achievements ───────────────────────────────────────
+
+def test_every_ezk_gate_type_has_all_eight_tiers():
+    ids = {a.id for a in _ach().ACHIEVEMENTS}
+    for gtype in ("e", "z", "k"):
+        for thr in (5, 10, 25, 50, 100, 250, 500, 1000):
+            assert f"{gtype}_{thr}" in ids
+
+
+def test_ezk_gate_metrics_map_to_gate_sources():
+    m = _ach()
+    assert _by_id(m, "e_5").metric == "gate_e"
+    assert _by_id(m, "z_1000").metric == "gate_z"
+    assert _by_id(m, "k_25").metric == "gate_k"
+
+
+def test_ezk_gate_achievements_are_not_secret():
+    ezk = [a for a in _ach().ACHIEVEMENTS
+           if a.metric in ("gate_e", "gate_z", "gate_k")]
+    assert ezk and not any(a.secret for a in ezk)
+
+
+def test_ezk_gate_titles_use_gate_display_names():
+    m = _ach()
+    assert "Epsilon" in _by_id(m, "e_5").title
+    assert "Zeta" in _by_id(m, "z_5").title
+    assert "Kappa" in _by_id(m, "k_5").title
+
+
+async def test_user_metric_value_reads_gate_e_count():
+    repo = await _flatfile_repo()
+    await repo.add_gate_entry("e", 100, 7, "u", drops={"lf4": True})
+    await repo.add_gate_entry("e", 200, 7, "u", drops={"lf4": False})
+    assert await _ach().user_metric_value(repo, 7, "gate_e") == 2
+    await repo.close()
+
+
+async def test_user_metric_value_gate_total_includes_ezk_entries():
+    repo = await _flatfile_repo()
+    await repo.add_gate_entry("e", 100, 7, "u", drops={"lf4": True})
+    await repo.add_gate_entry("z", 200, 7, "u", drops={"havoc": False})
+    await repo.add_gate_entry("k", 300, 7, "u",
+                              drops={"hercules": True, "lf4u": True})
+    assert await _ach().user_metric_value(repo, 7, "gate_total") == 3
+    await repo.close()
+
+
+async def test_user_metric_value_gate_cost_total_includes_ezk_costs():
+    repo = await _flatfile_repo()
+    await repo.add_gate_entry("k", 400000, 7, "u",
+                              drops={"hercules": True, "lf4u": False})
+    await repo.add_gate_entry("e", 600000, 7, "u", drops={"lf4": True})
+    assert await _ach().user_metric_value(repo, 7, "gate_cost_total") == 1000000
+    await repo.close()
+
+
+async def test_five_kappa_entries_unlock_k_5_achievement():
+    repo = await _flatfile_repo()
+    for cost in (500, 600, 700, 800, 900):
+        await repo.add_gate_entry("k", cost, 7, "Erkan",
+                                  drops={"hercules": True, "lf4u": False})
+    unlocked = await _ach().check_achievements(repo, 7, "gate_k")
+    assert "k_5" in {a.id for a in unlocked}
+    await repo.close()
+
+
+async def test_five_epsilon_entries_unlock_e_5_achievement():
+    repo = await _flatfile_repo()
+    for cost in (10, 20, 30, 40, 50):
+        await repo.add_gate_entry("e", cost, 7, "Erkan", drops={"lf4": True})
+    unlocked = await _ach().check_achievements(repo, 7, "gate_e")
+    assert "e_5" in {a.id for a in unlocked}
+    await repo.close()
+
+
+# ── _milestone_line renders E/Z/K gate lines (cards.py) ─────────────────────
+
+def test_milestone_line_renders_ezk_gate_names():
+    from n3x_bot.cards import _milestone_line
+    m = _ach()
+    assert "Epsilon" in _milestone_line(_by_id(m, "e_5"))
+    assert "Zeta" in _milestone_line(_by_id(m, "z_10"))
+    assert "Kappa" in _milestone_line(_by_id(m, "k_25"))

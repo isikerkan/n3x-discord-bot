@@ -60,7 +60,8 @@ def tier_color(achievement: Achievement) -> tuple[int, int, int]:
 def _milestone_line(achievement: Achievement) -> str:
     metric = achievement.metric
     threshold = achievement.threshold
-    if metric in ("gate_a", "gate_b", "gate_c", "gate_d"):
+    if metric in ("gate_a", "gate_b", "gate_c", "gate_d",
+                  "gate_e", "gate_z", "gate_k"):
         gtype = metric.split("_")[1]
         return f"{threshold} {GATE_NAMES.get(gtype, gtype.upper())} Gates"
     if metric == "gate_total":

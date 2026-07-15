@@ -16,6 +16,14 @@ def _parse_dt(v):
     return datetime.fromisoformat(v) if v else None
 
 
+def _drops_of(row) -> dict:
+    d = row.get("drops")
+    if d:
+        return d
+    lz = row.get("laser_dropped")
+    return {"laser": lz} if lz is not None else {}
+
+
 class JsonRepository(StatsRepository):
     def __init__(self, path: str):
         self.path = path
@@ -281,7 +289,11 @@ class JsonRepository(StatsRepository):
 
     # ── gate tracker ───────────────────────────────────────────────────────
     async def add_gate_entry(self, gate_type, cost, user_id, username,
-                             dedup_window_seconds=30, laser_dropped=None):
+                             dedup_window_seconds=30, laser_dropped=None,
+                             drops=None):
+        if drops is None and laser_dropped is not None:
+            drops = {"laser": bool(laser_dropped)}
+        laser_col = drops.get("laser") if drops else None
         threshold = datetime.now(timezone.utc) - timedelta(seconds=dedup_window_seconds)
         for r in self._db["gate_entries"]:
             if (r["gate_type"] == gate_type and r["cost"] == cost
@@ -291,20 +303,31 @@ class JsonRepository(StatsRepository):
                     return False
         row = {"id": self._next("gate"), "gate_type": gate_type, "cost": cost,
                "user_id": user_id, "username": username,
-               "laser_dropped": laser_dropped, "created_at": _now()}
+               "laser_dropped": laser_col, "drops": drops, "created_at": _now()}
         self._db["gate_entries"].append(row)
         self._flush()
         return True
 
+    async def gate_drop_stats(self, gate_type):
+        rows = [r for r in self._db["gate_entries"]
+                if r["gate_type"] == gate_type]
+        count = len(rows)
+        avg = round(sum(r["cost"] for r in rows) / count) if count else 0
+        observed: set[str] = set()
+        trues: dict[str, int] = {}
+        for r in rows:
+            for item, val in _drops_of(r).items():
+                observed.add(item)
+                if val:
+                    trues[item] = trues.get(item, 0) + 1
+        rates = ({item: 100 * trues.get(item, 0) / count for item in observed}
+                 if count else {})
+        return {"count": count, "avg": avg, "rates": rates}
+
     async def delta_stats(self):
-        costs = [r["cost"] for r in self._db["gate_entries"]
-                 if r["gate_type"] == "d"]
-        count = len(costs)
-        avg = round(sum(costs) / count) if count else 0
-        laser = sum(1 for r in self._db["gate_entries"]
-                    if r["gate_type"] == "d" and r.get("laser_dropped"))
-        laser_rate = 100 * laser / count if count else 0
-        return {"count": count, "avg": avg, "laser_rate": laser_rate}
+        s = await self.gate_drop_stats("d")
+        return {"count": s["count"], "avg": s["avg"],
+                "laser_rate": s["rates"].get("laser", 0.0)}
 
     async def gate_record(self, gate_type):
         rows = [r for r in self._db["gate_entries"]
@@ -468,6 +491,7 @@ class JsonRepository(StatsRepository):
         # the snapshot is always fully shaped for any importing backend.
         for g in gate_entries:
             g.setdefault("laser_dropped", None)
+            g.setdefault("drops", None)
         return {
             "users": users,
             "messages": messages,

@@ -1,6 +1,7 @@
+import json
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select, insert, update, delete, text, case
+from sqlalchemy import func, select, insert, update, delete, text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from n3x_bot.models import User, Stat, Message
@@ -358,7 +359,11 @@ class SqlRepository(StatsRepository):
 
     # ── gate tracker ───────────────────────────────────────────────────────
     async def add_gate_entry(self, gate_type, cost, user_id, username,
-                             dedup_window_seconds=30, laser_dropped=None):
+                             dedup_window_seconds=30, laser_dropped=None,
+                             drops=None):
+        if drops is None and laser_dropped is not None:
+            drops = {"laser": bool(laser_dropped)}
+        laser_col = drops.get("laser") if drops else None
         threshold = _now() - timedelta(seconds=dedup_window_seconds)
         async with self.engine.begin() as conn:
             candidates = await conn.execute(select(sc.gate_entries.c.created_at).where(
@@ -371,24 +376,40 @@ class SqlRepository(StatsRepository):
                     return False
             await conn.execute(insert(sc.gate_entries).values(
                 gate_type=gate_type, cost=cost, user_id=user_id,
-                username=username, laser_dropped=laser_dropped,
+                username=username, laser_dropped=laser_col,
+                drops=json.dumps(drops) if drops else None,
                 created_at=_now()))
             return True
 
-    async def delta_stats(self):
+    async def gate_drop_stats(self, gate_type):
         async with self.engine.connect() as conn:
-            r = (await conn.execute(
-                select(func.count(sc.gate_entries.c.id),
-                       func.avg(sc.gate_entries.c.cost),
-                       func.sum(case(
-                           (sc.gate_entries.c.laser_dropped == True, 1),
-                           else_=0)))
-                .where(sc.gate_entries.c.gate_type == "d"))).one()
-            count, avg, laser = r[0], r[1], r[2]
-            count = count or 0
-            avg = round(avg) if avg else 0
-            laser_rate = 100 * (laser or 0) / count if count else 0
-            return {"count": count, "avg": avg, "laser_rate": laser_rate}
+            rows = (await conn.execute(
+                select(sc.gate_entries.c.cost, sc.gate_entries.c.drops,
+                       sc.gate_entries.c.laser_dropped)
+                .where(sc.gate_entries.c.gate_type == gate_type))).all()
+        count = len(rows)
+        avg = round(sum(r.cost for r in rows) / count) if count else 0
+        observed: set[str] = set()
+        trues: dict[str, int] = {}
+        for r in rows:
+            if r.drops:
+                drop_map = json.loads(r.drops)
+            elif r.laser_dropped is not None:
+                drop_map = {"laser": bool(r.laser_dropped)}
+            else:
+                drop_map = {}
+            for item, val in drop_map.items():
+                observed.add(item)
+                if val:
+                    trues[item] = trues.get(item, 0) + 1
+        rates = ({item: 100 * trues.get(item, 0) / count for item in observed}
+                 if count else {})
+        return {"count": count, "avg": avg, "rates": rates}
+
+    async def delta_stats(self):
+        s = await self.gate_drop_stats("d")
+        return {"count": s["count"], "avg": s["avg"],
+                "laser_rate": s["rates"].get("laser", 0.0)}
 
     async def gate_record(self, gate_type):
         async with self.engine.connect() as conn:
@@ -692,6 +713,7 @@ class SqlRepository(StatsRepository):
                  "user_id": r.user_id, "username": r.username,
                  "laser_dropped": (None if r.laser_dropped is None
                                    else bool(r.laser_dropped)),
+                 "drops": (json.loads(r.drops) if r.drops else None),
                  "created_at": self._dt(r.created_at)}
                 for r in await conn.execute(
                     select(sc.gate_entries).order_by(sc.gate_entries.c.id.asc()))
@@ -787,6 +809,7 @@ class SqlRepository(StatsRepository):
                     id=r["id"], gate_type=r["gate_type"], cost=r["cost"],
                     user_id=r["user_id"], username=r["username"],
                     laser_dropped=r.get("laser_dropped"),
+                    drops=json.dumps(r["drops"]) if r.get("drops") else None,
                     created_at=_parse_dt(r["created_at"])))
             for did, metrics in snapshot.get("activity_counters", {}).items():
                 for metric, count in metrics.items():
