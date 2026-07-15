@@ -124,3 +124,9 @@ channel_messages = Table(
     Column("message_id", BigInteger, nullable=False),
     Column("channel_id", BigInteger, nullable=False),
 )
+
+runtime_config = Table(
+    "runtime_config", metadata,
+    Column("key", String(50), primary_key=True),
+    Column("value", Text, nullable=True),
+)

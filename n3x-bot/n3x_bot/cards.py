@@ -172,13 +172,13 @@ def render_achievement_card(avatar_bytes: bytes | None, title: str,
 
 async def announce_achievements(bot, settings: Settings, member,
                                 newly: list[Achievement]) -> None:
-    if settings.milestone_channel_id == 0:
+    if bot.runtime_config.milestone_channel_id == 0:
         return
     if not newly:
         return
     if getattr(member, "bot", False):
         return
-    channel = bot.get_channel(settings.milestone_channel_id)
+    channel = bot.get_channel(bot.runtime_config.milestone_channel_id)
     if channel is None:
         return
 

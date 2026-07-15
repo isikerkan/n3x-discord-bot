@@ -99,6 +99,24 @@ class StatsRepository(ABC):
         """`(message_id, channel_id)` for `key`, or None if unset. Both ints."""
         ...
 
+    # runtime config
+    @abstractmethod
+    async def set_runtime_config(self, key: str, value: str) -> None:
+        """Upsert the raw override string stored under `key`."""
+        ...
+    @abstractmethod
+    async def get_runtime_config(self, key: str) -> str | None:
+        """The raw override string for `key`, or None if unset."""
+        ...
+    @abstractmethod
+    async def delete_runtime_config(self, key: str) -> bool:
+        """Delete the override for `key`; True if a row existed."""
+        ...
+    @abstractmethod
+    async def all_runtime_config(self) -> dict[str, str]:
+        """All overrides as `{key: value}`."""
+        ...
+
     # target tracking
     @abstractmethod
     async def record_target_use(self, target_discord_id: int, stat_key: str) -> int:

@@ -37,6 +37,7 @@ from n3x_bot.kodex import (
 )
 from n3x_bot.models import render_output
 from n3x_bot.nicknames import enforce_nick
+from n3x_bot.runtime_config import RuntimeConfig
 from n3x_bot.storage.base import GATE_TYPES, StatsRepository
 from n3x_bot.timers import register_timer_commands, start_timer_overview_loop
 from n3x_bot.welcome import register_welcome_commands, send_welcome_card
@@ -92,6 +93,7 @@ def build_bot(settings: Settings, repo: StatsRepository) -> commands.Bot:
                        intents=intents, case_insensitive=True)
     bot.n3x_settings = settings
     bot.n3x_repo = repo
+    bot.runtime_config = RuntimeConfig(settings)
     bot._rank_last_posts = {}
     bot._target_last_posts = {}
     bot._gate_embed_msg_id = None
@@ -137,7 +139,7 @@ def register_overview_and_sync_commands(bot, repo: StatsRepository,
 
 
 async def _send_or_update(bot, repo, settings, stat_key: str, text: str):
-    channel = bot.get_channel(settings.reminder_channel_id)
+    channel = bot.get_channel(bot.runtime_config.reminder_channel_id)
     if channel is None:
         return
     last = await repo.get_last_post(stat_key)
@@ -163,7 +165,7 @@ async def _send_ephemeral(bot, settings, store: dict, track_key: str, text: str)
     `store` for the "delete previous, send new" behavior, since these
     displays don't need DB persistence.
     """
-    channel = bot.get_channel(settings.reminder_channel_id)
+    channel = bot.get_channel(bot.runtime_config.reminder_channel_id)
     if channel is None:
         return
     old_id = store.get(track_key)
@@ -272,13 +274,13 @@ async def update_gate_stats_embed(bot, repo: StatsRepository, settings: Settings
     "gate" isn't one — it would KeyError). `bot._gate_embed_msg_id` stays as an
     in-run fast-path cache, written alongside the persisted store.
     """
-    if not settings.gate_stats_channel_id:
+    if not bot.runtime_config.gate_stats_channel_id:
         return
-    channel = bot.get_channel(settings.gate_stats_channel_id)
+    channel = bot.get_channel(bot.runtime_config.gate_stats_channel_id)
     if channel is None:
         return
     totals = await repo.gate_totals()
-    rewards = settings.gate_rewards_map()
+    rewards = bot.runtime_config.gate_rewards_map()
     delta = await repo.delta_stats()
     epsilon = await repo.gate_drop_stats("e")
     zeta = await repo.gate_drop_stats("z")
@@ -340,7 +342,7 @@ async def _handle_gate_stat(ctx, repo: StatsRepository, settings: Settings, gate
 
 async def _handle_gate_del(ctx, bot, repo: StatsRepository, settings: Settings,
                            gate_type: str, index: int):
-    has_role = any(r.id == settings.gate_delete_role_id for r in ctx.author.roles)
+    has_role = any(r.id == bot.runtime_config.gate_delete_role_id for r in ctx.author.roles)
     if not has_role:
         await ctx.send("❌ Keine Berechtigung.", delete_after=5)
         return
@@ -472,9 +474,9 @@ async def handle_delta_confirmation(bot, repo: StatsRepository,
 
 async def _announce_records(bot, settings: Settings, gate_type: str,
                             changed: set[str], record: dict) -> None:
-    if not changed or not settings.milestone_channel_id:
+    if not changed or not bot.runtime_config.milestone_channel_id:
         return
-    channel = bot.get_channel(settings.milestone_channel_id)
+    channel = bot.get_channel(bot.runtime_config.milestone_channel_id)
     if channel is None:
         return
     name = GATE_NAMES.get(gate_type, gate_type.upper())
@@ -499,12 +501,12 @@ async def _announce_records(bot, settings: Settings, gate_type: str,
 
 
 def _wire_events(bot, settings: Settings, repo: StatsRepository):
-    reminder_h, reminder_m = settings.reminder_hm()
+    reminder_h, reminder_m = bot.runtime_config.reminder_hm()
 
     @tasks.loop(time=time(hour=reminder_h, minute=reminder_m))
     async def event_reminder_task():
         weekday = datetime.now().weekday()
-        channel = bot.get_channel(settings.reminder_channel_id)
+        channel = bot.get_channel(bot.runtime_config.reminder_channel_id)
         if channel is None:
             return
         if weekday == 2:
@@ -519,6 +521,10 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
     @bot.event
     async def on_ready():
         log.info("Bot eingeloggt als %s", bot.user)
+        try:
+            await bot.runtime_config.refresh(repo)
+        except Exception:
+            log.exception("runtime_config refresh failed; using .env base")
         await register_stat_commands(bot, repo, settings)
         for guild in bot.guilds:
             try:
@@ -528,7 +534,7 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
             for m in members:
                 if not m.bot:
                     await repo.upsert_user(m.id, m.display_name)
-                await enforce_nick(m, settings)
+                await enforce_nick(m, bot.runtime_config)
         if not event_reminder_task.is_running():
             event_reminder_task.start()
         for guild in bot.guilds:
@@ -542,7 +548,7 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
         if not voice_flush_task.is_running():
             voice_flush_task.start()
         start_timer_overview_loop(bot, repo, settings)
-        if settings.gate_stats_channel_id:
+        if bot.runtime_config.gate_stats_channel_id:
             await update_gate_stats_embed(bot, repo, settings)
         # Publish the /admin ... slash group (and any other app commands) to
         # Discord. Global sync — the tree is only populated locally otherwise,
@@ -595,7 +601,7 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
                     await announce_achievements(bot, settings, author, newly)
                 except Exception:
                     pass
-        if settings.gate_input_channel_id and message.channel.id == settings.gate_input_channel_id:
+        if bot.runtime_config.gate_input_channel_id and message.channel.id == bot.runtime_config.gate_input_channel_id:
             await handle_gate_input_message(bot, repo, settings, message)
         if message.content.startswith(settings.command_prefix):
             try:
@@ -634,7 +640,7 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
     @bot.event
     async def on_member_update(before, after):
         if before.roles != after.roles or before.display_name != after.display_name:
-            await enforce_nick(after, settings)
+            await enforce_nick(after, bot.runtime_config)
 
     @bot.event
     async def on_member_join(member):
@@ -649,7 +655,7 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
         except Exception:
             pass
         await asyncio.sleep(5)
-        await enforce_nick(member, settings)
+        await enforce_nick(member, bot.runtime_config)
 
     @bot.event
     async def on_member_remove(member):

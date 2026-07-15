@@ -272,6 +272,7 @@ async def test_leave_crossing_voice_tier_grants_mapped_role_end_to_end():
 
 async def test_flush_crossing_voice_tier_grants_mapped_role_end_to_end():
     from n3x_bot.activity import flush_voice_times
+    from n3x_bot.runtime_config import RuntimeConfig
     repo = await _flatfile_repo()
     settings = _settings(voice_achievement_roles="voice_3600:901")
 
@@ -284,6 +285,9 @@ async def test_flush_crossing_voice_tier_grants_mapped_role_end_to_end():
     bot.voice_lock = asyncio.Lock()
     bot.voice_join_times = {7: t0}
     bot.n3x_settings = settings
+    # Real resolver so the flush path exercises bot.runtime_config.voice_role_map()
+    # (matches the migrated call site); with no DB overrides it mirrors settings.
+    bot.runtime_config = RuntimeConfig(settings)
     bot.guilds = [guild]
 
     # still-connected member crosses the 3600s tier via the flush loop (no leave)

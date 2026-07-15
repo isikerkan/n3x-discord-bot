@@ -80,7 +80,7 @@ def strip_prefix(display_name: str, prefix_str: str) -> str:
 async def send_welcome_card(bot, settings: Settings, member) -> bool:
     if getattr(member, "bot", False):
         return False
-    channel = bot.get_channel(settings.welcome_channel_id)
+    channel = bot.get_channel(bot.runtime_config.welcome_channel_id)
     if channel is None:
         return False
     try:

@@ -4,6 +4,36 @@ from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def parse_reminder_hm(raw: str) -> tuple[int, int]:
+    hh, mm = raw.split(":")
+    return int(hh), int(mm)
+
+
+def parse_gate_rewards(raw: str) -> dict[str, int]:
+    out = {}
+    for pair in raw.split(","):
+        if ":" in pair:
+            k, v = pair.split(":", 1)
+            out[k.strip()] = int(v)
+    return out
+
+
+def parse_allowed_maps(raw: str) -> list[str]:
+    return [m.strip() for m in raw.split(",") if m.strip()]
+
+
+def parse_voice_roles(raw: str) -> dict[str, int]:
+    out = {}
+    for pair in raw.split(","):
+        if ":" in pair:
+            k, v = pair.split(":", 1)
+            try:
+                out[k.strip()] = int(v)
+            except ValueError:
+                continue
+    return out
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
@@ -83,28 +113,14 @@ class Settings(BaseSettings):
         return self
 
     def reminder_hm(self) -> tuple[int, int]:
-        hh, mm = self.reminder_time.split(":")
-        return int(hh), int(mm)
+        return parse_reminder_hm(self.reminder_time)
 
     def gate_rewards_map(self) -> dict[str, int]:
-        out = {}
-        for pair in self.gate_rewards.split(","):
-            if ":" in pair:
-                k, v = pair.split(":", 1)
-                out[k.strip()] = int(v)
-        return out
+        return parse_gate_rewards(self.gate_rewards)
 
     @property
     def allowed_maps_list(self) -> list[str]:
-        return [m.strip() for m in self.allowed_maps.split(",") if m.strip()]
+        return parse_allowed_maps(self.allowed_maps)
 
     def voice_role_map(self) -> dict[str, int]:
-        out = {}
-        for pair in self.voice_achievement_roles.split(","):
-            if ":" in pair:
-                k, v = pair.split(":", 1)
-                try:
-                    out[k.strip()] = int(v)
-                except ValueError:
-                    continue
-        return out
+        return parse_voice_roles(self.voice_achievement_roles)
