@@ -6,6 +6,7 @@ import os
 from n3x_bot.config import Settings
 from n3x_bot.storage.factory import create_repository
 from n3x_bot.seed import seed_defaults, migrate_legacy_json
+from n3x_bot.legacy_migrate import run_migration_folder
 from n3x_bot.bot import build_bot
 
 logging.basicConfig(
@@ -54,6 +55,9 @@ async def _prepare(settings: Settings):
         await migrate_legacy_json(repo, "stats.json")
     elif legacy_src is not None:
         await migrate_legacy_json(repo, legacy_src)
+    summary = await run_migration_folder(repo, settings)
+    if summary:
+        logging.info("legacy migration folder imported: %s", summary)
     return repo
 
 

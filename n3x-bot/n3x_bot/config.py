@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     storage_backend: Literal["flatfile", "sqlite", "postgres"] = "flatfile"
     database_url: str | None = None
     data_file: str = "stats.json"
+    migration_dir: str = "migration"
 
     target_role_id: int
     welcome_channel_id: int
