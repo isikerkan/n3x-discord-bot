@@ -934,7 +934,7 @@ async def test_update_gate_stats_embed_first_post_sends_and_records_id():
 
     channel.send.assert_awaited_once()
     embed = channel.send.await_args.kwargs["embed"]
-    assert embed.title == "📊 Gate Statistics"
+    assert embed.title == "📊 Gate Statistik"
     assert bot._gate_embed_msg_id == 42
 
     await repo.close()
