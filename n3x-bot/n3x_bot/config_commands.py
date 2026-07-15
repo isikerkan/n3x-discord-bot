@@ -20,6 +20,7 @@ CHANNEL_PURPOSES: dict[str, str] = {
     "reminder": "reminder_channel_id",
     "gate_input": "gate_input_channel_id",
     "gate_stats": "gate_stats_channel_id",
+    "gate_chart": "gate_chart_channel_id",
     "milestone": "milestone_channel_id",
     "overview": "overview_channel_id",
     "kodex_check": "kodex_check_channel_id",
