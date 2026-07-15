@@ -95,6 +95,41 @@ def test_good_timezone_passes_validation():
     assert s.timezone == "America/New_York"
 
 
+# ── Gate rewards: Epsilon / Zeta / Kappa now carry rewards ──────────────────
+
+
+def test_gate_rewards_default_includes_ezk():
+    s = Settings(**BASE)
+    assert s.gate_rewards == (
+        "a:46892,b:93820,c:139522,d:75361,e:46719,z:66661,k:62955"
+    )
+
+
+def test_gate_rewards_map_includes_epsilon_value():
+    s = Settings(**BASE)
+    assert s.gate_rewards_map()["e"] == 46719
+
+
+def test_gate_rewards_map_includes_zeta_value():
+    s = Settings(**BASE)
+    assert s.gate_rewards_map()["z"] == 66661
+
+
+def test_gate_rewards_map_includes_kappa_value():
+    s = Settings(**BASE)
+    assert s.gate_rewards_map()["k"] == 62955
+
+
+def test_gate_rewards_map_keeps_existing_abcd_unchanged():
+    # Adding e/z/k must not disturb the already-shipped a/b/c/d rewards.
+    s = Settings(**BASE)
+    m = s.gate_rewards_map()
+    assert m["a"] == 46892
+    assert m["b"] == 93820
+    assert m["c"] == 139522
+    assert m["d"] == 75361
+
+
 # ── Kodex (rules-acceptance) config ────────────────────────────────────────
 
 def test_kodex_check_channel_id_defaults_to_zero():
