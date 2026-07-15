@@ -1,7 +1,8 @@
 from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import (BaseSettings, PydanticBaseSettingsSource,
+                               SettingsConfigDict)
 
 
 def parse_reminder_hm(raw: str) -> tuple[int, int]:
@@ -36,6 +37,23 @@ def parse_voice_roles(raw: str) -> dict[str, int]:
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    @classmethod
+    def settings_customise_sources(
+        cls, settings_cls,
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ):
+        # The managed `.env` is the config source of truth and must WIN over
+        # process environment variables. AMP re-injects its (often stale) bot
+        # config as env vars on every launch and we can't reliably stop it, so
+        # `.env` is placed ABOVE env here (default pydantic order is env >
+        # dotenv). Order = highest priority first. Live overrides still come
+        # from the runtime_config DB via the RuntimeConfig resolver (DB > .env).
+        return (init_settings, dotenv_settings, env_settings,
+                file_secret_settings)
 
     discord_token: str
     storage_backend: Literal["flatfile", "sqlite", "postgres"] = "flatfile"
