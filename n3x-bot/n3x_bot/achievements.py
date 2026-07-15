@@ -188,14 +188,14 @@ def build_overview_embed(holders: dict[int, set[str]], user_ids: list[int],
 
 
 async def post_overview(bot, repo: StatsRepository, settings: Settings) -> None:
-    if settings.overview_channel_id == 0:
+    if bot.runtime_config.overview_channel_id == 0:
         return
     holders = await repo.list_achievement_holders()
     if not holders:
         return
     user_ids = sorted(holders.keys())
     page = 0
-    channel = bot.get_channel(settings.overview_channel_id)
+    channel = bot.get_channel(bot.runtime_config.overview_channel_id)
     if channel is None:
         return
     embed = build_overview_embed(holders, user_ids, page)
@@ -224,7 +224,7 @@ async def handle_overview_reaction(bot, repo: StatsRepository, settings: Setting
     state = getattr(bot, "_overview_state", None)
     if not state:
         return
-    if payload.channel_id != settings.overview_channel_id:
+    if payload.channel_id != bot.runtime_config.overview_channel_id:
         return
     if payload.message_id != state["message_id"]:
         return
@@ -238,7 +238,7 @@ async def handle_overview_reaction(bot, repo: StatsRepository, settings: Setting
     new_page = (state["page"] + delta) % len(user_ids)
     holders = await repo.list_achievement_holders()
     embed = build_overview_embed(holders, user_ids, new_page)
-    channel = bot.get_channel(settings.overview_channel_id)
+    channel = bot.get_channel(bot.runtime_config.overview_channel_id)
     if channel is None:
         return
     msg = await channel.fetch_message(state["message_id"])

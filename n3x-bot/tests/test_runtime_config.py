@@ -37,6 +37,7 @@ ModuleNotFoundError/AttributeError rather than a collection-time error.
 
 import os
 import tempfile
+from types import SimpleNamespace
 
 from n3x_bot.config import Settings
 
@@ -285,6 +286,81 @@ async def test_build_bot_runtime_config_is_behavior_preserving_without_overrides
     assert bot.runtime_config.gate_stats_channel_id == settings.gate_stats_channel_id
     assert bot.runtime_config.welcome_channel_id == settings.welcome_channel_id
     assert bot.runtime_config.gate_rewards_map() == settings.gate_rewards_map()
+    await repo.close()
+    if os.path.exists(repo._test_path):
+        os.remove(repo._test_path)
+
+
+# ── end-to-end: a DB override actually reaches a read-site (routing proof) ────
+
+class _CapturingChannel:
+    """A minimal gate-stats channel that records the embed posted to it."""
+
+    def __init__(self, channel_id: int):
+        self.id = channel_id
+        self.embeds: list = []
+
+    async def send(self, *args, embed=None, **kwargs):
+        self.embeds.append(embed)
+        return SimpleNamespace(id=123456789)
+
+
+def _alpha_reward_line(embed) -> str:
+    """The `Belohnung: …` line from the embed's Alpha (a) gate field."""
+    alpha = next(f for f in embed.fields if "Alpha" in f.name)
+    return next(ln for ln in alpha.value.splitlines() if ln.startswith("Belohnung:"))
+
+
+async def test_gate_rewards_override_reaches_update_gate_stats_embed():
+    # Prove routing end-to-end: a `gate_rewards` DB override, once refreshed,
+    # is what `update_gate_stats_embed` renders — NOT the Settings default.
+    from n3x_bot.bot import build_bot, update_gate_stats_embed
+    from n3x_bot.format import format_number
+    from n3x_bot.seed import seed_defaults
+    repo = await _flatfile_repo()
+    await seed_defaults(repo)
+    settings = _settings(gate_stats_channel_id=555)
+    await repo.set_runtime_config(
+        "gate_rewards", "a:1,b:2,c:3,d:4,e:5,z:6,k:7")
+
+    bot = build_bot(settings, repo)
+    await bot.runtime_config.refresh(repo)
+
+    channel = _CapturingChannel(555)
+    bot.get_channel = lambda cid: channel if cid == 555 else None
+
+    await update_gate_stats_embed(bot, repo, settings)
+
+    assert len(channel.embeds) == 1
+    # Override wins: Alpha reward is 1, not the Settings default (46892).
+    assert _alpha_reward_line(channel.embeds[0]) == f"Belohnung: {format_number(1)}"
+    assert format_number(1) != format_number(settings.gate_rewards_map()["a"])
+    await repo.close()
+    if os.path.exists(repo._test_path):
+        os.remove(repo._test_path)
+
+
+async def test_gate_rewards_no_override_uses_settings_default_at_read_site():
+    # Behavior-preserving counterpart: with NO override, the SAME read-site
+    # renders the Settings default reward.
+    from n3x_bot.bot import build_bot, update_gate_stats_embed
+    from n3x_bot.format import format_number
+    from n3x_bot.seed import seed_defaults
+    repo = await _flatfile_repo()
+    await seed_defaults(repo)
+    settings = _settings(gate_stats_channel_id=555)
+
+    bot = build_bot(settings, repo)
+    await bot.runtime_config.refresh(repo)
+
+    channel = _CapturingChannel(555)
+    bot.get_channel = lambda cid: channel if cid == 555 else None
+
+    await update_gate_stats_embed(bot, repo, settings)
+
+    assert len(channel.embeds) == 1
+    default_alpha = settings.gate_rewards_map()["a"]
+    assert _alpha_reward_line(channel.embeds[0]) == f"Belohnung: {format_number(default_alpha)}"
     await repo.close()
     if os.path.exists(repo._test_path):
         os.remove(repo._test_path)

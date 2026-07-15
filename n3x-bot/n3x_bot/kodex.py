@@ -82,7 +82,7 @@ def register_kodex_commands(bot, repo: StatsRepository, settings: Settings) -> N
         confirmed = await repo.list_kodex_confirmed()
         members = [m for m in ctx.guild.members if not getattr(m, "bot", False)]
         chunks = build_kodex_report(confirmed, members)
-        channel = bot.get_channel(settings.kodex_check_channel_id)
+        channel = bot.get_channel(bot.runtime_config.kodex_check_channel_id)
         if channel is not None:
             for chunk in chunks:
                 await channel.send(chunk)

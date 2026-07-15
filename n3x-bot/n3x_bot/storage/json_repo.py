@@ -40,6 +40,7 @@ class JsonRepository(StatsRepository):
             "achievements": {},
             "kodex_confirmations": [], "kodex_messages": {},
             "base_timers": {}, "channel_messages": {},
+            "runtime_config": {},
         }
 
     async def connect(self) -> None:
@@ -269,6 +270,23 @@ class JsonRepository(StatsRepository):
     async def get_channel_message(self, key):
         v = self._db["channel_messages"].get(key)
         return (v[0], v[1]) if v else None
+
+    # ── runtime config ─────────────────────────────────────────────────────
+    async def set_runtime_config(self, key, value):
+        self._db["runtime_config"][key] = value
+        self._flush()
+
+    async def get_runtime_config(self, key):
+        return self._db["runtime_config"].get(key)
+
+    async def delete_runtime_config(self, key):
+        existed = key in self._db["runtime_config"]
+        self._db["runtime_config"].pop(key, None)
+        self._flush()
+        return existed
+
+    async def all_runtime_config(self):
+        return dict(self._db["runtime_config"])
 
     # ── target tracking ────────────────────────────────────────────────────
     async def record_target_use(self, target_discord_id, stat_key):
@@ -510,6 +528,7 @@ class JsonRepository(StatsRepository):
             "kodex_messages": copy.deepcopy(self._db["kodex_messages"]),
             "base_timers": copy.deepcopy(self._db["base_timers"]),
             "channel_messages": copy.deepcopy(self._db["channel_messages"]),
+            "runtime_config": copy.deepcopy(self._db["runtime_config"]),
             "seq": {
                 "user": self._max_id(users),
                 "message": self._max_id(messages),
@@ -538,6 +557,8 @@ class JsonRepository(StatsRepository):
         self._db["base_timers"] = copy.deepcopy(snapshot.get("base_timers", {}))
         self._db["channel_messages"] = copy.deepcopy(
             snapshot.get("channel_messages", {}))
+        self._db["runtime_config"] = copy.deepcopy(
+            snapshot.get("runtime_config", {}))
         self._db["seq"] = dict(snapshot["seq"])
         self._flush()
 

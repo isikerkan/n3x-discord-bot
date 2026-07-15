@@ -67,30 +67,30 @@ def register_timer_commands(bot, repo: StatsRepository,
                             settings: Settings) -> None:
     if bot.get_command("base") is None:
         async def _base_cmd(ctx, map_name: str, zeit: int):
-            if not has_base_timer_role(ctx.author, settings):
+            if not has_base_timer_role(ctx.author, bot.runtime_config):
                 await ctx.send("❌ Keine Berechtigung.", delete_after=5)
                 return
             now = datetime.now(ZoneInfo(settings.timezone))
             try:
-                await start_base_timer(repo, settings, map_name, zeit, now)
+                await start_base_timer(repo, bot.runtime_config, map_name, zeit, now)
             except ValueError:
                 await ctx.send(
                     f"❌ Ungültige Map. Erlaubte Maps: "
-                    f"{', '.join(settings.allowed_maps_list)}", delete_after=10)
+                    f"{', '.join(bot.runtime_config.allowed_maps_list)}", delete_after=10)
                 return
-            await update_timer_overview(bot, repo, settings, now)
+            await update_timer_overview(bot, repo, bot.runtime_config, now)
             await ctx.send(f"✅ Timer für {map_name} gestartet ({zeit} Min).",
                            delete_after=5)
         bot.add_command(commands.Command(_base_cmd, name="base"))
 
     if bot.get_command("basestop") is None:
         async def _basestop_cmd(ctx, map_name: str):
-            if not has_base_timer_role(ctx.author, settings):
+            if not has_base_timer_role(ctx.author, bot.runtime_config):
                 await ctx.send("❌ Keine Berechtigung.", delete_after=5)
                 return
             now = datetime.now(ZoneInfo(settings.timezone))
             if await repo.remove_base_timer(map_name):
-                await update_timer_overview(bot, repo, settings, now)
+                await update_timer_overview(bot, repo, bot.runtime_config, now)
                 await ctx.send(f"✅ Timer für {map_name} gestoppt.",
                                delete_after=5)
             else:
@@ -108,7 +108,7 @@ def start_timer_overview_loop(bot, repo: StatsRepository,
     @tasks.loop(seconds=30)
     async def _timer_overview_loop():
         await update_timer_overview(
-            bot, repo, settings, datetime.now(ZoneInfo(settings.timezone)))
+            bot, repo, bot.runtime_config, datetime.now(ZoneInfo(settings.timezone)))
 
     bot._timer_overview_loop = _timer_overview_loop
     if not _timer_overview_loop.is_running():

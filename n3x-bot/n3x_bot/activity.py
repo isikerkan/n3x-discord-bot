@@ -167,7 +167,7 @@ async def handle_voice_state_update(bot, repo: StatsRepository, settings: Settin
                 await announce_achievements(bot, settings, member, newly)
             except Exception:
                 pass
-            await apply_voice_roles(bot, settings, member, newly)
+            await apply_voice_roles(bot, bot.runtime_config, member, newly)
 
 
 async def flush_voice_times(bot, repo: StatsRepository, now: datetime) -> None:
@@ -220,9 +220,9 @@ async def handle_activity_reaction(bot, repo: StatsRepository, settings: Setting
     member = getattr(payload, "member", None)
     if member is None or getattr(member, "bot", False):
         return
-    if payload.channel_id in (settings.gate_input_channel_id,
-                              settings.gate_stats_channel_id,
-                              settings.overview_channel_id):
+    if payload.channel_id in (bot.runtime_config.gate_input_channel_id,
+                              bot.runtime_config.gate_stats_channel_id,
+                              bot.runtime_config.overview_channel_id):
         return
     # Reactions on bot-UI messages (reminder/welcome) still count — a design
     # choice: any reaction is treated as engagement, not filtered by target.
