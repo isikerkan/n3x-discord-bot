@@ -27,6 +27,7 @@ from n3x_bot.achievements import (
 )
 from n3x_bot.cards import announce_achievements
 from n3x_bot.config import Settings
+from n3x_bot.config_commands import register_config_commands
 from n3x_bot.format import format_number
 from n3x_bot.gates import (
     build_gate_embed, parse_gate_message, changed_records, GATE_NAMES,
@@ -50,9 +51,12 @@ GATE_STAT_CHUNK_LIMIT = 1900
 # Commands whose only required arg is NOT a member/user. A missing-argument
 # error on these gets a generic hint; everything else (the targeted stat
 # commands, which take a `member`) is told to specify a user. Covers the gate
-# commands and the admin CRUD subcommand tokens.
+# commands, the admin CRUD subcommand tokens, and the `!config` subcommands
+# (which take a purpose/value/key, never a user).
 _GENERIC_ARG_COMMANDS = frozenset(
-    {"stat", "del", "admin", "msg", "add", "edit", "archive", "rm", "list"})
+    {"stat", "del", "admin", "msg", "add", "edit", "archive", "rm", "list",
+     "channel", "role", "message", "gate-rewards", "allowed-maps",
+     "voice-roles", "reminder-time", "reset"})
 
 
 async def build_output(repo: StatsRepository, stat_key: str,
@@ -110,6 +114,7 @@ def build_bot(settings: Settings, repo: StatsRepository) -> commands.Bot:
     _wire_events(bot, settings, repo)
     register_gate_commands(bot, repo, settings)
     register_admin_commands(bot, repo, settings)
+    register_config_commands(bot, repo, settings)
     register_activity(bot, repo, settings)
     register_achievement_commands(bot, repo, settings)
     register_overview_and_sync_commands(bot, repo, settings)
