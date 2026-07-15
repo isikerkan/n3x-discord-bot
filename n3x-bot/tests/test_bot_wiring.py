@@ -72,7 +72,7 @@ async def test_register_stat_commands_adds_one_command_per_stat_plus_rank():
     # discord.py's commands.Bot ships a default "help" command; "stat"/"del"
     # are wired by register_gate_commands (called from build_bot itself, not
     # register_stat_commands) — only count what THIS function wires.
-    wired = [c for c in bot.commands if c.name not in ("help", "stat", "del", "admin", "activity", "erfolge", "overview", "sync_achievements", "kodex", "kodex_check", "sync_welcome", "base", "basestop")]
+    wired = [c for c in bot.commands if c.name not in ("help", "stat", "del", "admin", "config", "activity", "erfolge", "overview", "sync_achievements", "kodex", "kodex_check", "sync_welcome", "base", "basestop")]
     assert len(wired) == len(stats) + 1
 
     await repo.close()
@@ -87,7 +87,7 @@ async def test_register_stat_commands_is_idempotent():
     await register_stat_commands(bot, repo, settings)
 
     stats = await repo.list_stats()
-    wired = [c for c in bot.commands if c.name not in ("help", "stat", "del", "admin", "activity", "erfolge", "overview", "sync_achievements", "kodex", "kodex_check", "sync_welcome", "base", "basestop")]
+    wired = [c for c in bot.commands if c.name not in ("help", "stat", "del", "admin", "config", "activity", "erfolge", "overview", "sync_achievements", "kodex", "kodex_check", "sync_welcome", "base", "basestop")]
     assert len(wired) == len(stats) + 1
 
     await repo.close()
