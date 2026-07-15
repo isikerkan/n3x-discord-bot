@@ -260,3 +260,26 @@ def test_blank_env_string_falls_back_to_default(monkeypatch):
     assert s.timer_overview_message_id == 0
     assert s.allowed_maps.startswith("4-1")
     assert s.gate_rewards.startswith("a:")
+
+
+def test_dotenv_overrides_environment_variables(tmp_path, monkeypatch):
+    """The managed .env must WIN over process env vars — AMP re-injects stale
+    config as env and we can't stop it, so .env is the source of truth."""
+    from n3x_bot.config import Settings
+    envfile = tmp_path / ".env"
+    envfile.write_text(
+        "DISCORD_TOKEN=from_dotenv\n"
+        "TARGET_ROLE_ID=1\nWELCOME_CHANNEL_ID=2\nREMINDER_CHANNEL_ID=3\n"
+        "GATE_STATS_CHANNEL_ID=222\n"
+        "GATE_REWARDS=a:1,b:2\n"
+    )
+    # AMP-style stale injection via process env:
+    monkeypatch.setenv("DISCORD_TOKEN", "from_amp_env")
+    monkeypatch.setenv("GATE_STATS_CHANNEL_ID", "999")
+    monkeypatch.setenv("GATE_REWARDS", "a:9")
+    monkeypatch.setenv("MILESTONE_CHANNEL_ID", "777")  # only in env, not .env
+    s = Settings(_env_file=str(envfile))
+    assert s.discord_token == "from_dotenv"          # .env beats env
+    assert s.gate_stats_channel_id == 222            # .env beats env
+    assert s.gate_rewards_map() == {"a": 1, "b": 2}  # .env beats env
+    assert s.milestone_channel_id == 777             # env-only field still read
