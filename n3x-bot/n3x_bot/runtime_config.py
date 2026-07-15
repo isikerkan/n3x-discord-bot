@@ -1,3 +1,5 @@
+import logging
+
 from n3x_bot.config import (
     Settings,
     parse_allowed_maps,
@@ -5,6 +7,8 @@ from n3x_bot.config import (
     parse_reminder_hm,
     parse_voice_roles,
 )
+
+log = logging.getLogger("N3X-Bot")
 
 OVERRIDABLE_KEYS: frozenset[str] = frozenset({
     "welcome_channel_id", "reminder_channel_id", "gate_input_channel_id",
@@ -38,9 +42,29 @@ class RuntimeConfig:
         return rc
 
     def _int(self, key: str) -> int:
-        if key in self._overrides:
-            return int(self._overrides[key])
+        override = self._overrides.get(key)
+        if override is not None:
+            try:
+                return int(override)
+            except (ValueError, TypeError):
+                log.warning("runtime_config: malformed override %s=%r; "
+                            "falling back to .env value", key, override)
         return getattr(self._settings, key)
+
+    def _derived(self, key: str, parse, fallback):
+        """Resolve a derived getter: parse the override if set, else delegate to
+        Settings. A malformed override must never crash a read-site — on a parse
+        failure log and fall back to the Settings value (the .env base stays
+        strict at startup; only the DB-override boundary is tolerant)."""
+        override = self._overrides.get(key)
+        if override is None:
+            return fallback()
+        try:
+            return parse(override)
+        except (ValueError, TypeError):
+            log.warning("runtime_config: malformed override %s=%r; "
+                        "falling back to .env value", key, override)
+            return fallback()
 
     # ── overridable int channel/role fields ─────────────────────────────────
     @property
@@ -93,21 +117,21 @@ class RuntimeConfig:
 
     # ── overridable derived getters (parse override, else delegate) ──────────
     def gate_rewards_map(self) -> dict[str, int]:
-        v = self._overrides.get("gate_rewards")
-        return parse_gate_rewards(v) if v is not None else self._settings.gate_rewards_map()
+        return self._derived("gate_rewards", parse_gate_rewards,
+                             self._settings.gate_rewards_map)
 
     def voice_role_map(self) -> dict[str, int]:
-        v = self._overrides.get("voice_achievement_roles")
-        return parse_voice_roles(v) if v is not None else self._settings.voice_role_map()
+        return self._derived("voice_achievement_roles", parse_voice_roles,
+                             self._settings.voice_role_map)
 
     @property
     def allowed_maps_list(self) -> list[str]:
-        v = self._overrides.get("allowed_maps")
-        return parse_allowed_maps(v) if v is not None else self._settings.allowed_maps_list
+        return self._derived("allowed_maps", parse_allowed_maps,
+                             lambda: self._settings.allowed_maps_list)
 
     def reminder_hm(self) -> tuple[int, int]:
-        v = self._overrides.get("reminder_time")
-        return parse_reminder_hm(v) if v is not None else self._settings.reminder_hm()
+        return self._derived("reminder_time", parse_reminder_hm,
+                             self._settings.reminder_hm)
 
     # ── non-overridable pass-through (never consults the cache) ──────────────
     @property

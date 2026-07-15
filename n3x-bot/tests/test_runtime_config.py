@@ -174,6 +174,38 @@ async def test_reminder_hm_override_is_parsed():
     assert rc.reminder_hm() == (20, 15)
 
 
+# ── malformed overrides fall back to Settings (never crash a read-site) ──────
+# A bad DB row must not propagate a ValueError to a hot read path — e.g.
+# `gate_input_channel_id` is read on every `on_message`, so one bad row would
+# otherwise break command dispatch server-wide. The resolver logs and falls
+# back to the .env base; the .env base itself still parses strictly at startup.
+
+async def test_malformed_int_override_falls_back_to_settings():
+    from n3x_bot.runtime_config import RuntimeConfig
+    settings = _settings(gate_stats_channel_id=555)
+    rc = RuntimeConfig(settings, {"gate_stats_channel_id": "notanumber"})
+    # no raise; resolves to the Settings value.
+    assert rc.gate_stats_channel_id == settings.gate_stats_channel_id
+    assert rc.gate_stats_channel_id == 555
+
+
+async def test_malformed_gate_rewards_override_falls_back_to_settings():
+    from n3x_bot.runtime_config import RuntimeConfig
+    settings = _settings()  # default 7-gate reward map
+    # "a:notanumber" parses far enough to raise on int(v) -> must fall back.
+    rc = RuntimeConfig(settings, {"gate_rewards": "a:notanumber"})
+    assert rc.gate_rewards_map() == settings.gate_rewards_map()
+
+
+async def test_malformed_reminder_time_override_falls_back_to_settings():
+    from n3x_bot.runtime_config import RuntimeConfig
+    settings = _settings(reminder_time="19:30")
+    # "garbage" has no ':' -> parse_reminder_hm raises on unpack -> fall back.
+    rc = RuntimeConfig(settings, {"reminder_time": "garbage"})
+    assert rc.reminder_hm() == settings.reminder_hm()
+    assert rc.reminder_hm() == (19, 30)
+
+
 # ── non-overridable keys: pass-through, and DB override is IGNORED ───────────
 
 async def test_non_overridable_field_passes_through_to_settings():

@@ -212,7 +212,7 @@ async def flush_voice_times(bot, repo: StatsRepository, now: datetime) -> None:
                     await announce_achievements(bot, settings, member, newly)
                 except Exception:
                     pass
-                await apply_voice_roles(bot, settings, member, newly)
+                await apply_voice_roles(bot, bot.runtime_config, member, newly)
 
 
 async def handle_activity_reaction(bot, repo: StatsRepository, settings: Settings,
