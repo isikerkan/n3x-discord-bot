@@ -27,6 +27,7 @@ _DATA_TABLES = (
     "user_stats", "stat_totals", "target_stats", "stat_last_post",
     "activity_counters", "streak_stats", "night_stats", "achievements",
     "kodex_confirmations", "kodex_messages", "base_timers",
+    "channel_messages",
 )
 
 

@@ -84,6 +84,21 @@ class StatsRepository(ABC):
     async def set_last_post(self, stat_key: str, discord_message_id: int,
                             channel_id: int) -> None: ...
 
+    # channel messages
+    @abstractmethod
+    async def set_channel_message(self, key: str, message_id: int,
+                                  channel_id: int) -> None:
+        """Upsert the (message_id, channel_id) tracked under `key`.
+
+        A NON-FK keyed store for live single-message embeds whose key is not a
+        real `stats` row (e.g. "gate_stats"), so `set_last_post` can't hold it.
+        """
+        ...
+    @abstractmethod
+    async def get_channel_message(self, key: str) -> tuple[int, int] | None:
+        """`(message_id, channel_id)` for `key`, or None if unset. Both ints."""
+        ...
+
     # target tracking
     @abstractmethod
     async def record_target_use(self, target_discord_id: int, stat_key: str) -> int:

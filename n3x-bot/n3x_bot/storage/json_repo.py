@@ -31,7 +31,7 @@ class JsonRepository(StatsRepository):
             "activity_counters": {}, "streak_stats": {}, "night_stats": {},
             "achievements": {},
             "kodex_confirmations": [], "kodex_messages": {},
-            "base_timers": {},
+            "base_timers": {}, "channel_messages": {},
         }
 
     async def connect(self) -> None:
@@ -252,6 +252,15 @@ class JsonRepository(StatsRepository):
             raise KeyError(stat_key)
         self._db["stat_last_post"][str(stat["id"])] = [discord_message_id, channel_id]
         self._flush()
+
+    # ── channel messages ───────────────────────────────────────────────────
+    async def set_channel_message(self, key, message_id, channel_id):
+        self._db["channel_messages"][key] = [message_id, channel_id]
+        self._flush()
+
+    async def get_channel_message(self, key):
+        v = self._db["channel_messages"].get(key)
+        return (v[0], v[1]) if v else None
 
     # ── target tracking ────────────────────────────────────────────────────
     async def record_target_use(self, target_discord_id, stat_key):
@@ -476,6 +485,7 @@ class JsonRepository(StatsRepository):
             "kodex_confirmations": sorted(self._db["kodex_confirmations"]),
             "kodex_messages": copy.deepcopy(self._db["kodex_messages"]),
             "base_timers": copy.deepcopy(self._db["base_timers"]),
+            "channel_messages": copy.deepcopy(self._db["channel_messages"]),
             "seq": {
                 "user": self._max_id(users),
                 "message": self._max_id(messages),
@@ -502,6 +512,8 @@ class JsonRepository(StatsRepository):
         self._db["kodex_messages"] = copy.deepcopy(
             snapshot.get("kodex_messages", {}))
         self._db["base_timers"] = copy.deepcopy(snapshot.get("base_timers", {}))
+        self._db["channel_messages"] = copy.deepcopy(
+            snapshot.get("channel_messages", {}))
         self._db["seq"] = dict(snapshot["seq"])
         self._flush()
 
