@@ -91,10 +91,29 @@ Ordered by value-to-effort. Each phase is independently shippable via the TDD pi
 Deliberately NOT recommended: cramming achievement lists into scalar GUI fields (C can't
 express them), or a custom AMP module/plugin UI (heavy, out of scope).
 
-## 5. Open decisions for the user
-- Start with **Phase 1** (config drift — quick native win) as the v1, or go straight for
-  **Phase 2** (editable narrative copy), or scope **Phase 3** (achievements-as-content)
-  now despite the coupling cost?
-- Source-of-truth for any content file: file-authoritative (re-seed DB from file on load)
-  vs DB-authoritative (file is a one-time import)? Recommend file-authoritative for
-  narrative copy (no counters in it), DB-authoritative stays for stats (has counters).
+## 5. Decision (user, 2026-07-15)
+
+**Chosen direction: DB-backed dynamic content ("objects"), not static files.** Progressively
+remove hardcoded content and serve **list elements + dynamic values from the database as
+objects**, edited via a GUI/console admin surface — extending the existing `stats`/`messages`
+CRUD model to the rest of the content. This picks **DB-authoritative** as the single source
+of truth and effectively commits to the fuller version of Approach A/B (DB + editing UI),
+NOT the flat-file `content.yaml` variant. Flat files are demoted to at-most an import path.
+
+Implications / sequence:
+- **Phase 1 (config-drift GUI scalars) — DONE** (PR #23). Still the right home for the
+  handful of scalar routing values (channel/role IDs, timezone) that aren't list content.
+- **Next: command-list channel** (roadmap §B #8) — build it DB/registry-driven from the start.
+- **Then: de-hardcode the content objects** — achievement definitions first (frozen dataclasses
+  → DB table with tier colour decoupled into the row, reconciled with unlocks +
+  `!sync_achievements`), then narrative copy (Kodex/welcome/reminder), then milestone tiers.
+- **Editing surface**: extend `!admin`/`/admin` CRUD (already live for stats/messages) to the
+  new tables; optionally add the AMP Console-stdin bridge (Approach B) so the same helpers are
+  reachable from the AMP Console without Discord. AMP GUI scalar fields (Approach C) stay only
+  for scalar config, not for the list/object content.
+
+Open sub-decisions to settle when scoping the de-hardcode work:
+- Achievement objects: how to keep the card-colour / voice-role-key coupling working once
+  titles/ids are editable (store colour + role-binding on the row; relax the count-pinned tests).
+- Seeding: ship code defaults that seed the DB once (idempotent, like `LEGACY_STATS` today) so a
+  fresh instance still boots with the full content, then let admins edit live.
