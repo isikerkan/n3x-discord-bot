@@ -27,6 +27,7 @@ from n3x_bot.achievements import (
 )
 from n3x_bot.cards import announce_achievements
 from n3x_bot.config import Settings
+from n3x_bot.config_commands import register_config_commands
 from n3x_bot.format import format_number
 from n3x_bot.gates import (
     build_gate_embed, parse_gate_message, changed_records, GATE_NAMES,
@@ -110,6 +111,7 @@ def build_bot(settings: Settings, repo: StatsRepository) -> commands.Bot:
     _wire_events(bot, settings, repo)
     register_gate_commands(bot, repo, settings)
     register_admin_commands(bot, repo, settings)
+    register_config_commands(bot, repo, settings)
     register_activity(bot, repo, settings)
     register_achievement_commands(bot, repo, settings)
     register_overview_and_sync_commands(bot, repo, settings)
