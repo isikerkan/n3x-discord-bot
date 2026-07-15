@@ -295,6 +295,51 @@ async def test_update_gate_chart_noop_when_channel_missing():
     await repo.close()
 
 
+# ══ 8b. update_gate_chart: never raises — swallows send/render failures ════
+
+async def test_update_gate_chart_swallows_send_failure_and_stores_nothing():
+    # Contract: "best-effort; never raises." A discord.Forbidden/HTTPException
+    # from channel.send (no perms / file too big) must NOT propagate and must
+    # leave nothing persisted.
+    from n3x_bot.bot import update_gate_chart
+    repo = await _seeded_repo()
+    settings = _settings(gate_chart_channel_id=CHART_CHANNEL)
+    bot = build_bot(settings, repo)
+    channel, _ = _fake_chart_channel()
+    channel.send = AsyncMock(side_effect=discord.Forbidden(MagicMock(status=403),
+                                                           "no perms"))
+    bot.get_channel = MagicMock(return_value=channel)
+
+    await update_gate_chart(bot, repo, settings, "a")  # must not raise
+
+    assert await repo.get_channel_message("gate_chart_a") is None
+
+    await repo.close()
+
+
+async def test_update_gate_chart_swallows_render_failure_and_stores_nothing(monkeypatch):
+    # A render error (e.g. matplotlib/font-cache blowup) must also be swallowed.
+    from n3x_bot import bot as botmod
+    from n3x_bot.bot import update_gate_chart
+    repo = await _seeded_repo()
+    settings = _settings(gate_chart_channel_id=CHART_CHANNEL)
+    bot = build_bot(settings, repo)
+    channel, _ = _fake_chart_channel()
+    bot.get_channel = MagicMock(return_value=channel)
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("render boom")
+
+    monkeypatch.setattr(botmod, "render_gate_history_chart", _boom)
+
+    await update_gate_chart(bot, repo, settings, "a")  # must not raise
+
+    channel.send.assert_not_called()
+    assert await repo.get_channel_message("gate_chart_a") is None
+
+    await repo.close()
+
+
 # ══ 9. update_all_gate_charts: one chart per gate type ═════════════════════
 
 async def test_update_all_gate_charts_posts_and_stores_for_every_gate():
@@ -405,6 +450,44 @@ async def test_kappa_submit_refreshes_gate_chart_k():
     await view.on_submit(_fake_interaction(7))
 
     assert await repo.get_channel_message("gate_chart_k") is not None
+
+    await repo.close()
+
+
+async def test_kappa_submit_processes_achievements_even_when_chart_fails(monkeypatch):
+    # The kappa chart refresh has its OWN try/except (mirroring the a/b/c and
+    # d/e/z sites): a chart failure must NOT skip the kappa entry store or the
+    # achievement award/announcement that follow it.
+    from n3x_bot import bot as botmod
+    from n3x_bot import achievements as achmod
+    from n3x_bot.gates import KappaConfirmView
+    repo = await _flatfile_repo()
+    settings = _settings(gate_input_channel_id=777, gate_chart_channel_id=CHART_CHANNEL)
+    bot = build_bot(settings, repo)
+    channel, _ = _fake_chart_channel()
+    bot.get_channel = MagicMock(return_value=channel)
+
+    chart = AsyncMock(side_effect=RuntimeError("boom"))
+    monkeypatch.setattr(botmod, "update_gate_chart", chart, raising=False)
+
+    checked = []
+    real_check = achmod.check_achievements
+
+    async def _tracking_check(_repo, user_id, category):
+        checked.append(category)
+        return await real_check(_repo, user_id, category)
+
+    monkeypatch.setattr(achmod, "check_achievements", _tracking_check)
+
+    view = KappaConfirmView(repo, bot, settings, cost=500, user_id=7,
+                            username="Erkan")
+
+    await view.on_submit(_fake_interaction(7))  # must not raise
+
+    assert await repo.list_gate_costs("k") == [500]  # kappa entry survived
+    chart.assert_awaited()  # chart refresh was attempted
+    # achievements were still processed despite the chart failure
+    assert set(checked) == {"gate_k", "gate_total", "gate_cost_total"}
 
     await repo.close()
 

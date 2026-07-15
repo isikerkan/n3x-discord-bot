@@ -235,7 +235,10 @@ class KappaConfirmView(discord.ui.View):
                 await _announce_records(self.bot, self.settings, "k",
                                         changed_records(before, after), after)
                 await update_gate_stats_embed(self.bot, self.repo, self.settings)
-                await update_gate_chart(self.bot, self.repo, self.settings, "k")
+                try:
+                    await update_gate_chart(self.bot, self.repo, self.settings, "k")
+                except Exception:
+                    pass
                 newly = (await check_achievements(self.repo, self.user_id, "gate_k")
                          + await check_achievements(self.repo, self.user_id, "gate_total")
                          + await check_achievements(self.repo, self.user_id, "gate_cost_total"))

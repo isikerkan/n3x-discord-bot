@@ -401,24 +401,27 @@ async def update_gate_chart(bot, repo: StatsRepository, settings: Settings,
     channel = bot.get_channel(bot.runtime_config.gate_chart_channel_id)
     if channel is None:
         return
-    png = render_gate_history_chart(
-        gate_type, await repo.list_gate_entries(gate_type), now_local(settings))
-    filename = f"verlauf_{gate_type}.png"
-    key = f"gate_chart_{gate_type}"
+    try:
+        png = render_gate_history_chart(
+            gate_type, await repo.list_gate_entries(gate_type), now_local(settings))
+        filename = f"verlauf_{gate_type}.png"
+        key = f"gate_chart_{gate_type}"
 
-    stored = await repo.get_channel_message(key)
-    if stored is not None:
-        try:
-            msg = await channel.fetch_message(stored[0])
-            await msg.edit(attachments=[discord.File(BytesIO(png),
-                                                     filename=filename)])
-            return
-        except Exception:
-            pass
+        stored = await repo.get_channel_message(key)
+        if stored is not None:
+            try:
+                msg = await channel.fetch_message(stored[0])
+                await msg.edit(attachments=[discord.File(BytesIO(png),
+                                                         filename=filename)])
+                return
+            except Exception:
+                pass
 
-    new_msg = await channel.send(file=discord.File(BytesIO(png),
-                                                   filename=filename))
-    await repo.set_channel_message(key, new_msg.id, channel.id)
+        new_msg = await channel.send(file=discord.File(BytesIO(png),
+                                                       filename=filename))
+        await repo.set_channel_message(key, new_msg.id, channel.id)
+    except Exception:
+        log.exception("gate-chart update failed")
 
 
 async def update_all_gate_charts(bot, repo: StatsRepository,
