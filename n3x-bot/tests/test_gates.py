@@ -101,9 +101,10 @@ def test_gate_names_include_ezk():
     assert GATE_NAMES["k"] == "Kappa Gate"
 
 
-# ── build_gate_embed: Epsilon / Zeta / Kappa fields (now WITH reward line) ───
-# BEHAVIOR FLIP: e/z/k previously carried no Belohnung/Gewinn; they now render
-# Belohnung + Gewinn (uniform with a/b/c) ALONGSIDE their drop rate line(s).
+# ── build_gate_embed: Epsilon / Zeta / Kappa fields (reward line, NO Gewinn) ─
+# BEHAVIOR FLIP (gate-view-tweaks): d/e/z/k keep only their Belohnung line and
+# DROP the Gewinn line entirely. a/b/c are UNCHANGED (Belohnung + Gewinn). The
+# per-item drop rate line(s) still render alongside Belohnung.
 
 def _field_by_name(embed, needle):
     for f in embed.fields:
@@ -123,9 +124,9 @@ def test_build_gate_embed_renders_epsilon_field_with_lf4_rate_and_reward():
     assert field is not None
     assert "🟦 Epsilon Gate" == field.name
     assert "LF4: 25.0 %" in field.value          # drop line still present
-    assert "Belohnung" in field.value            # e/z/k now carry a reward
+    assert "Belohnung" in field.value            # e/z/k keep their reward line
     assert format_number(46719) in field.value   # from rewards.get("e")
-    assert "Gewinn" in field.value
+    assert "Gewinn" not in field.value           # FLIP: Gewinn dropped for e
 
 
 def test_build_gate_embed_renders_zeta_field_with_havoc_rate_and_reward():
@@ -141,7 +142,7 @@ def test_build_gate_embed_renders_zeta_field_with_havoc_rate_and_reward():
     assert "Havoc: 50.0 %" in field.value
     assert "Belohnung" in field.value
     assert format_number(66661) in field.value
-    assert "Gewinn" in field.value
+    assert "Gewinn" not in field.value           # FLIP: Gewinn dropped for z
 
 
 def test_build_gate_embed_renders_kappa_field_with_two_rates_and_reward():
@@ -159,7 +160,7 @@ def test_build_gate_embed_renders_kappa_field_with_two_rates_and_reward():
     assert "LF4-U: 33.3 %" in field.value
     assert "Belohnung" in field.value
     assert format_number(62955) in field.value
-    assert "Gewinn" in field.value
+    assert "Gewinn" not in field.value           # FLIP: Gewinn dropped for k
 
 
 def test_build_gate_embed_epsilon_belohnung_value_uses_rewards_get():
@@ -172,25 +173,29 @@ def test_build_gate_embed_epsilon_belohnung_value_uses_rewards_get():
     assert f"Belohnung: {format_number(46719)}" in field.value
 
 
-def test_build_gate_embed_epsilon_profit_green_when_reward_at_or_above_avg():
-    # reward 46719 >= avg 40000 -> Gewinn positive -> 🟢
+def test_build_gate_embed_epsilon_has_no_gewinn_line_nor_profit_color():
+    # FLIP: Epsilon drops Gewinn entirely — no Gewinn label, no 🟢/🔴 color,
+    # even when reward (46719) is above avg (40000).
     embed = build_gate_embed(
         {}, {"e": 46719}, "05.07.2026 12:00",
         epsilon={"count": 4, "avg": 40000, "rates": {"lf4": 25.0}})
     field = _field_by_name(embed, "Epsilon Gate")
-    assert "Gewinn" in field.value
-    assert "🟢" in field.value
+    assert "Belohnung" in field.value
+    assert "Gewinn" not in field.value
+    assert "🟢" not in field.value
     assert "🔴" not in field.value
 
 
-def test_build_gate_embed_zeta_profit_red_when_avg_above_reward():
-    # avg 90000 > reward 66661 -> Gewinn negative -> 🔴
+def test_build_gate_embed_zeta_has_no_gewinn_line_nor_profit_color():
+    # FLIP: Zeta drops Gewinn entirely — no Gewinn label, no 🟢/🔴 color, even
+    # when avg (90000) is above reward (66661).
     embed = build_gate_embed(
         {}, {"z": 66661}, "05.07.2026 12:00",
         zeta={"count": 2, "avg": 90000, "rates": {"havoc": 50.0}})
     field = _field_by_name(embed, "Zeta Gate")
-    assert "Gewinn" in field.value
-    assert "🔴" in field.value
+    assert "Belohnung" in field.value
+    assert "Gewinn" not in field.value
+    assert "🔴" not in field.value
     assert "🟢" not in field.value
 
 
@@ -207,8 +212,8 @@ def test_build_gate_embed_delta_field_still_carries_reward():
     assert "Belohnung" in field.value
 
 
-def test_build_gate_embed_delta_now_shows_gewinn_alongside_reward_and_laser():
-    # BEHAVIOR FLIP: Delta previously had Belohnung + Laser but NO Gewinn line.
+def test_build_gate_embed_delta_shows_reward_and_laser_but_no_gewinn():
+    # FLIP: Delta keeps Belohnung + Laser but DROPS the Gewinn line.
     totals = {}
     rewards = {"d": 75361}
     delta = {"count": 2, "avg": 75000, "laser_rate": 50.0}
@@ -217,18 +222,19 @@ def test_build_gate_embed_delta_now_shows_gewinn_alongside_reward_and_laser():
 
     field = _field_by_name(embed, "Delta Gate")
     assert "Belohnung" in field.value
-    assert "Gewinn" in field.value       # newly added
+    assert "Gewinn" not in field.value       # FLIP: Gewinn dropped for d
     assert "Laser: 50.0 %" in field.value
 
 
-def test_build_gate_embed_delta_profit_green_when_reward_above_avg():
-    # reward 75361 >= avg 70000 -> 🟢
+def test_build_gate_embed_delta_has_no_profit_color_even_when_reward_above_avg():
+    # FLIP: reward 75361 >= avg 70000 previously drew 🟢; Delta now has no
+    # Gewinn line at all, so neither color emoji appears.
     embed = build_gate_embed(
         {}, {"d": 75361}, "05.07.2026 12:00",
         delta={"count": 2, "avg": 70000, "laser_rate": 50.0})
     field = _field_by_name(embed, "Delta Gate")
-    assert "Gewinn" in field.value
-    assert "🟢" in field.value
+    assert "Gewinn" not in field.value
+    assert "🟢" not in field.value
     assert "🔴" not in field.value
 
 
@@ -342,9 +348,8 @@ def test_build_gate_embed_abc_fields_have_reward_and_profit_no_drops():
         assert "%" not in field.value  # a/b/c carry no drop lines
 
 
-def test_build_gate_embed_ezk_fields_have_drops_and_reward():
-    # BEHAVIOR FLIP: e/z/k now carry Belohnung + Gewinn (uniform with a/b/c)
-    # IN ADDITION to their drop rate line(s).
+def test_build_gate_embed_ezk_fields_have_drops_and_reward_but_no_gewinn():
+    # FLIP: e/z/k carry Belohnung + their drop rate line(s) but NO Gewinn line.
     embed = _full_embed()
     for needle in ("Epsilon Gate", "Zeta Gate", "Kappa Gate"):
         field = _field_by_name(embed, needle)
@@ -352,15 +357,15 @@ def test_build_gate_embed_ezk_fields_have_drops_and_reward():
         assert "Läufe" in field.value
         assert "Ø Kosten" in field.value
         assert "Belohnung" in field.value
-        assert "Gewinn" in field.value
+        assert "Gewinn" not in field.value  # FLIP: Gewinn dropped for e/z/k
         assert "%" in field.value  # drop line(s) still present too
 
 
-def test_build_gate_embed_delta_shows_reward_gewinn_and_laser_drop():
+def test_build_gate_embed_delta_shows_reward_and_laser_drop_no_gewinn():
     field = _field_by_name(_full_embed(), "Delta Gate")
     assert field.name == "💎 Delta Gate"
     assert "Belohnung" in field.value
-    assert "Gewinn" in field.value  # newly added alongside Belohnung + Laser
+    assert "Gewinn" not in field.value  # FLIP: Gewinn dropped for d
     assert "Laser: 50.0 %" in field.value
 
 
@@ -378,6 +383,62 @@ def test_build_gate_embed_kappa_shows_both_hercules_and_lf4u_drop_labels():
     field = _field_by_name(_full_embed(), "Kappa Gate")
     assert "Hercules: 66.7 %" in field.value
     assert "LF4-U: 33.3 %" in field.value
+
+
+# ── build_gate_embed: e/z/k ALWAYS show their known drop row(s) ──────────────
+# BUG FIX (gate-view-tweaks): _drop_rate_lines iterates stats["rates"], which is
+# EMPTY when a gate has no entries (or no drops observed), so e/z/k rendered no
+# drop row at all until data existed. Each gate must ALWAYS list its known
+# item(s) at 0.0 % — like Delta always shows its Laser row. Known items:
+# Epsilon → LF4; Zeta → Havoc; Kappa → Hercules AND LF4-U. The rate for an item
+# is stats["rates"].get(item, 0.0) (0.0 when absent).
+
+_EMPTY_DROP_STATS = {"count": 0, "avg": 0, "rates": {}}
+
+
+def test_build_gate_embed_epsilon_always_shows_lf4_row_at_zero_runs():
+    # No entries yet (count 0, rates {}) -> LF4 row STILL present at 0.0 %.
+    embed = build_gate_embed(
+        {}, {"e": 0}, "05.07.2026 12:00", epsilon=dict(_EMPTY_DROP_STATS))
+    field = _field_by_name(embed, "Epsilon Gate")
+    assert field is not None
+    assert "LF4: 0.0 %" in field.value
+
+
+def test_build_gate_embed_zeta_always_shows_havoc_row_at_zero_runs():
+    embed = build_gate_embed(
+        {}, {"z": 0}, "05.07.2026 12:00", zeta=dict(_EMPTY_DROP_STATS))
+    field = _field_by_name(embed, "Zeta Gate")
+    assert field is not None
+    assert "Havoc: 0.0 %" in field.value
+
+
+def test_build_gate_embed_kappa_always_shows_both_rows_at_zero_runs():
+    embed = build_gate_embed(
+        {}, {"k": 0}, "05.07.2026 12:00", kappa=dict(_EMPTY_DROP_STATS))
+    field = _field_by_name(embed, "Kappa Gate")
+    assert field is not None
+    assert "Hercules: 0.0 %" in field.value
+    assert "LF4-U: 0.0 %" in field.value
+
+
+def test_build_gate_embed_epsilon_lf4_row_uses_rates_get_when_data_present():
+    embed = build_gate_embed(
+        {}, {"e": 46719}, "05.07.2026 12:00",
+        epsilon={"count": 5, "avg": 46892, "rates": {"lf4": 40.0}})
+    field = _field_by_name(embed, "Epsilon Gate")
+    assert "LF4: 40.0 %" in field.value
+
+
+def test_build_gate_embed_kappa_shows_zero_for_missing_item_with_partial_rates():
+    # hercules observed (50.0 %), lf4u absent from rates -> LF4-U falls back to
+    # 0.0 % rather than disappearing.
+    embed = build_gate_embed(
+        {}, {"k": 62955}, "05.07.2026 12:00",
+        kappa={"count": 2, "avg": 500, "rates": {"hercules": 50.0}})
+    field = _field_by_name(embed, "Kappa Gate")
+    assert "Hercules: 50.0 %" in field.value
+    assert "LF4-U: 0.0 %" in field.value
 
 
 def test_build_gate_embed_profit_is_green_when_reward_at_or_above_avg():
