@@ -4,6 +4,7 @@ Parsing (`parse_gate_message`) is Discord-free and unit-testable in
 isolation; only `build_gate_embed` touches `discord.Embed`.
 """
 import re
+from datetime import date, datetime
 
 import discord
 
@@ -44,6 +45,21 @@ def parse_gate_message(content: str) -> tuple[str, int] | None:
     except ValueError:
         return None
     return gate_type, cost
+
+
+def parse_de_date(s: str) -> date | None:
+    """Parse a German `TT.MM.JJJJ` or ISO `JJJJ-MM-TT` date string.
+
+    Returns the first format that parses as a `date`, else None (junk and
+    empty strings yield None, never raises).
+    """
+    s = s.strip()
+    for fmt in ("%d.%m.%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    return None
 
 
 def changed_records(before: dict | None, after: dict) -> set[str]:

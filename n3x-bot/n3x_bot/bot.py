@@ -1,6 +1,8 @@
 import asyncio
 import logging
 from datetime import datetime, time
+from io import BytesIO
+from zoneinfo import ZoneInfo
 
 import discord
 from discord.ext import commands, tasks
@@ -29,9 +31,10 @@ from n3x_bot.cards import announce_achievements
 from n3x_bot.config import Settings
 from n3x_bot.config_commands import register_config_commands
 from n3x_bot.format import format_number
+from n3x_bot.charts import render_gate_history_chart
 from n3x_bot.gates import (
     build_gate_embed, parse_gate_message, changed_records, GATE_NAMES,
-    KappaConfirmView,
+    KappaConfirmView, parse_de_date,
 )
 from n3x_bot.kodex import (
     register_kodex_commands, send_kodex_dm, handle_kodex_confirmation,
@@ -434,6 +437,45 @@ def register_gate_commands(bot, repo: StatsRepository, settings: Settings):
         async def _del_cmd(ctx, gate_type: str, index: int):
             await _handle_gate_del(ctx, bot, repo, settings, gate_type, index)
         bot.add_command(commands.Command(_del_cmd, name="del"))
+
+    if bot.get_command("gate") is None:
+        @bot.group(name="gate", invoke_without_command=True)
+        async def gate_group(ctx):
+            await ctx.send("Nutze `!gate verlauf <gate> [von] [bis]`.",
+                           delete_after=5)
+
+        @gate_group.command(name="verlauf")
+        async def verlauf(ctx, gate: str, von: str = None, bis: str = None):
+            gtype = gate.lower()
+            if gtype not in GATE_TYPES:
+                await ctx.send(
+                    "Ungültiger Gate-Typ. Bitte nutze a, b, c, d, e, z oder k.",
+                    delete_after=5)
+                return
+            von_d = bis_d = None
+            for raw, is_von in ((von, True), (bis, False)):
+                if raw is None:
+                    continue
+                parsed = parse_de_date(raw)
+                if parsed is None:
+                    await ctx.send(
+                        "❌ Ungültiges Datum. Nutze TT.MM.JJJJ oder JJJJ-MM-TT.",
+                        delete_after=5)
+                    return
+                if is_von:
+                    von_d = parsed
+                else:
+                    bis_d = parsed
+            tz = ZoneInfo(settings.timezone)
+            since = (datetime.combine(von_d, time(0, 0, 0), tzinfo=tz)
+                     if von_d is not None else None)
+            until = (datetime.combine(bis_d, time(23, 59, 59), tzinfo=tz)
+                     if bis_d is not None else None)
+            entries = await repo.list_gate_entries(gtype, since, until)
+            png = render_gate_history_chart(gtype, entries,
+                                            now_local(settings), von_d, bis_d)
+            await ctx.send(file=discord.File(BytesIO(png),
+                                             filename=f"verlauf_{gtype}.png"))
 
 
 async def handle_gate_input_message(bot, repo: StatsRepository, settings: Settings, message):

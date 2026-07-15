@@ -196,6 +196,21 @@ class StatsRepository(ABC):
     async def user_gate_cost_total(self, discord_id: int) -> int:
         """Sum of `cost` over that user's `gate_entries` rows (0 if none)."""
         ...
+    @abstractmethod
+    async def list_gate_entries(self, gate_type: str,
+                                since: datetime | None = None,
+                                until: datetime | None = None) -> list[dict]:
+        """Timestamped gate-history read view backing the `!gate verlauf` chart.
+
+        Returns `{"cost": int, "created_at": tz-aware datetime,
+        "drops": dict[str, bool]}` for each `gate_type` entry, ordered by
+        `created_at` ASCENDING. `since`/`until` are an INCLUSIVE tz-aware
+        filter over `created_at`. `drops` reuses the generalized drop read
+        (d->{"laser": bool}, e->{"lf4": bool}, z->{"havoc": bool},
+        k->{"hercules": bool, "lf4u": bool}, a/b/c->{}). READ VIEW only:
+        NOT part of export_all/import_all/clear.
+        """
+        ...
 
     # activity
     @abstractmethod
