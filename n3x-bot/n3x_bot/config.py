@@ -38,12 +38,36 @@ class Settings(BaseSettings):
     timer_overview_message_id: int = 0
     allowed_maps: str = "4-1,4-2,4-3,4-4,1-5,1-6,1-7,2-5,2-6,2-7,3-5,3-6,3-7"
 
+    @model_validator(mode="before")
+    @classmethod
+    def _blank_env_to_default(cls, data):
+        # AMP injects an environment variable for every GUI config field; a
+        # field the operator left unset arrives as an empty string "". Drop
+        # empty/whitespace-only string inputs so the field's declared default
+        # applies instead of an invalid empty value that would fail validation
+        # (e.g. TIMEZONE="" -> ZoneInfo("") -> crash on startup, bricking the
+        # whole instance). Required fields left blank still fail (as they must).
+        if isinstance(data, dict):
+            return {k: v for k, v in data.items()
+                    if not (isinstance(v, str) and v.strip() == "")}
+        return data
+
+    # Default sqlite location — kept under data/ so it survives AMP git-pull
+    # updates (which force-reset the tracked tree but leave data/ alone).
+    _DEFAULT_SQLITE_URL = "sqlite+aiosqlite:///data/n3x.db"
+
     @model_validator(mode="after")
     def _require_db_url(self) -> "Settings":
-        if self.storage_backend in ("sqlite", "postgres") and not self.database_url:
-            raise ValueError(
-                f"database_url is required for storage_backend={self.storage_backend}"
-            )
+        if not self.database_url:
+            if self.storage_backend == "sqlite":
+                # Selecting sqlite without a DATABASE_URL "just works": auto-fill
+                # a sensible local file URL instead of failing to start. Postgres
+                # can't be guessed (host/credentials), so it stays required.
+                self.database_url = self._DEFAULT_SQLITE_URL
+            elif self.storage_backend == "postgres":
+                raise ValueError(
+                    "database_url is required for storage_backend=postgres"
+                )
         return self
 
     @model_validator(mode="after")

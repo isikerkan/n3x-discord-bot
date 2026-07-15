@@ -20,9 +20,22 @@ def test_defaults_flatfile():
     assert s.reminder_hm() == (19, 30)
 
 
-def test_sqlite_requires_database_url():
+def test_sqlite_without_url_auto_derives_default():
+    # Selecting sqlite without a DATABASE_URL must not crash — it auto-fills a
+    # sensible local file URL under data/ (survives AMP updates).
+    s = Settings(**BASE, storage_backend="sqlite")
+    assert s.database_url == "sqlite+aiosqlite:///data/n3x.db"
+
+
+def test_sqlite_respects_explicit_url():
+    s = Settings(**BASE, storage_backend="sqlite",
+                 database_url="sqlite+aiosqlite:///data/custom.db")
+    assert s.database_url.endswith("custom.db")
+
+
+def test_postgres_requires_database_url():
     with pytest.raises(ValidationError):
-        Settings(**BASE, storage_backend="sqlite")
+        Settings(**BASE, storage_backend="postgres")
 
 
 def test_postgres_with_url_ok():
@@ -187,3 +200,28 @@ def test_allowed_maps_read_from_env(monkeypatch):
         _env_file=None,
     )
     assert s.allowed_maps_list == ["4-1", "1-5"]
+
+
+def test_blank_env_string_falls_back_to_default(monkeypatch):
+    """AMP injects an env var for every GUI field; an unset field arrives as
+    "". Empty strings must fall back to the field default, not crash (a bad
+    TIMEZONE="" previously bricked startup via ZoneInfo(""))."""
+    from n3x_bot.config import Settings
+    for k in ("DISCORD_TOKEN", "TARGET_ROLE_ID", "WELCOME_CHANNEL_ID",
+              "REMINDER_CHANNEL_ID", "TIMEZONE", "ALLOWED_MAPS",
+              "TIMER_OVERVIEW_MESSAGE_ID", "GATE_REWARDS"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("DISCORD_TOKEN", "x")
+    monkeypatch.setenv("TARGET_ROLE_ID", "1")
+    monkeypatch.setenv("WELCOME_CHANNEL_ID", "2")
+    monkeypatch.setenv("REMINDER_CHANNEL_ID", "3")
+    # unset GUI fields, injected empty by AMP:
+    monkeypatch.setenv("TIMEZONE", "")
+    monkeypatch.setenv("ALLOWED_MAPS", "")
+    monkeypatch.setenv("TIMER_OVERVIEW_MESSAGE_ID", "")
+    monkeypatch.setenv("GATE_REWARDS", "")
+    s = Settings(_env_file=None)
+    assert s.timezone == "Europe/Berlin"
+    assert s.timer_overview_message_id == 0
+    assert s.allowed_maps.startswith("4-1")
+    assert s.gate_rewards.startswith("a:")
