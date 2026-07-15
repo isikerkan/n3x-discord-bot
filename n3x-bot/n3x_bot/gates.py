@@ -22,6 +22,8 @@ _FIELD_NAMES = {"a": "🅰 Alpha Gate", "b": "🅱 Beta Gate", "c": "🇨 Gamma 
 _DROP_LABELS = {"laser": "Laser", "lf4": "LF4", "havoc": "Havoc",
                 "hercules": "Hercules", "lf4u": "LF4-U"}
 
+_GATE_DROP_ITEMS = {"e": ["lf4"], "z": ["havoc"], "k": ["hercules", "lf4u"]}
+
 _ZWSP = "​"
 
 
@@ -60,9 +62,13 @@ def changed_records(before: dict | None, after: dict) -> set[str]:
     return out
 
 
-def _drop_rate_lines(stats: dict) -> str:
-    return "".join(f"\n{_DROP_LABELS.get(item, item)}: {rate:.1f} %"
-                   for item, rate in stats["rates"].items())
+def _drop_rate_lines(gate_type: str, stats: dict) -> str:
+    return "".join(f"\n{_DROP_LABELS[item]}: {stats['rates'].get(item, 0.0):.1f} %"
+                   for item in _GATE_DROP_ITEMS[gate_type])
+
+
+def _belohnung_line(reward: int) -> str:
+    return f"Belohnung: {format_number(reward)}"
 
 
 def _reward_lines(reward: int, avg: int, count: int) -> str:
@@ -100,7 +106,7 @@ def build_gate_embed(totals: dict, rewards: dict, now_str: str,
             name=_FIELD_NAMES["d"],
             value=(f"Läufe: {delta['count']}\n"
                    f"Ø Kosten: {format_number(delta['avg'])}\n"
-                   f"{_reward_lines(rewards.get('d', 0), delta['avg'], delta['count'])}\n"
+                   f"{_belohnung_line(rewards.get('d', 0))}\n"
                    f"Laser: {delta['laser_rate']:.1f} %"),
             inline=True)
     if epsilon is not None:
@@ -108,8 +114,8 @@ def build_gate_embed(totals: dict, rewards: dict, now_str: str,
             name=_FIELD_NAMES["e"],
             value=(f"Läufe: {epsilon['count']}\n"
                    f"Ø Kosten: {format_number(epsilon['avg'])}\n"
-                   f"{_reward_lines(rewards.get('e', 0), epsilon['avg'], epsilon['count'])}"
-                   f"{_drop_rate_lines(epsilon)}"),
+                   f"{_belohnung_line(rewards.get('e', 0))}"
+                   f"{_drop_rate_lines('e', epsilon)}"),
             inline=True)
     if zeta is not None or kappa is not None:
         embed.add_field(name=_ZWSP, value=_ZWSP, inline=True)
@@ -119,8 +125,8 @@ def build_gate_embed(totals: dict, rewards: dict, now_str: str,
                 name=_FIELD_NAMES[gate_type],
                 value=(f"Läufe: {stats['count']}\n"
                        f"Ø Kosten: {format_number(stats['avg'])}\n"
-                       f"{_reward_lines(rewards.get(gate_type, 0), stats['avg'], stats['count'])}"
-                       f"{_drop_rate_lines(stats)}"),
+                       f"{_belohnung_line(rewards.get(gate_type, 0))}"
+                       f"{_drop_rate_lines(gate_type, stats)}"),
                 inline=True)
     embed.set_footer(text=f"Letztes Update: {now_str}")
     return embed
