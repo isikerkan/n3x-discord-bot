@@ -17,7 +17,8 @@ class Achievement:
     secret: bool
 
 
-GATE_NAMES = {"a": "Alpha", "b": "Beta", "c": "Gamma", "d": "Delta"}
+GATE_NAMES = {"a": "Alpha", "b": "Beta", "c": "Gamma", "d": "Delta",
+              "e": "Epsilon", "z": "Zeta", "k": "Kappa"}
 MILESTONE_LEVELS = {5: "Bronze", 10: "Silber", 25: "Gold", 50: "Platin",
                     100: "Diamant", 250: "Master", 500: "Grandmaster",
                     1000: "Gott"}
@@ -28,7 +29,7 @@ def _build_achievements() -> list[Achievement]:
 
     # The "d"/Delta gate tiers are live: reaction-confirmed delta entries feed
     # the gate_d metric, so all 8 d_* achievements can unlock (!erfolge 59/59).
-    for gtype in ("a", "b", "c", "d"):
+    for gtype in ("a", "b", "c", "d", "e", "z", "k"):
         for thr, level in MILESTONE_LEVELS.items():
             out.append(Achievement(
                 id=f"{gtype}_{thr}", category="gate", metric=f"gate_{gtype}",
@@ -108,7 +109,7 @@ def _build_achievements() -> list[Achievement]:
 
 ACHIEVEMENTS: list[Achievement] = _build_achievements()
 # Derived from the definitions so it stays correct when achievements are
-# added/removed (currently 59). The two tests pinning 59 still hold.
+# added/removed (currently 83).
 TOTAL_ACHIEVEMENTS: int = len(ACHIEVEMENTS)
 
 
@@ -128,7 +129,8 @@ async def user_metric_value(repo: StatsRepository, discord_id: int,
     if metric == "night":
         r = await repo.get_night(discord_id)
         return r["night_count"] if r else 0
-    if metric in ("gate_a", "gate_b", "gate_c", "gate_d"):
+    if metric in ("gate_a", "gate_b", "gate_c", "gate_d",
+                  "gate_e", "gate_z", "gate_k"):
         counts = await repo.user_gate_counts(discord_id)
         return counts.get(metric.split("_")[1], 0)
     if metric == "gate_total":

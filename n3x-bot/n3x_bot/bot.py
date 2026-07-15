@@ -30,13 +30,14 @@ from n3x_bot.config import Settings
 from n3x_bot.format import format_number
 from n3x_bot.gates import (
     build_gate_embed, parse_gate_message, changed_records, GATE_NAMES,
+    KappaConfirmView,
 )
 from n3x_bot.kodex import (
     register_kodex_commands, send_kodex_dm, handle_kodex_confirmation,
 )
 from n3x_bot.models import render_output
 from n3x_bot.nicknames import enforce_nick
-from n3x_bot.storage.base import StatsRepository
+from n3x_bot.storage.base import GATE_TYPES, StatsRepository
 from n3x_bot.timers import register_timer_commands, start_timer_overview_loop
 from n3x_bot.welcome import register_welcome_commands, send_welcome_card
 
@@ -279,8 +280,12 @@ async def update_gate_stats_embed(bot, repo: StatsRepository, settings: Settings
     totals = await repo.gate_totals()
     rewards = settings.gate_rewards_map()
     delta = await repo.delta_stats()
+    epsilon = await repo.gate_drop_stats("e")
+    zeta = await repo.gate_drop_stats("z")
+    kappa = await repo.gate_drop_stats("k")
     now_str = datetime.now().strftime("%d.%m.%Y %H:%M")
-    embed = build_gate_embed(totals, rewards, now_str, delta)
+    embed = build_gate_embed(totals, rewards, now_str, delta,
+                             epsilon=epsilon, zeta=zeta, kappa=kappa)
 
     # Resolve the target message id: in-run cache first (fast path), else the
     # persisted store (survives restart).
@@ -318,8 +323,8 @@ def _chunk_gate_lines(lines: list[str], limit: int = GATE_STAT_CHUNK_LIMIT) -> l
 
 async def _handle_gate_stat(ctx, repo: StatsRepository, settings: Settings, gate_type: str):
     gtype = gate_type.lower()
-    if gtype not in settings.gate_rewards_map():
-        await ctx.send("Ungültiger Gate-Typ. Bitte nutze a, b, c oder d.", delete_after=5)
+    if gtype not in GATE_TYPES:
+        await ctx.send("Ungültiger Gate-Typ. Bitte nutze a, b, c, d, e, z oder k.", delete_after=5)
         return
     costs = await repo.list_gate_costs(gtype)
     if not costs:
@@ -375,15 +380,22 @@ async def handle_gate_input_message(bot, repo: StatsRepository, settings: Settin
                 pass
         return
     gate_type, cost = parsed
-    if gate_type == "d":
-        bot._pending_delta[message.id] = {"cost": cost,
-                                          "user_id": message.author.id,
-                                          "username": message.author.name}
+    if gate_type in ("d", "e", "z"):
+        pending = {"cost": cost, "user_id": message.author.id,
+                   "username": message.author.name}
+        if gate_type != "d":
+            pending["gate_type"] = gate_type
+        bot._pending_delta[message.id] = pending
         try:
             await message.add_reaction("✅")
             await message.add_reaction("❎")
         except Exception:
             pass
+        return
+    if gate_type == "k":
+        await message.channel.send(view=KappaConfirmView(
+            repo, bot, settings, cost=cost, user_id=message.author.id,
+            username=message.author.name))
         return
     before = await repo.gate_record(gate_type)
     inserted = await repo.add_gate_entry(gate_type, cost, message.author.id, message.author.name)
@@ -430,18 +442,25 @@ async def handle_delta_confirmation(bot, repo: StatsRepository,
     pending = bot._pending_delta.pop(payload.message_id, None)
     if pending is None:
         return
-    laser = emoji == "✅"
-    before = await repo.gate_record("d")
-    inserted = await repo.add_gate_entry(
-        "d", pending["cost"], pending["user_id"], pending["username"],
-        laser_dropped=laser)
+    gate_type = pending.get("gate_type", "d")
+    dropped = emoji == "✅"
+    before = await repo.gate_record(gate_type)
+    if gate_type == "d":
+        inserted = await repo.add_gate_entry(
+            "d", pending["cost"], pending["user_id"], pending["username"],
+            laser_dropped=dropped)
+    else:
+        item = {"e": "lf4", "z": "havoc"}[gate_type]
+        inserted = await repo.add_gate_entry(
+            gate_type, pending["cost"], pending["user_id"],
+            pending["username"], drops={item: dropped})
     if inserted:
-        after = await repo.gate_record("d")
-        await _announce_records(bot, settings, "d",
+        after = await repo.gate_record(gate_type)
+        await _announce_records(bot, settings, gate_type,
                                 changed_records(before, after), after)
         await update_gate_stats_embed(bot, repo, settings)
         member = getattr(payload, "member", None)
-        newly = (await check_achievements(repo, pending["user_id"], "gate_d")
+        newly = (await check_achievements(repo, pending["user_id"], f"gate_{gate_type}")
                  + await check_achievements(repo, pending["user_id"], "gate_total")
                  + await check_achievements(repo, pending["user_id"], "gate_cost_total"))
         if newly:
