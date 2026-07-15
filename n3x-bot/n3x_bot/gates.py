@@ -65,6 +65,13 @@ def _drop_rate_lines(stats: dict) -> str:
                    for item, rate in stats["rates"].items())
 
 
+def _reward_lines(reward: int, avg: int, count: int) -> str:
+    diff = reward - avg if count > 0 else 0
+    diff_color = "🟢" if diff >= 0 else "🔴"
+    return (f"Belohnung: {format_number(reward)}\n"
+            f"Gewinn: {diff_color} {format_number(diff)}")
+
+
 def build_gate_embed(totals: dict, rewards: dict, now_str: str,
                      delta: dict | None = None, epsilon: dict | None = None,
                      zeta: dict | None = None,
@@ -82,29 +89,26 @@ def build_gate_embed(totals: dict, rewards: dict, now_str: str,
     embed = discord.Embed(title="📊 Gate Statistik", color=discord.Color.blue())
     for gate_type in ("a", "b", "c"):
         gdata = totals.get(gate_type, {"count": 0, "avg": 0})
-        reward = rewards.get(gate_type, 0)
-        diff = reward - gdata["avg"] if gdata["count"] > 0 else 0
-        diff_color = "🟢" if diff >= 0 else "🔴"
         embed.add_field(
             name=_FIELD_NAMES[gate_type],
             value=(f"Läufe: {gdata['count']}\n"
                    f"Ø Kosten: {format_number(gdata['avg'])}\n"
-                   f"Belohnung: {format_number(reward)}\n"
-                   f"Gewinn: {diff_color} {format_number(diff)}"),
+                   f"{_reward_lines(rewards.get(gate_type, 0), gdata['avg'], gdata['count'])}"),
             inline=True)
     if delta is not None:
         embed.add_field(
             name=_FIELD_NAMES["d"],
             value=(f"Läufe: {delta['count']}\n"
                    f"Ø Kosten: {format_number(delta['avg'])}\n"
-                   f"Belohnung: {format_number(rewards.get('d', 0))}\n"
+                   f"{_reward_lines(rewards.get('d', 0), delta['avg'], delta['count'])}\n"
                    f"Laser: {delta['laser_rate']:.1f} %"),
             inline=True)
     if epsilon is not None:
         embed.add_field(
             name=_FIELD_NAMES["e"],
             value=(f"Läufe: {epsilon['count']}\n"
-                   f"Ø Kosten: {format_number(epsilon['avg'])}"
+                   f"Ø Kosten: {format_number(epsilon['avg'])}\n"
+                   f"{_reward_lines(rewards.get('e', 0), epsilon['avg'], epsilon['count'])}"
                    f"{_drop_rate_lines(epsilon)}"),
             inline=True)
     if zeta is not None or kappa is not None:
@@ -114,7 +118,8 @@ def build_gate_embed(totals: dict, rewards: dict, now_str: str,
             embed.add_field(
                 name=_FIELD_NAMES[gate_type],
                 value=(f"Läufe: {stats['count']}\n"
-                       f"Ø Kosten: {format_number(stats['avg'])}"
+                       f"Ø Kosten: {format_number(stats['avg'])}\n"
+                       f"{_reward_lines(rewards.get(gate_type, 0), stats['avg'], stats['count'])}"
                        f"{_drop_rate_lines(stats)}"),
                 inline=True)
     embed.set_footer(text=f"Letztes Update: {now_str}")
