@@ -1,4 +1,4 @@
-from n3x_bot.gates import build_gate_content, build_gate_embed, parse_gate_message
+from n3x_bot.gates import build_gate_embed, parse_gate_message
 
 
 # ── parse_gate_message ──────────────────────────────────────────────────────
@@ -52,51 +52,6 @@ def test_parse_gate_message_tolerates_surrounding_whitespace():
 
 def test_parse_gate_message_ignores_command_prefixed_text():
     assert parse_gate_message("!stat a") is None
-
-
-# ── build_gate_content (totals -> content math) ─────────────────────────────
-
-def test_build_gate_content_computes_avg_and_positive_diff():
-    totals = {"a": {"count": 2, "avg": 46500}}
-    rewards = {"a": 46892, "b": 93820, "c": 139522}
-
-    content = build_gate_content(totals, rewards)
-
-    assert "Alpha Gate" in content
-    assert "Total Gates: 2" in content
-    assert "46.500" in content  # format_number uses "." as thousands sep
-    assert "🟢" in content  # reward (46892) - avg (46500) = +392 -> green
-    assert "392" in content
-
-
-def test_build_gate_content_negative_diff_uses_red_indicator():
-    totals = {"a": {"count": 1, "avg": 50000}}
-    rewards = {"a": 46892, "b": 93820, "c": 139522}
-
-    content = build_gate_content(totals, rewards)
-
-    assert "🔴" in content
-    assert "-3.108" in content  # 46892 - 50000 = -3108
-
-
-def test_build_gate_content_zero_count_defaults_diff_to_zero():
-    totals = {}
-    rewards = {"a": 46892, "b": 93820, "c": 139522}
-
-    content = build_gate_content(totals, rewards)
-
-    assert "Total Gates: 0" in content
-    # zero count -> diff forced to 0 regardless of reward, per v2 semantics
-    assert content.count("🟢") == 3
-
-
-def test_build_gate_content_includes_all_three_gate_types_in_order():
-    totals = {}
-    rewards = {"a": 46892, "b": 93820, "c": 139522}
-
-    content = build_gate_content(totals, rewards)
-
-    assert content.index("Alpha Gate") < content.index("Beta Gate") < content.index("Gamma Gate")
 
 
 # ── build_gate_embed ─────────────────────────────────────────────────────────
