@@ -17,6 +17,8 @@ from n3x_bot.gates import GATE_NAMES, _DROP_LABELS
 _CHART_DROP_ITEMS = {"d": ["laser"], "e": ["lf4"], "z": ["havoc"],
                      "k": ["hercules", "lf4u"]}
 
+_CHART_CAPTION = "Befehl: !gate verlauf <gate> [von] [bis]  ·  Gates: a b c d e z k"
+
 
 def render_gate_history_chart(gate_type: str, entries: list[dict],
                               now: datetime, von=None, bis=None) -> bytes:
@@ -51,6 +53,10 @@ def render_gate_history_chart(gate_type: str, entries: list[dict],
             ax.set_xlim(left=datetime.combine(von, time.min, tzinfo=now.tzinfo))
         if bis is not None:
             ax.set_xlim(right=datetime.combine(bis, time.max, tzinfo=now.tzinfo))
+
+        fig.subplots_adjust(bottom=0.18)
+        fig.text(0.5, 0.01, _CHART_CAPTION, ha="center", fontsize=8,
+                 color="grey")
 
         buf = BytesIO()
         fig.savefig(buf, format="png")
