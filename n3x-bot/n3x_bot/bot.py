@@ -105,6 +105,7 @@ def build_bot(settings: Settings, repo: StatsRepository) -> commands.Bot:
     bot._target_last_posts = {}
     bot._gate_embed_msg_id = None
     bot._pending_delta = {}
+    bot._verlauf_msgs = {}
     bot._milestone_cards = {}
     # Single-guild bot (N3X): voice_join_times is keyed by member.id alone.
     # voice_lock serialises the flush task against the leave/move handler so
@@ -474,8 +475,13 @@ def register_gate_commands(bot, repo: StatsRepository, settings: Settings):
             entries = await repo.list_gate_entries(gtype, since, until)
             png = render_gate_history_chart(gtype, entries,
                                             now_local(settings), von_d, bis_d)
-            await ctx.send(file=discord.File(BytesIO(png),
-                                             filename=f"verlauf_{gtype}.png"))
+            msg = await ctx.send(file=discord.File(BytesIO(png),
+                                                   filename=f"verlauf_{gtype}.png"))
+            try:
+                await msg.add_reaction("❌")
+            except Exception:
+                pass
+            bot._verlauf_msgs[msg.id] = ctx.author.id
 
 
 async def handle_gate_input_message(bot, repo: StatsRepository, settings: Settings, message):
@@ -582,6 +588,29 @@ async def handle_delta_confirmation(bot, repo: StatsRepository,
                 await announce_achievements(bot, settings, member, newly)
             except Exception:
                 pass
+
+
+async def handle_verlauf_removal(bot, payload) -> None:
+    """Delete a posted `!gate verlauf` chart when its original invoker reacts ❌.
+
+    Only the invoker who ran the command may remove the chart; a ❌ from anyone
+    else (including the bot's own seed reaction) is ignored. Best-effort: any
+    Discord error while fetching/deleting is swallowed and the tracker is only
+    popped on a successful delete.
+    """
+    if str(payload.emoji) != "❌":
+        return
+    if payload.message_id not in bot._verlauf_msgs:
+        return
+    if payload.user_id != bot._verlauf_msgs[payload.message_id]:
+        return
+    try:
+        channel = bot.get_channel(payload.channel_id)
+        msg = await channel.fetch_message(payload.message_id)
+        await msg.delete()
+    except Exception:
+        return
+    bot._verlauf_msgs.pop(payload.message_id, None)
 
 
 async def _announce_records(bot, settings: Settings, gate_type: str,
@@ -750,6 +779,10 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
             pass
         try:
             await handle_kodex_confirmation(bot, repo, payload)
+        except Exception:
+            pass
+        try:
+            await handle_verlauf_removal(bot, payload)
         except Exception:
             pass
 
