@@ -138,6 +138,7 @@ class KappaConfirmView(discord.ui.View):
         self.username = username
         self.hercules_dropped = False
         self.lf4u_dropped = False
+        self._submitted = False
 
         hercules_btn = discord.ui.Button(label="Hercules",
                                          style=discord.ButtonStyle.secondary)
@@ -185,6 +186,14 @@ class KappaConfirmView(discord.ui.View):
     async def on_submit(self, interaction) -> None:
         if interaction.user.id != self.user_id:
             return
+        # Consume the panel ATOMICALLY before any await: with timeout=None the
+        # buttons stay live indefinitely, so a second "Bestätigen" click (past
+        # add_gate_entry's dedup window) would otherwise store a second "k" row
+        # for the same run. Setting the flag before the store is the analog of
+        # the reaction path's atomic _pending_delta.pop() single-store guard.
+        if self._submitted:
+            return
+        self._submitted = True
         before = await self.repo.gate_record("k")
         inserted = await self.repo.add_gate_entry(
             "k", self.cost, self.user_id, self.username,
@@ -208,6 +217,11 @@ class KappaConfirmView(discord.ui.View):
                                                 interaction.user, newly)
             except Exception:
                 pass
+        # Retire the panel so it can't be re-submitted: stop the view and
+        # disable every button (best-effort message edit to push the state).
+        self.stop()
+        for child in self.children:
+            child.disabled = True
         try:
             await interaction.response.edit_message(view=self)
         except Exception:

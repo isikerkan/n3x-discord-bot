@@ -291,6 +291,36 @@ async def test_kappa_submit_stores_both_drops_true_when_both_toggled():
     await repo.close()
 
 
+async def test_kappa_second_submit_by_author_does_not_double_store():
+    # timeout=None keeps the panel live, so the author can click "Bestätigen"
+    # again. A second submit — even past add_gate_entry's 30s dedup window —
+    # must be a no-op: exactly ONE "k" entry stays stored (the panel is
+    # consumed on the first submit).
+    from n3x_bot.gates import KappaConfirmView
+    repo = await _flatfile_repo()
+    settings = _settings(gate_input_channel_id=777)
+    bot = build_bot(settings, repo)
+    bot.get_channel = MagicMock(return_value=None)
+    view = KappaConfirmView(repo, bot, settings, cost=500, user_id=7,
+                            username="Erkan")
+
+    await view.on_toggle_hercules(_fake_interaction(7))
+    await view.on_submit(_fake_interaction(7))
+    assert await repo.list_gate_costs("k") == [500]
+
+    # Age the stored row past the dedup window so storage-level dedup can't be
+    # what saves us — the view's own consume guard must.
+    for r in repo._db["gate_entries"]:
+        r["created_at"] = "2000-01-01T00:00:00+00:00"
+
+    await view.on_submit(_fake_interaction(7))  # second click
+
+    assert await repo.list_gate_costs("k") == [500]  # still exactly one
+    assert (await repo.gate_drop_stats("k"))["count"] == 1
+
+    await repo.close()
+
+
 async def test_kappa_submit_by_non_author_stores_nothing():
     from n3x_bot.gates import KappaConfirmView
     repo = await _flatfile_repo()
