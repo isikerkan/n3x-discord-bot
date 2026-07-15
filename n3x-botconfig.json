@@ -341,8 +341,8 @@
         "FieldName": "GateRewards",
         "InputType": "text",
         "ParamFieldName": "GateRewards",
-        "DefaultValue": "a:46892,b:93820,c:139522",
-        "Placeholder": "a:46892,b:93820,c:139522",
+        "DefaultValue": "a:46892,b:93820,c:139522,d:75361,e:46719,z:66661,k:62955",
+        "Placeholder": "a:46892,b:93820,c:139522,d:75361,e:46719,z:66661,k:62955",
         "EnumValues": {}
     },
     {
