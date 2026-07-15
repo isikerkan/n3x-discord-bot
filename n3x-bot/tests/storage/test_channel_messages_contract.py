@@ -71,9 +71,12 @@ async def test_set_one_key_leaves_other_keys_unset(repo):
 # ── large (BIGINT) discord snowflake ids survive the roundtrip ──────────────
 
 async def test_channel_message_preserves_large_snowflake_ids(repo):
-    # Real Discord snowflakes exceed 2**53; the column must be BIGINT.
+    # Real Discord snowflakes exceed 2**53 (JS-double / 32-bit range); the
+    # column must be BIGINT. Values stay within signed int64 (max
+    # 9223372036854775807) — real snowflakes are ~1.3e18 and won't approach
+    # 2**63 for decades — matching the codebase's BigInteger snowflake columns.
     big_msg = 1234567890123456789
-    big_chan = 9876543210987654321
+    big_chan = 9223372036854775807
     await repo.set_channel_message("gate_stats", big_msg, big_chan)
     assert await repo.get_channel_message("gate_stats") == (big_msg, big_chan)
 

@@ -116,3 +116,10 @@ base_timers = Table(
     Column("map_name", String(20), primary_key=True),
     Column("end_time", DateTime(timezone=True), nullable=False),
 )
+
+channel_messages = Table(
+    "channel_messages", metadata,
+    Column("key", String(50), primary_key=True),
+    Column("message_id", BigInteger, nullable=False),
+    Column("channel_id", BigInteger, nullable=False),
+)

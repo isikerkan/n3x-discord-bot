@@ -302,6 +302,28 @@ class SqlRepository(StatsRepository):
                                    .values(discord_message_id=discord_message_id,
                                            channel_id=channel_id))
 
+    # ── channel messages ──────────────────────────────────────────────────
+    async def set_channel_message(self, key, message_id, channel_id):
+        async with self.engine.begin() as conn:
+            exists = (await conn.execute(select(sc.channel_messages.c.key)
+                      .where(sc.channel_messages.c.key == key))).one_or_none()
+            if exists is None:
+                await conn.execute(insert(sc.channel_messages).values(
+                    key=key, message_id=message_id, channel_id=channel_id))
+            else:
+                await conn.execute(update(sc.channel_messages)
+                                   .where(sc.channel_messages.c.key == key)
+                                   .values(message_id=message_id,
+                                           channel_id=channel_id))
+
+    async def get_channel_message(self, key):
+        async with self.engine.connect() as conn:
+            r = (await conn.execute(
+                select(sc.channel_messages.c.message_id,
+                       sc.channel_messages.c.channel_id)
+                .where(sc.channel_messages.c.key == key))).one_or_none()
+            return (int(r.message_id), int(r.channel_id)) if r else None
+
     # ── target tracking ───────────────────────────────────────────────────
     async def record_target_use(self, target_discord_id, stat_key):
         async with self.engine.begin() as conn:
@@ -705,6 +727,10 @@ class SqlRepository(StatsRepository):
                 r.map_name: self._dt(r.end_time)
                 for r in await conn.execute(select(sc.base_timers))
             }
+            channel_messages = {
+                r.key: [int(r.message_id), int(r.channel_id)]
+                for r in await conn.execute(select(sc.channel_messages))
+            }
             seq = {}
             for key, table in (("user", sc.users), ("message", sc.messages),
                                ("stat", sc.stats), ("gate", sc.gate_entries)):
@@ -719,6 +745,7 @@ class SqlRepository(StatsRepository):
             "night_stats": night_stats, "achievements": achievements,
             "kodex_confirmations": kodex_confirmations,
             "kodex_messages": kodex_messages, "base_timers": base_timers,
+            "channel_messages": channel_messages,
             "seq": seq,
         }
 
@@ -788,6 +815,9 @@ class SqlRepository(StatsRepository):
                 await conn.execute(insert(sc.base_timers).values(
                     map_name=map_name,
                     end_time=_as_aware_utc(_parse_dt(iso)).astimezone(timezone.utc)))
+            for key, v in snapshot.get("channel_messages", {}).items():
+                await conn.execute(insert(sc.channel_messages).values(
+                    key=key, message_id=v[0], channel_id=v[1]))
             if self.engine.dialect.name == "postgresql":
                 for tbl, key in (("users", "user"), ("messages", "message"),
                                  ("stats", "stat"), ("gate_entries", "gate")):
@@ -804,5 +834,5 @@ class SqlRepository(StatsRepository):
                           sc.users, sc.messages,
                           sc.activity_counters, sc.streak_stats, sc.night_stats,
                           sc.kodex_confirmations, sc.kodex_messages,
-                          sc.base_timers):
+                          sc.base_timers, sc.channel_messages):
                 await conn.execute(delete(table))

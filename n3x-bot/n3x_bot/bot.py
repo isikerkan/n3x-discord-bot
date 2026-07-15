@@ -259,14 +259,17 @@ def _add_targeted_stat_command(bot, repo, settings, key: str):
 
 # ── gate tracker ─────────────────────────────────────────────────────────────
 
+GATE_STATS_KEY = "gate_stats"
+
+
 async def update_gate_stats_embed(bot, repo: StatsRepository, settings: Settings):
     """Refresh (or first-post) the live gate-stats embed.
 
-    The last-posted message id is tracked in-memory on `bot._gate_embed_msg_id`
-    (like `_rank_last_posts`/`_target_last_posts`) rather than persisted via
-    `repo.set_last_post`, since that's FK-bound to a real `stats` row and
-    "gate" isn't one — it would KeyError. Ephemeral tracking means the embed
-    re-posts once after a bot restart, which is an acceptable trade-off.
+    The last-posted message id is persisted via the `channel_messages` store
+    under `GATE_STATS_KEY` so the embed is edited in place across restarts
+    (it can't use `set_last_post`, which is FK-bound to a real `stats` row and
+    "gate" isn't one — it would KeyError). `bot._gate_embed_msg_id` stays as an
+    in-run fast-path cache, written alongside the persisted store.
     """
     if not settings.gate_stats_channel_id:
         return
@@ -278,15 +281,27 @@ async def update_gate_stats_embed(bot, repo: StatsRepository, settings: Settings
     delta = await repo.delta_stats()
     now_str = datetime.now().strftime("%d.%m.%Y %H:%M")
     embed = build_gate_embed(totals, rewards, now_str, delta)
-    if bot._gate_embed_msg_id is not None:
+
+    # Resolve the target message id: in-run cache first (fast path), else the
+    # persisted store (survives restart).
+    target_id = bot._gate_embed_msg_id
+    if target_id is None:
+        stored = await repo.get_channel_message(GATE_STATS_KEY)
+        if stored is not None:
+            target_id = stored[0]
+
+    if target_id is not None:
         try:
-            msg = await channel.fetch_message(bot._gate_embed_msg_id)
+            msg = await channel.fetch_message(target_id)
             await msg.edit(embed=embed)
+            bot._gate_embed_msg_id = target_id
             return
         except Exception:
             pass
+
     new_msg = await channel.send(embed=embed)
     bot._gate_embed_msg_id = new_msg.id
+    await repo.set_channel_message(GATE_STATS_KEY, new_msg.id, channel.id)
 
 
 def _chunk_gate_lines(lines: list[str], limit: int = GATE_STAT_CHUNK_LIMIT) -> list[str]:
