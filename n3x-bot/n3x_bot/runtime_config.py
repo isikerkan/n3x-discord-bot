@@ -13,6 +13,7 @@ log = logging.getLogger("N3X-Bot")
 OVERRIDABLE_KEYS: frozenset[str] = frozenset({
     "welcome_channel_id", "reminder_channel_id", "gate_input_channel_id",
     "gate_stats_channel_id", "gate_chart_channel_id",
+    "command_list_channel_id",
     "milestone_channel_id", "overview_channel_id",
     "kodex_check_channel_id", "timer_overview_channel_id",
     "timer_overview_message_id", "target_role_id", "gate_delete_role_id",
@@ -87,6 +88,10 @@ class RuntimeConfig:
     @property
     def gate_chart_channel_id(self) -> int:
         return self._int("gate_chart_channel_id")
+
+    @property
+    def command_list_channel_id(self) -> int:
+        return self._int("command_list_channel_id")
 
     @property
     def milestone_channel_id(self) -> int:
