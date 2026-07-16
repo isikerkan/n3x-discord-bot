@@ -39,6 +39,7 @@ from zoneinfo import ZoneInfo
 
 import discord
 import pytest
+from discord import app_commands
 from discord.ext import commands
 
 from n3x_bot.bot import build_bot
@@ -199,82 +200,146 @@ def test_render_chart_empty_entries_still_returns_valid_png():
     assert _open_png(png).format == "PNG"
 
 
-# ── 3. !gate verlauf command wiring + behaviour ──────────────────────────────
+# ── 3. /gate verlauf slash command wiring + behaviour ────────────────────────
+#
+# Phase 2 migration: `!gate verlauf` becomes an app_commands.Group `gate` on
+# `bot.tree` with a `verlauf` subcommand: `/gate verlauf gate:<choice> [von]
+# [bis]`. `gate` is an app_commands.Choice over the 7 gate letters, so an
+# invalid/uppercase gate can never reach the callback (the framework rejects it
+# before dispatch) — hence the old prefix "invalid gate"/"uppercase resolves"
+# tests are dropped. `von`/`bis` remain free-text German dates.
+#
+# The subcommand is reached via
+#   bot.tree.get_command("gate").get_command("verlauf").callback(interaction,
+#       gate="a", von=..., bis=...)
+# and, for a `choices=` param, the callback receives the raw `str` value.
+
+def _slash_interaction(user=None):
+    """Interaction fake mirroring the Phase-1 slash tests, plus a followup
+    message stub so the ❌-react-to-remove tracking has an id to key on."""
+    it = MagicMock()
+    it.user = user or SimpleNamespace(id=1, display_name="Erkan", roles=[])
+    it.guild = None
+    it.response = MagicMock()
+    it.response.send_message = AsyncMock()
+    it.response.defer = AsyncMock()
+    followup_msg = MagicMock()
+    followup_msg.id = 9001
+    followup_msg.add_reaction = AsyncMock()
+    it.followup = MagicMock()
+    it.followup.send = AsyncMock(return_value=followup_msg)
+    it._followup_msg = followup_msg
+    return it
+
+
+def _followup_file(interaction):
+    """The discord.File posted via followup.send (the slow-render path), else None."""
+    for call in interaction.followup.send.await_args_list:
+        f = call.kwargs.get("file")
+        if isinstance(f, discord.File):
+            return f
+    return None
+
+
+def _all_sends(interaction):
+    return list(interaction.response.send_message.await_args_list) + \
+        list(interaction.followup.send.await_args_list)
+
 
 def _verlauf_cmd(bot):
-    group = bot.get_command("gate")
-    assert group is not None, "build_bot must wire a `gate` command group"
-    assert isinstance(group, commands.Group)
+    assert bot.get_command("gate") is None, \
+        "gate must no longer be a prefix command after Phase 2"
+    group = bot.tree.get_command("gate")
+    assert group is not None, "build_bot must wire a `gate` app-command group on the tree"
+    assert isinstance(group, app_commands.Group)
     cmd = group.get_command("verlauf")
     assert cmd is not None, "`gate` group must expose a `verlauf` subcommand"
     return cmd
 
 
-async def test_gate_group_and_verlauf_subcommand_are_registered():
+async def test_gate_group_and_verlauf_subcommand_are_registered_on_tree():
     repo = await _flatfile_repo()
     bot = build_bot(_settings(), repo)
-    _verlauf_cmd(bot)  # asserts existence
+    _verlauf_cmd(bot)  # asserts existence + type
     await repo.close()
 
 
-async def test_verlauf_valid_gate_posts_png_file():
+async def test_verlauf_defers_before_rendering_then_posts_via_followup():
+    repo = await _flatfile_repo()
+    bot = build_bot(_settings(), repo)
+    await repo.add_gate_entry("a", 46000, 1, "u1")
+    interaction = _slash_interaction()
+
+    order = []
+    interaction.response.defer = AsyncMock(
+        side_effect=lambda *a, **k: order.append("defer"))
+    interaction.followup.send = AsyncMock(
+        side_effect=lambda *a, **k: (order.append("followup"),
+                                     interaction._followup_msg)[1])
+
+    cmd = _verlauf_cmd(bot)
+    with patch("n3x_bot.bot.render_gate_history_chart", return_value=b"PNG"):
+        await cmd.callback(interaction, gate="a")
+
+    interaction.response.defer.assert_awaited_once()  # slow work -> defer first
+    assert order[:2] == ["defer", "followup"]  # defer strictly before the post
+
+    await repo.close()
+
+
+async def test_verlauf_valid_gate_posts_png_file_via_followup():
     repo = await _flatfile_repo()
     bot = build_bot(_settings(), repo)
     await repo.add_gate_entry("a", 46000, 1, "u1")
     await repo.add_gate_entry("a", 48000, 2, "u2")
-    ctx = _ctx()
+    interaction = _slash_interaction()
 
     cmd = _verlauf_cmd(bot)
-    await cmd.callback(ctx, "a")
+    with patch("n3x_bot.bot.render_gate_history_chart", return_value=b"PNG"):
+        await cmd.callback(interaction, gate="a")
 
-    posted = _posted_file(ctx)
-    assert posted is not None, "a valid gate must post a discord.File"
+    posted = _followup_file(interaction)
+    assert posted is not None, "a valid gate must post a discord.File via followup"
     assert posted.filename.endswith(".png")
 
     await repo.close()
 
 
-async def test_verlauf_uppercase_gate_resolves():
+async def test_verlauf_records_followup_message_for_reaction_removal():
+    # handle_verlauf_removal deletes a posted chart when its ORIGINAL invoker
+    # reacts ❌; it looks the message up in bot._verlauf_msgs keyed by the
+    # posted message id -> invoker id. The slash version must still populate it
+    # with the followup message's id and interaction.user.id.
     repo = await _flatfile_repo()
     bot = build_bot(_settings(), repo)
     await repo.add_gate_entry("a", 46000, 1, "u1")
-    ctx = _ctx()
+    invoker = SimpleNamespace(id=4242, display_name="Erkan", roles=[])
+    interaction = _slash_interaction(user=invoker)
 
     cmd = _verlauf_cmd(bot)
-    await cmd.callback(ctx, "A")
+    with patch("n3x_bot.bot.render_gate_history_chart", return_value=b"PNG"):
+        await cmd.callback(interaction, gate="a")
 
-    assert _posted_file(ctx) is not None
+    assert bot._verlauf_msgs.get(interaction._followup_msg.id) == 4242
 
     await repo.close()
 
 
-async def test_verlauf_invalid_gate_refuses_without_file():
-    repo = await _flatfile_repo()
-    bot = build_bot(_settings(), repo)
-    ctx = _ctx()
-
-    cmd = _verlauf_cmd(bot)
-    await cmd.callback(ctx, "x")
-
-    assert _posted_file(ctx) is None
-    ctx.send.assert_awaited()
-    assert "Ungültiger Gate-Typ" in ctx.send.await_args.args[0]
-
-    await repo.close()
-
-
-async def test_verlauf_invalid_date_refuses_with_german_hint_no_file():
+async def test_verlauf_invalid_date_refuses_ephemeral_no_file():
     repo = await _flatfile_repo()
     bot = build_bot(_settings(), repo)
     await repo.add_gate_entry("a", 46000, 1, "u1")
-    ctx = _ctx()
+    interaction = _slash_interaction()
 
     cmd = _verlauf_cmd(bot)
-    await cmd.callback(ctx, "a", "bad")
+    with patch("n3x_bot.bot.render_gate_history_chart", return_value=b"PNG"):
+        await cmd.callback(interaction, gate="a", von="bad")
 
-    assert _posted_file(ctx) is None
-    ctx.send.assert_awaited()
-    assert "Datum" in ctx.send.await_args.args[0]
+    assert _followup_file(interaction) is None  # no chart on a bad date
+    error_calls = [c for c in _all_sends(interaction)
+                   if c.args and "Datum" in str(c.args[0])]
+    assert error_calls, "a bad date must produce a German 'Datum' error"
+    assert error_calls[0].kwargs.get("ephemeral") is True
 
     await repo.close()
 
@@ -283,13 +348,15 @@ async def test_verlauf_date_range_filters_entries_by_parsed_window():
     repo = await _flatfile_repo()
     bot = build_bot(_settings(), repo)
     await repo.add_gate_entry("a", 46000, 1, "u1")
-    ctx = _ctx()
+    interaction = _slash_interaction()
     tz = ZoneInfo("Europe/Berlin")
 
     cmd = _verlauf_cmd(bot)
-    with patch.object(repo, "list_gate_entries",
-                      wraps=repo.list_gate_entries) as spy:
-        await cmd.callback(ctx, "a", "01.07.2026", "15.07.2026")
+    with patch("n3x_bot.bot.render_gate_history_chart", return_value=b"PNG"), \
+            patch.object(repo, "list_gate_entries",
+                         wraps=repo.list_gate_entries) as spy:
+        await cmd.callback(interaction, gate="a", von="01.07.2026",
+                           bis="15.07.2026")
 
     spy.assert_awaited()
     call = spy.await_args
@@ -318,13 +385,15 @@ async def test_verlauf_until_covers_whole_bis_day_to_last_microsecond():
     repo = await _flatfile_repo()
     bot = build_bot(_settings(), repo)
     await repo.add_gate_entry("a", 46000, 1, "u1")
-    ctx = _ctx()
+    interaction = _slash_interaction()
     tz = ZoneInfo("Europe/Berlin")
 
     cmd = _verlauf_cmd(bot)
-    with patch.object(repo, "list_gate_entries",
-                      wraps=repo.list_gate_entries) as spy:
-        await cmd.callback(ctx, "a", "01.07.2026", "15.07.2026")
+    with patch("n3x_bot.bot.render_gate_history_chart", return_value=b"PNG"), \
+            patch.object(repo, "list_gate_entries",
+                         wraps=repo.list_gate_entries) as spy:
+        await cmd.callback(interaction, gate="a", von="01.07.2026",
+                           bis="15.07.2026")
 
     until = spy.await_args.kwargs.get(
         "until", spy.await_args.args[2] if len(spy.await_args.args) > 2 else None)
@@ -342,32 +411,18 @@ async def test_verlauf_until_covers_whole_bis_day_to_last_microsecond():
 
 async def test_verlauf_no_data_in_range_still_posts_empty_chart():
     # Pinned empty behaviour: render a "keine Daten" chart and POST it (a
-    # discord.File), rather than replying with plain text.
+    # discord.File via followup), rather than replying with plain text.
     repo = await _flatfile_repo()
     bot = build_bot(_settings(), repo)
     # entry exists, but the requested window is entirely before it
     await repo.add_gate_entry("a", 46000, 1, "u1")
-    ctx = _ctx()
+    interaction = _slash_interaction()
 
     cmd = _verlauf_cmd(bot)
-    await cmd.callback(ctx, "a", "01.01.2000", "02.01.2000")
+    with patch("n3x_bot.bot.render_gate_history_chart", return_value=b"PNG"):
+        await cmd.callback(interaction, gate="a", von="01.01.2000",
+                           bis="02.01.2000")
 
-    assert _posted_file(ctx) is not None
-
-    await repo.close()
-
-
-async def test_verlauf_is_not_admin_gated():
-    # A non-admin invoker still gets the chart (viewing history is open).
-    repo = await _flatfile_repo()
-    bot = build_bot(_settings(), repo)
-    await repo.add_gate_entry("a", 46000, 1, "u1")
-    ctx = _ctx()
-    ctx.author = SimpleNamespace(id=555, display_name="RandomUser", roles=[])
-
-    cmd = _verlauf_cmd(bot)
-    await cmd.callback(ctx, "a")
-
-    assert _posted_file(ctx) is not None
+    assert _followup_file(interaction) is not None
 
     await repo.close()

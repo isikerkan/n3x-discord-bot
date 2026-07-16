@@ -5,6 +5,7 @@ from io import BytesIO
 from zoneinfo import ZoneInfo
 
 import discord
+from discord import app_commands
 from discord.ext import commands, tasks
 
 from n3x_bot.admin import (
@@ -364,10 +365,6 @@ COMMAND_LIST_KEY = "command_list"
 # the description column of the embed; an unmapped command renders name-only.
 _COMMAND_DESCRIPTIONS: dict[str, str] = {
     "rank": "Zeigt dein persönliches Command-Ranking.",
-    "stat": "Zeigt die erfassten Kosten eines Gates (a–k).",
-    "del": "Löscht einen Gate-Eintrag (nur mit Berechtigung).",
-    "gate": "Gate-Auswertungen.",
-    "gate verlauf": "Zeigt den Preisverlauf eines Gates als Diagramm.",
     "kodex": "Sendet dir den Kodex zur Bestätigung.",
     "kodex_check": "Prüft, wer den Kodex bestätigt hat.",
     "base": "Startet einen Basis-Timer.",
@@ -547,6 +544,21 @@ def _chunk_gate_lines(lines: list[str], limit: int = GATE_STAT_CHUNK_LIMIT) -> l
     return chunks
 
 
+GATE_CHOICES = [app_commands.Choice(name=GATE_NAMES[g], value=g)
+                for g in GATE_TYPES]
+
+
+def build_gate_stat_embeds(gate_type: str, costs: list[int]) -> list[discord.Embed]:
+    title = f"📊 {gate_type.upper()} Gate"
+    lines = [f"{i}. {format_number(cost)}" for i, cost in enumerate(costs, 1)]
+    embeds = []
+    for i, chunk in enumerate(_chunk_gate_lines(lines)):
+        embeds.append(discord.Embed(
+            title=title if i == 0 else f"{title} (Fortsetzung)",
+            description=chunk, color=discord.Color.green()))
+    return embeds
+
+
 async def _handle_gate_stat(ctx, repo: StatsRepository, settings: Settings, gate_type: str):
     gtype = gate_type.lower()
     if gtype not in GATE_TYPES:
@@ -556,62 +568,82 @@ async def _handle_gate_stat(ctx, repo: StatsRepository, settings: Settings, gate
     if not costs:
         await ctx.send(f"Noch keine Daten für {gate_type.upper()} Gate vorhanden.", delete_after=5)
         return
-    title = f"📊 {gate_type.upper()} Gate"
-    lines = [f"{i}. {format_number(cost)}" for i, cost in enumerate(costs, 1)]
-    for i, chunk in enumerate(_chunk_gate_lines(lines)):
-        embed = discord.Embed(title=title if i == 0 else f"{title} (Fortsetzung)",
-                              description=chunk, color=discord.Color.green())
+    for embed in build_gate_stat_embeds(gtype, costs):
         await ctx.send(embed=embed)
 
 
-async def _handle_gate_del(ctx, bot, repo: StatsRepository, settings: Settings,
-                           gate_type: str, index: int):
-    has_role = any(r.id == bot.runtime_config.gate_delete_role_id for r in ctx.author.roles)
-    if not has_role:
-        await ctx.send("❌ Keine Berechtigung.", delete_after=5)
-        return
-    gtype = gate_type.lower()
-    if await repo.delete_gate_entry(gtype, index):
-        await ctx.send(f"✅ Eintrag {index} für {gate_type.upper()} gelöscht.", delete_after=5)
+async def apply_gate_delete(bot, repo: StatsRepository, settings: Settings,
+                            gate_type: str, index: int) -> bool:
+    if await repo.delete_gate_entry(gate_type.lower(), index):
         await update_gate_stats_embed(bot, repo, settings)
-    else:
-        await ctx.send(f"❌ Eintrag {index} nicht gefunden.", delete_after=5)
+        return True
+    return False
 
 
 def register_gate_commands(bot, repo: StatsRepository, settings: Settings):
-    if bot.get_command("stat") is None:
-        async def _stat_cmd(ctx, gate_type: str):
-            await _handle_gate_stat(ctx, repo, settings, gate_type)
-        bot.add_command(commands.Command(_stat_cmd, name="stat"))
-
-    if bot.get_command("del") is None:
-        async def _del_cmd(ctx, gate_type: str, index: int):
-            await _handle_gate_del(ctx, bot, repo, settings, gate_type, index)
-        bot.add_command(commands.Command(_del_cmd, name="del"))
-
-    if bot.get_command("gate") is None:
-        @bot.group(name="gate", invoke_without_command=True)
-        async def gate_group(ctx):
-            await ctx.send("Nutze `!gate verlauf <gate> [von] [bis]`.",
-                           delete_after=5)
-
-        @gate_group.command(name="verlauf")
-        async def verlauf(ctx, gate: str, von: str = None, bis: str = None):
+    if bot.tree.get_command("stat") is None:
+        @bot.tree.command(name="stat",
+                          description="Zeigt die erfassten Kosten eines Gates.")
+        @app_commands.describe(gate="Welches Gate?")
+        @app_commands.choices(gate=GATE_CHOICES)
+        async def gate_stat(interaction, gate: str):
             gtype = gate.lower()
-            if gtype not in GATE_TYPES:
-                await ctx.send(
-                    "Ungültiger Gate-Typ. Bitte nutze a, b, c, d, e, z oder k.",
-                    delete_after=5)
+            costs = await repo.list_gate_costs(gtype)
+            if not costs:
+                await interaction.response.send_message(
+                    f"Noch keine Daten für {gtype.upper()} Gate vorhanden.")
                 return
+            embeds = build_gate_stat_embeds(gtype, costs)
+            await interaction.response.send_message(embed=embeds[0])
+            for extra in embeds[1:]:
+                await interaction.followup.send(embed=extra)
+
+    if bot.tree.get_command("del") is None:
+        @bot.tree.command(name="del",
+                          description="Löscht einen Gate-Eintrag (nur mit Berechtigung).")
+        @app_commands.describe(gate="Welches Gate?",
+                               index="Nummer des zu löschenden Eintrags")
+        @app_commands.choices(gate=GATE_CHOICES)
+        async def gate_del(interaction, gate: str, index: int):
+            await interaction.response.defer(ephemeral=True)
+            roles = getattr(interaction.user, "roles", [])
+            has_role = any(r.id == bot.runtime_config.gate_delete_role_id
+                           for r in roles)
+            if not has_role:
+                await interaction.followup.send(
+                    "❌ Keine Berechtigung.", ephemeral=True)
+                return
+            gtype = gate.lower()
+            if await apply_gate_delete(bot, repo, settings, gtype, index):
+                await interaction.followup.send(
+                    f"✅ Eintrag {index} für {gtype.upper()} gelöscht.",
+                    ephemeral=True)
+            else:
+                await interaction.followup.send(
+                    f"❌ Eintrag {index} nicht gefunden.", ephemeral=True)
+
+    if bot.tree.get_command("gate") is None:
+        gate_group = app_commands.Group(name="gate",
+                                        description="Gate-Auswertungen.")
+
+        @gate_group.command(name="verlauf",
+                            description="Zeigt den Preisverlauf eines Gates als Diagramm.")
+        @app_commands.describe(gate="Welches Gate?",
+                               von="Startdatum (TT.MM.JJJJ)",
+                               bis="Enddatum (TT.MM.JJJJ)")
+        @app_commands.choices(gate=GATE_CHOICES)
+        async def gate_verlauf(interaction, gate: str, von: str | None = None,
+                               bis: str | None = None):
+            gtype = gate.lower()
             von_d = bis_d = None
             for raw, is_von in ((von, True), (bis, False)):
                 if raw is None:
                     continue
                 parsed = parse_de_date(raw)
                 if parsed is None:
-                    await ctx.send(
+                    await interaction.response.send_message(
                         "❌ Ungültiges Datum. Nutze TT.MM.JJJJ oder JJJJ-MM-TT.",
-                        delete_after=5)
+                        ephemeral=True)
                     return
                 if is_von:
                     von_d = parsed
@@ -622,16 +654,19 @@ def register_gate_commands(bot, repo: StatsRepository, settings: Settings):
                      if von_d is not None else None)
             until = (datetime.combine(bis_d, time(23, 59, 59, 999999), tzinfo=tz)
                      if bis_d is not None else None)
+            await interaction.response.defer()
             entries = await repo.list_gate_entries(gtype, since, until)
             png = render_gate_history_chart(gtype, entries,
                                             now_local(settings), von_d, bis_d)
-            msg = await ctx.send(file=discord.File(BytesIO(png),
-                                                   filename=f"verlauf_{gtype}.png"))
+            msg = await interaction.followup.send(
+                file=discord.File(BytesIO(png), filename=f"verlauf_{gtype}.png"))
             try:
                 await msg.add_reaction("❌")
             except Exception:
                 pass
-            bot._verlauf_msgs[msg.id] = ctx.author.id
+            bot._verlauf_msgs[msg.id] = interaction.user.id
+
+        bot.tree.add_command(gate_group)
 
 
 def _emoji_key(emoji) -> str:
@@ -795,7 +830,7 @@ async def handle_gate_drop_confirmation(bot, repo: StatsRepository,
 
 
 async def handle_verlauf_removal(bot, payload) -> None:
-    """Delete a posted `!gate verlauf` chart when its original invoker reacts ❌.
+    """Delete a posted `/gate verlauf` chart when its original invoker reacts ❌.
 
     Only the invoker who ran the command may remove the chart; a ❌ from anyone
     else (including the bot's own seed reaction) is ignored. Best-effort: any

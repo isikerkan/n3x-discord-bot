@@ -1,4 +1,4 @@
-"""Pure matplotlib (Agg) renderer for the `!gate verlauf` history chart.
+"""Pure matplotlib (Agg) renderer for the `/gate verlauf` history chart.
 
 The Agg backend is selected BEFORE importing pyplot so the render never needs
 a display. `render_gate_history_chart` takes the `list_gate_entries` output and
@@ -17,7 +17,7 @@ from n3x_bot.gates import GATE_NAMES, _DROP_LABELS
 _CHART_DROP_ITEMS = {"d": ["laser"], "e": ["lf4"], "z": ["havoc"],
                      "k": ["hercules", "lf4u"]}
 
-_CHART_CAPTION = "Befehl: !gate verlauf <gate> [von] [bis]  ·  Gates: a b c d e z k"
+_CHART_CAPTION = "Befehl: /gate verlauf gate:<gate> [von] [bis]  ·  Gates: a b c d e z k"
 
 
 def render_gate_history_chart(gate_type: str, entries: list[dict],

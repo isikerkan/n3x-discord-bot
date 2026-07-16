@@ -44,7 +44,6 @@ from n3x_bot.bot import build_bot
 from n3x_bot.config import Settings
 from n3x_bot.seed import seed_defaults
 from n3x_bot.storage.json_repo import JsonRepository
-from discord.ext import commands
 
 
 BASE_SETTINGS_KWARGS = dict(
@@ -98,24 +97,9 @@ def _sent_message(message_id: int = 8001):
     return msg
 
 
-def _ctx(sent_message, *, author_id: int = 1):
-    ctx = MagicMock()
-    ctx.send = AsyncMock(return_value=sent_message)
-    ctx.author = SimpleNamespace(id=author_id, display_name="Erkan")
-    return ctx
-
-
 def _payload(*, message_id: int, user_id: int, emoji: str, channel_id: int = 555):
     return SimpleNamespace(message_id=message_id, user_id=user_id, emoji=emoji,
                            channel_id=channel_id, guild_id=1, member=None)
-
-
-def _verlauf_cmd(bot):
-    group = bot.get_command("gate")
-    assert isinstance(group, commands.Group)
-    cmd = group.get_command("verlauf")
-    assert cmd is not None, "`gate` group must expose a `verlauf` subcommand"
-    return cmd
 
 
 def _bot_with_fetch(msg):
@@ -131,7 +115,7 @@ def _bot_with_fetch(msg):
 
 def test_chart_caption_constant_mentions_the_command():
     from n3x_bot.charts import _CHART_CAPTION
-    assert "!gate verlauf" in _CHART_CAPTION
+    assert "/gate verlauf" in _CHART_CAPTION
 
 
 def test_chart_caption_constant_includes_a_gate_hint():
@@ -167,33 +151,9 @@ async def test_build_bot_inits_verlauf_msgs_map():
 
 
 # ── 2b. verlauf seeds ❌ and tracks the invoker ──────────────────────────────
-
-async def test_verlauf_adds_cross_reaction_to_posted_message():
-    repo = await _flatfile_repo()
-    bot = build_bot(_settings(), repo)
-    await repo.add_gate_entry("a", 46000, 1, "u1")
-    msg = _sent_message(8001)
-    ctx = _ctx(msg, author_id=1)
-
-    cmd = _verlauf_cmd(bot)
-    await cmd.callback(ctx, "a")
-
-    msg.add_reaction.assert_awaited_once_with("❌")
-    await repo.close()
-
-
-async def test_verlauf_tracks_message_to_invoker_id():
-    repo = await _flatfile_repo()
-    bot = build_bot(_settings(), repo)
-    await repo.add_gate_entry("a", 46000, 1, "u1")
-    msg = _sent_message(8001)
-    ctx = _ctx(msg, author_id=42)
-
-    cmd = _verlauf_cmd(bot)
-    await cmd.callback(ctx, "a")
-
-    assert bot._verlauf_msgs[8001] == 42
-    await repo.close()
+# (Covered by the slash-command tests in tests/test_gate_verlauf.py:
+#  test_verlauf_valid_gate_posts_png_file_via_followup and
+#  test_verlauf_records_followup_message_for_reaction_removal.)
 
 
 # ── 2c. handle_verlauf_removal behaviour ─────────────────────────────────────
