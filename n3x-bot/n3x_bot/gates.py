@@ -25,7 +25,30 @@ _DROP_LABELS = {"laser": "Laser", "lf4": "LF4", "havoc": "Havoc",
 
 _GATE_DROP_ITEMS = {"e": ["lf4"], "z": ["havoc"], "k": ["hercules", "lf4u"]}
 
+GATE_DROP_REACTION_ITEMS = {"d": ["laser"], "e": ["lf4"], "z": ["havoc"],
+                            "k": ["hercules", "lf4u"]}
+
+DROP_EMOJI_NAMES = {"laser": "prom", "lf4": "lf4", "havoc": "havoc",
+                    "hercules": "hercu", "lf4u": "lf4"}
+
+DROP_EMOJI_FALLBACKS = {"laser": "🔫", "lf4": "🟦", "havoc": "🟪",
+                        "hercules": "🟩", "lf4u": "🔷"}
+
+DROP_NOTHING_EMOJI = "❌"
+
 _ZWSP = "​"
+
+
+def resolve_drop_emoji(guild, item) -> "discord.Emoji | str":
+    """Resolve a drop item to a custom guild emoji by name, else a unicode
+    fallback. Never raises; `guild=None` (or no match) yields the fallback.
+    """
+    name = DROP_EMOJI_NAMES[item]
+    if guild is not None:
+        for emoji in guild.emojis:
+            if emoji.name == name:
+                return emoji
+    return DROP_EMOJI_FALLBACKS[item]
 
 
 def parse_gate_message(content: str) -> tuple[str, int] | None:
@@ -146,113 +169,3 @@ def build_gate_embed(totals: dict, rewards: dict, now_str: str,
                 inline=True)
     embed.set_footer(text=f"Letztes Update: {now_str}")
     return embed
-
-
-class KappaConfirmView(discord.ui.View):
-    """Button panel confirming a Kappa gate: Hercules toggle, LF4-U toggle,
-    Submit. Author-only; on Submit stores gate "k" with both drop bools.
-    """
-
-    def __init__(self, repo, bot, settings, *, cost: int, user_id: int,
-                 username: str):
-        super().__init__(timeout=None)
-        self.repo = repo
-        self.bot = bot
-        self.settings = settings
-        self.cost = cost
-        self.user_id = user_id
-        self.username = username
-        self.hercules_dropped = False
-        self.lf4u_dropped = False
-        self._submitted = False
-
-        hercules_btn = discord.ui.Button(label="Hercules",
-                                         style=discord.ButtonStyle.secondary)
-        hercules_btn.callback = self.on_toggle_hercules
-        lf4u_btn = discord.ui.Button(label="LF4-U",
-                                     style=discord.ButtonStyle.secondary)
-        lf4u_btn.callback = self.on_toggle_lf4u
-        submit_btn = discord.ui.Button(label="Bestätigen",
-                                       style=discord.ButtonStyle.success)
-        submit_btn.callback = self.on_submit
-        self._hercules_btn = hercules_btn
-        self._lf4u_btn = lf4u_btn
-        self.add_item(hercules_btn)
-        self.add_item(lf4u_btn)
-        self.add_item(submit_btn)
-
-    def _refresh_styles(self) -> None:
-        self._hercules_btn.style = (discord.ButtonStyle.success
-                                    if self.hercules_dropped
-                                    else discord.ButtonStyle.secondary)
-        self._lf4u_btn.style = (discord.ButtonStyle.success
-                                if self.lf4u_dropped
-                                else discord.ButtonStyle.secondary)
-
-    async def on_toggle_hercules(self, interaction) -> None:
-        if interaction.user.id != self.user_id:
-            return
-        self.hercules_dropped = not self.hercules_dropped
-        self._refresh_styles()
-        try:
-            await interaction.response.edit_message(view=self)
-        except Exception:
-            pass
-
-    async def on_toggle_lf4u(self, interaction) -> None:
-        if interaction.user.id != self.user_id:
-            return
-        self.lf4u_dropped = not self.lf4u_dropped
-        self._refresh_styles()
-        try:
-            await interaction.response.edit_message(view=self)
-        except Exception:
-            pass
-
-    async def on_submit(self, interaction) -> None:
-        if interaction.user.id != self.user_id:
-            return
-        # Consume the panel ATOMICALLY before any await: with timeout=None the
-        # buttons stay live indefinitely, so a second "Bestätigen" click (past
-        # add_gate_entry's dedup window) would otherwise store a second "k" row
-        # for the same run. Setting the flag before the store is the analog of
-        # the reaction path's atomic _pending_delta.pop() single-store guard.
-        if self._submitted:
-            return
-        self._submitted = True
-        before = await self.repo.gate_record("k")
-        inserted = await self.repo.add_gate_entry(
-            "k", self.cost, self.user_id, self.username,
-            drops={"hercules": self.hercules_dropped,
-                   "lf4u": self.lf4u_dropped})
-        if inserted:
-            try:
-                from n3x_bot.bot import (update_gate_stats_embed,
-                                         update_gate_chart, _announce_records)
-                from n3x_bot.achievements import check_achievements
-                from n3x_bot.cards import announce_achievements
-                after = await self.repo.gate_record("k")
-                await _announce_records(self.bot, self.settings, "k",
-                                        changed_records(before, after), after)
-                await update_gate_stats_embed(self.bot, self.repo, self.settings)
-                try:
-                    await update_gate_chart(self.bot, self.repo, self.settings, "k")
-                except Exception:
-                    pass
-                newly = (await check_achievements(self.repo, self.user_id, "gate_k")
-                         + await check_achievements(self.repo, self.user_id, "gate_total")
-                         + await check_achievements(self.repo, self.user_id, "gate_cost_total"))
-                if newly:
-                    await announce_achievements(self.bot, self.settings,
-                                                interaction.user, newly)
-            except Exception:
-                pass
-        # Retire the panel so it can't be re-submitted: stop the view and
-        # disable every button (best-effort message edit to push the state).
-        self.stop()
-        for child in self.children:
-            child.disabled = True
-        try:
-            await interaction.response.edit_message(view=self)
-        except Exception:
-            pass

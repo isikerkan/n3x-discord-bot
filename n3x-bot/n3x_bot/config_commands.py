@@ -6,7 +6,7 @@ module adds the write surface. Every write goes through `repo.set_runtime_config
 (or `delete_runtime_config`) and then `await bot.runtime_config.refresh(repo)`.
 
 The channel/role pickers post a small View holding a `ChannelSelect`/`RoleSelect`;
-the select is author-locked to the invoking admin (mirroring `KappaConfirmView`).
+the select is author-locked to the invoking admin.
 """
 import discord
 

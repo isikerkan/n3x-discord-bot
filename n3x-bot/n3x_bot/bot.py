@@ -37,7 +37,8 @@ from n3x_bot.format import format_number
 from n3x_bot.charts import render_gate_history_chart
 from n3x_bot.gates import (
     build_gate_embed, parse_gate_message, changed_records, GATE_NAMES,
-    KappaConfirmView, parse_de_date,
+    parse_de_date, resolve_drop_emoji, GATE_DROP_REACTION_ITEMS,
+    DROP_NOTHING_EMOJI,
 )
 from n3x_bot.kodex import (
     register_kodex_commands, send_kodex_dm, handle_kodex_confirmation,
@@ -109,7 +110,7 @@ def build_bot(settings: Settings, repo: StatsRepository) -> commands.Bot:
     bot._rank_last_posts = {}
     bot._target_last_posts = {}
     bot._gate_embed_msg_id = None
-    bot._pending_delta = {}
+    bot._pending_gate = {}
     bot._verlauf_msgs = {}
     bot._milestone_cards = {}
     # Single-guild bot (N3X): voice_join_times is keyed by member.id alone.
@@ -304,11 +305,12 @@ def build_gate_input_help() -> discord.Embed:
         "\n"
         "**Hinweise:**\n"
         "• Punkte im Betrag sind optional (58000 oder 58.000)\n"
-        "• Alpha, Beta & Gamma werden sofort eingetragen\n"
-        "• Delta, Epsilon & Zeta bestätigen: ✅ (Drop erhalten) / ❎ (kein Drop)\n"
-        "• Kappa bestätigen: nutze die Buttons (Hercules / LF4-U)\n"
-        "• ✅ gespeichert · ⏳ Duplikat (30 s) · ❌ ungültige Eingabe\n"
-        "• Nachrichten werden nach 5 Minuten automatisch gelöscht\n"
+        "• Alpha, Beta & Gamma werden sofort eingetragen "
+        "(✅ = gespeichert · ⏳ = Duplikat innerhalb 30 s)\n"
+        "• Delta, Epsilon, Zeta & Kappa: reagiere auf deine eigene Nachricht "
+        "mit dem Drop-Icon, das du erhalten hast (oder ❌ für keinen Drop)\n"
+        "• Der Bot trägt den Drop dann ein und entfernt anschließend deine "
+        "Nachricht (kein ✅)\n"
         "• Nur eine Eingabe pro Nachricht!"
     )
     return discord.Embed(
@@ -626,6 +628,19 @@ def register_gate_commands(bot, repo: StatsRepository, settings: Settings):
             bot._verlauf_msgs[msg.id] = ctx.author.id
 
 
+def _emoji_key(emoji) -> str:
+    """Normalized options-map key for a reaction emoji.
+
+    Custom emoji (truthy ``.id``) key off the id, so an animated ``<a:name:id>``
+    seed still matches a reaction payload whose ``PartialEmoji`` renders
+    ``<:name:id>`` — the gateway may omit ``animated``, and ``PartialEmoji``
+    then defaults it to False, dropping the ``a`` prefix. Unicode emoji (plain
+    ``str``, no ``.id``) key off their own value.
+    """
+    emoji_id = getattr(emoji, "id", None)
+    return str(emoji_id) if emoji_id else str(emoji)
+
+
 async def handle_gate_input_message(bot, repo: StatsRepository, settings: Settings, message):
     """Parse a message in the configured gate-input channel and react.
 
@@ -642,22 +657,25 @@ async def handle_gate_input_message(bot, repo: StatsRepository, settings: Settin
                 pass
         return
     gate_type, cost = parsed
-    if gate_type in ("d", "e", "z"):
-        pending = {"cost": cost, "user_id": message.author.id,
-                   "username": message.author.name}
-        if gate_type != "d":
-            pending["gate_type"] = gate_type
-        bot._pending_delta[message.id] = pending
+    if gate_type in GATE_DROP_REACTION_ITEMS:
+        items = GATE_DROP_REACTION_ITEMS[gate_type]
+        options = {}
+        reactions = []
+        for item in items:
+            emoji = resolve_drop_emoji(message.guild, item)
+            options[_emoji_key(emoji)] = item
+            reactions.append(emoji)
+        options[DROP_NOTHING_EMOJI] = None
+        reactions.append(DROP_NOTHING_EMOJI)
+        bot._pending_gate[message.id] = {
+            "cost": cost, "user_id": message.author.id,
+            "username": message.author.name, "gate_type": gate_type,
+            "options": options}
         try:
-            await message.add_reaction("✅")
-            await message.add_reaction("❎")
+            for emoji in reactions:
+                await message.add_reaction(emoji)
         except Exception:
             pass
-        return
-    if gate_type == "k":
-        await message.channel.send(view=KappaConfirmView(
-            repo, bot, settings, cost=cost, user_id=message.author.id,
-            username=message.author.name))
         return
     before = await repo.gate_record(gate_type)
     inserted = await repo.add_gate_entry(gate_type, cost, message.author.id, message.author.name)
@@ -684,43 +702,59 @@ async def handle_gate_input_message(bot, repo: StatsRepository, settings: Settin
                 pass
 
 
-async def handle_delta_confirmation(bot, repo: StatsRepository,
-                                    settings: Settings, payload) -> None:
-    """Store a pending delta on the author's ✅/❎ reaction.
+async def handle_gate_drop_confirmation(bot, repo: StatsRepository,
+                                        settings: Settings, payload) -> None:
+    """Store a pending d/e/z/k gate on the author's single drop-icon click.
 
-    ✅ -> laser_dropped=True, ❎ -> laser_dropped=False. Only the message
-    author may confirm their own delta; any other reactor (incl. the bot's
-    own seeding reactions) is ignored.
+    Clicking a drop-icon reaction stores exactly that item dropped=True; ❌
+    stores no drop. Only the message author may confirm their own gate; any
+    other reactor (incl. the bot's own seeding reactions) is ignored. On a
+    successful store the user's message is deleted and the usual
+    post-processing runs.
     """
-    pending = bot._pending_delta.get(payload.message_id)
+    pending = bot._pending_gate.get(payload.message_id)
     if pending is None:
         return
-    emoji = str(payload.emoji)
-    if emoji not in ("✅", "❎"):
+    options = pending["options"]
+    key = _emoji_key(payload.emoji)
+    if key not in options:
         return
     if payload.user_id != pending["user_id"]:
         return
     # Claim the pending entry ATOMICALLY before any await: a redelivered event
-    # or a ✅-then-❎ within the window would otherwise both pass the guards
-    # above and each store the delta (double gate_entries row on a suspending
-    # SQL backend). pop() has no await, so only one dispatch wins; the rest are
-    # clean no-ops.
-    pending = bot._pending_delta.pop(payload.message_id, None)
+    # or two quick clicks would otherwise both pass the guards above and each
+    # store the gate (double gate_entries row on a suspending SQL backend).
+    # pop() has no await, so only one dispatch wins; the rest are clean no-ops.
+    pending = bot._pending_gate.pop(payload.message_id, None)
     if pending is None:
         return
-    gate_type = pending.get("gate_type", "d")
-    dropped = emoji == "✅"
+    chosen = pending["options"][key]
+    gate_type = pending["gate_type"]
+    cost = pending["cost"]
+    user_id = pending["user_id"]
+    username = pending["username"]
     before = await repo.gate_record(gate_type)
     if gate_type == "d":
         inserted = await repo.add_gate_entry(
-            "d", pending["cost"], pending["user_id"], pending["username"],
-            laser_dropped=dropped)
-    else:
-        item = {"e": "lf4", "z": "havoc"}[gate_type]
+            "d", cost, user_id, username, laser_dropped=(chosen == "laser"))
+    elif gate_type == "e":
         inserted = await repo.add_gate_entry(
-            gate_type, pending["cost"], pending["user_id"],
-            pending["username"], drops={item: dropped})
+            "e", cost, user_id, username, drops={"lf4": chosen == "lf4"})
+    elif gate_type == "z":
+        inserted = await repo.add_gate_entry(
+            "z", cost, user_id, username, drops={"havoc": chosen == "havoc"})
+    else:
+        inserted = await repo.add_gate_entry(
+            "k", cost, user_id, username,
+            drops={"hercules": chosen == "hercules",
+                   "lf4u": chosen == "lf4u"})
     if inserted:
+        try:
+            channel = bot.get_channel(payload.channel_id)
+            msg = await channel.fetch_message(payload.message_id)
+            await msg.delete()
+        except Exception:
+            pass
         after = await repo.gate_record(gate_type)
         await _announce_records(bot, settings, gate_type,
                                 changed_records(before, after), after)
@@ -730,14 +764,24 @@ async def handle_delta_confirmation(bot, repo: StatsRepository,
         except Exception:
             pass
         member = getattr(payload, "member", None)
-        newly = (await check_achievements(repo, pending["user_id"], f"gate_{gate_type}")
-                 + await check_achievements(repo, pending["user_id"], "gate_total")
-                 + await check_achievements(repo, pending["user_id"], "gate_cost_total"))
+        newly = (await check_achievements(repo, user_id, f"gate_{gate_type}")
+                 + await check_achievements(repo, user_id, "gate_total")
+                 + await check_achievements(repo, user_id, "gate_cost_total"))
         if newly:
             try:
                 await announce_achievements(bot, settings, member, newly)
             except Exception:
                 pass
+    else:
+        # Dedup rejection: mirror the a/b/c ⏳ feedback so the author sees the
+        # duplicate was ignored. Keep the message (no delete) and leave the
+        # seed reactions in place.
+        try:
+            channel = bot.get_channel(payload.channel_id)
+            msg = await channel.fetch_message(payload.message_id)
+            await msg.add_reaction("⏳")
+        except Exception:
+            pass
 
 
 async def handle_verlauf_removal(bot, payload) -> None:
@@ -938,7 +982,7 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
         except Exception:
             pass
         try:
-            await handle_delta_confirmation(bot, repo, settings, payload)
+            await handle_gate_drop_confirmation(bot, repo, settings, payload)
         except Exception:
             pass
         try:
