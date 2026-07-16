@@ -122,10 +122,13 @@ async def test_kodex_emoji_is_check_mark():
 
 async def test_send_kodex_dm_sends_text_reacts_and_records_message():
     from n3x_bot import kodex
+    from n3x_bot.content import ContentTexts
     repo = await _flatfile_repo()
     member = _dm_member(member_id=111, msg_id=9001)
+    bot = MagicMock()
+    bot.content_texts = ContentTexts()
 
-    await kodex.send_kodex_dm(MagicMock(), repo, member)
+    await kodex.send_kodex_dm(bot, repo, member)
 
     member.send.assert_awaited_once_with(kodex.KODEX_TEXT)
     member._sent_msg.add_reaction.assert_awaited_once_with(kodex.KODEX_EMOJI)

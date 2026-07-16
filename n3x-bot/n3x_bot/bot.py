@@ -30,6 +30,8 @@ from n3x_bot.achievements import (
 from n3x_bot.cards import announce_achievements
 from n3x_bot.config import Settings
 from n3x_bot.config_commands import register_config_commands
+from n3x_bot.content import ContentTexts
+from n3x_bot.content_commands import register_content_commands
 from n3x_bot.format import format_number
 from n3x_bot.charts import render_gate_history_chart
 from n3x_bot.gates import (
@@ -101,6 +103,7 @@ def build_bot(settings: Settings, repo: StatsRepository) -> commands.Bot:
     bot.n3x_settings = settings
     bot.n3x_repo = repo
     bot.runtime_config = RuntimeConfig(settings)
+    bot.content_texts = ContentTexts()
     bot._rank_last_posts = {}
     bot._target_last_posts = {}
     bot._gate_embed_msg_id = None
@@ -119,6 +122,7 @@ def build_bot(settings: Settings, repo: StatsRepository) -> commands.Bot:
     register_gate_commands(bot, repo, settings)
     register_admin_commands(bot, repo, settings)
     register_config_commands(bot, repo, settings)
+    register_content_commands(bot, repo, settings)
     register_activity(bot, repo, settings)
     register_achievement_commands(bot, repo, settings)
     register_overview_and_sync_commands(bot, repo, settings)
@@ -772,15 +776,13 @@ async def _announce_records(bot, settings: Settings, gate_type: str,
         changed = {"min"}
     try:
         if "min" in changed:
-            await channel.send(
-                f"🍀 **Neuer Glückspilz!** <@{record['min_user']}> hat den "
-                f"neuen Tiefpreis-Rekord für das **{name}** aufgestellt: "
-                f"**{format_number(record['min_cost'])}**")
+            await channel.send(bot.content_texts.get("record_lucky").format(
+                user=record["min_user"], name=name,
+                cost=format_number(record["min_cost"])))
         if "max" in changed:
-            await channel.send(
-                f"💀 **Neuer Pechvogel!** <@{record['max_user']}> hat den "
-                f"neuen Höchstpreis-Rekord für das **{name}** aufgestellt: "
-                f"**{format_number(record['max_cost'])}**")
+            await channel.send(bot.content_texts.get("record_unlucky").format(
+                user=record["max_user"], name=name,
+                cost=format_number(record["max_cost"])))
     except Exception:
         pass
 
@@ -795,9 +797,9 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
         if channel is None:
             return
         if weekday == 2:
-            await channel.send("*EVENT REMINDER*: ACE-BALL beginnt in 30 Minuten! @everyone")
+            await channel.send(bot.content_texts.get("reminder_aceball"))
         elif weekday == 4:
-            await channel.send("*EVENT REMINDER*: Invasion beginnt in 30 Minuten! @everyone")
+            await channel.send(bot.content_texts.get("reminder_invasion"))
 
     @tasks.loop(minutes=5)
     async def voice_flush_task():
@@ -810,6 +812,10 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
             await bot.runtime_config.refresh(repo)
         except Exception:
             log.exception("runtime_config refresh failed; using .env base")
+        try:
+            await bot.content_texts.refresh(repo)
+        except Exception:
+            log.exception("content_texts refresh failed; using defaults")
         await register_stat_commands(bot, repo, settings)
         for guild in bot.guilds:
             try:

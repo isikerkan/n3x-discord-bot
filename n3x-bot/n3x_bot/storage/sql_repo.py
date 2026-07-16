@@ -356,6 +356,31 @@ class SqlRepository(StatsRepository):
             return {r.key: r.value
                     for r in await conn.execute(select(sc.runtime_config))}
 
+    # ── content texts ─────────────────────────────────────────────────────
+    async def set_content_text(self, key, value):
+        async with self.engine.begin() as conn:
+            await self._upsert(conn, sc.content_texts, {"key": key},
+                               {"value": value})
+
+    async def get_content_text(self, key):
+        async with self.engine.connect() as conn:
+            r = (await conn.execute(select(sc.content_texts.c.value)
+                 .where(sc.content_texts.c.key == key))).one_or_none()
+            return r.value if r else None
+
+    async def delete_content_text(self, key):
+        async with self.engine.begin() as conn:
+            exists = (await conn.execute(select(sc.content_texts.c.key)
+                      .where(sc.content_texts.c.key == key))).one_or_none()
+            await conn.execute(delete(sc.content_texts)
+                               .where(sc.content_texts.c.key == key))
+            return exists is not None
+
+    async def all_content_texts(self):
+        async with self.engine.connect() as conn:
+            return {r.key: r.value
+                    for r in await conn.execute(select(sc.content_texts))}
+
     # ── target tracking ───────────────────────────────────────────────────
     async def record_target_use(self, target_discord_id, stat_key):
         async with self.engine.begin() as conn:
@@ -778,6 +803,10 @@ class SqlRepository(StatsRepository):
                 r.key: r.value
                 for r in await conn.execute(select(sc.runtime_config))
             }
+            content_texts = {
+                r.key: r.value
+                for r in await conn.execute(select(sc.content_texts))
+            }
             seq = {}
             for key, table in (("user", sc.users), ("message", sc.messages),
                                ("stat", sc.stats), ("gate", sc.gate_entries)):
@@ -794,6 +823,7 @@ class SqlRepository(StatsRepository):
             "kodex_messages": kodex_messages, "base_timers": base_timers,
             "channel_messages": channel_messages,
             "runtime_config": runtime_config,
+            "content_texts": content_texts,
             "seq": seq,
         }
 
@@ -870,6 +900,9 @@ class SqlRepository(StatsRepository):
             for key, value in snapshot.get("runtime_config", {}).items():
                 await conn.execute(insert(sc.runtime_config).values(
                     key=key, value=value))
+            for key, value in snapshot.get("content_texts", {}).items():
+                await conn.execute(insert(sc.content_texts).values(
+                    key=key, value=value))
             if self.engine.dialect.name == "postgresql":
                 for tbl, key in (("users", "user"), ("messages", "message"),
                                  ("stats", "stat"), ("gate_entries", "gate")):
@@ -887,5 +920,5 @@ class SqlRepository(StatsRepository):
                           sc.activity_counters, sc.streak_stats, sc.night_stats,
                           sc.kodex_confirmations, sc.kodex_messages,
                           sc.base_timers, sc.channel_messages,
-                          sc.runtime_config):
+                          sc.runtime_config, sc.content_texts):
                 await conn.execute(delete(table))
