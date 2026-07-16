@@ -87,7 +87,7 @@ async def send_welcome_card(bot, settings: Settings, member) -> bool:
         name = strip_prefix(member.display_name, settings.prefix_str)
         png = render_welcome_card(name)
         await channel.send(
-            f"Willkommen {member.mention}!",
+            bot.content_texts.get("welcome_dm").format(mention=member.mention),
             file=discord.File(BytesIO(png), filename=f"welcome_{member.id}.png"))
         return True
     except Exception:

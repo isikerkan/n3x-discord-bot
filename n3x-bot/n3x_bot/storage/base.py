@@ -117,6 +117,24 @@ class StatsRepository(ABC):
         """All overrides as `{key: value}`."""
         ...
 
+    # content texts
+    @abstractmethod
+    async def set_content_text(self, key: str, value: str) -> None:
+        """Upsert the raw narrative-copy string stored under `key`."""
+        ...
+    @abstractmethod
+    async def get_content_text(self, key: str) -> str | None:
+        """The raw copy string for `key`, or None if unset."""
+        ...
+    @abstractmethod
+    async def delete_content_text(self, key: str) -> bool:
+        """Delete the override for `key`; True if a row existed."""
+        ...
+    @abstractmethod
+    async def all_content_texts(self) -> dict[str, str]:
+        """All content overrides as `{key: value}`."""
+        ...
+
     # target tracking
     @abstractmethod
     async def record_target_use(self, target_discord_id: int, stat_key: str) -> int:

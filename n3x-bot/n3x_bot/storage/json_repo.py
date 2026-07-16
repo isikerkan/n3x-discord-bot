@@ -48,6 +48,7 @@ class JsonRepository(StatsRepository):
             "kodex_confirmations": [], "kodex_messages": {},
             "base_timers": {}, "channel_messages": {},
             "runtime_config": {},
+            "content_texts": {},
         }
 
     async def connect(self) -> None:
@@ -294,6 +295,23 @@ class JsonRepository(StatsRepository):
 
     async def all_runtime_config(self):
         return dict(self._db["runtime_config"])
+
+    # ── content texts ──────────────────────────────────────────────────────
+    async def set_content_text(self, key, value):
+        self._db["content_texts"][key] = value
+        self._flush()
+
+    async def get_content_text(self, key):
+        return self._db["content_texts"].get(key)
+
+    async def delete_content_text(self, key):
+        existed = key in self._db["content_texts"]
+        self._db["content_texts"].pop(key, None)
+        self._flush()
+        return existed
+
+    async def all_content_texts(self):
+        return dict(self._db["content_texts"])
 
     # ── target tracking ────────────────────────────────────────────────────
     async def record_target_use(self, target_discord_id, stat_key):
@@ -553,6 +571,7 @@ class JsonRepository(StatsRepository):
             "base_timers": copy.deepcopy(self._db["base_timers"]),
             "channel_messages": copy.deepcopy(self._db["channel_messages"]),
             "runtime_config": copy.deepcopy(self._db["runtime_config"]),
+            "content_texts": copy.deepcopy(self._db["content_texts"]),
             "seq": {
                 "user": self._max_id(users),
                 "message": self._max_id(messages),
@@ -583,6 +602,8 @@ class JsonRepository(StatsRepository):
             snapshot.get("channel_messages", {}))
         self._db["runtime_config"] = copy.deepcopy(
             snapshot.get("runtime_config", {}))
+        self._db["content_texts"] = copy.deepcopy(
+            snapshot.get("content_texts", {}))
         self._db["seq"] = dict(snapshot["seq"])
         self._flush()
 

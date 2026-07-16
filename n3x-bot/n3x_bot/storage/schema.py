@@ -130,3 +130,9 @@ runtime_config = Table(
     Column("key", String(50), primary_key=True),
     Column("value", Text, nullable=True),
 )
+
+content_texts = Table(
+    "content_texts", metadata,
+    Column("key", String(50), primary_key=True),
+    Column("value", Text, nullable=True),
+)

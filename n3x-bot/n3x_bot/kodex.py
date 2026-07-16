@@ -24,7 +24,8 @@ async def send_kodex_dm(bot, repo: StatsRepository, member) -> None:
     if getattr(member, "bot", False):
         return
     try:
-        msg = await member.send(KODEX_TEXT)
+        text = bot.content_texts.get("kodex_text")
+        msg = await member.send(text)
         # Persist the mapping BEFORE seeding the reaction: if add_reaction hits a
         # rate limit the member can still confirm manually and be recorded. The
         # save stays after a successful send, so a closed-DM failure records
