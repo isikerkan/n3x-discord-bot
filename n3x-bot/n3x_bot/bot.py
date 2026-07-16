@@ -63,7 +63,8 @@ GATE_STAT_CHUNK_LIMIT = 1900
 _GENERIC_ARG_COMMANDS = frozenset(
     {"stat", "del", "admin", "msg", "add", "edit", "archive", "rm", "list",
      "channel", "role", "message", "gate-rewards", "allowed-maps",
-     "voice-roles", "reminder-time", "reset", "gate", "verlauf"})
+     "voice-roles", "reminder-time", "gate-delete-delay", "reset", "gate",
+     "verlauf"})
 
 
 async def build_output(repo: StatsRepository, stat_key: str,
@@ -704,6 +705,10 @@ async def handle_gate_input_message(bot, repo: StatsRepository, settings: Settin
                 await announce_achievements(bot, settings, message.author, newly)
             except Exception:
                 pass
+        try:
+            await message.delete(delay=bot.runtime_config.gate_delete_delay_seconds)
+        except Exception:
+            pass
 
 
 async def handle_gate_drop_confirmation(bot, repo: StatsRepository,
@@ -756,7 +761,7 @@ async def handle_gate_drop_confirmation(bot, repo: StatsRepository,
         try:
             channel = bot.get_channel(payload.channel_id)
             msg = await channel.fetch_message(payload.message_id)
-            await msg.delete()
+            await msg.delete(delay=bot.runtime_config.gate_delete_delay_seconds)
         except Exception:
             pass
         after = await repo.gate_record(gate_type)

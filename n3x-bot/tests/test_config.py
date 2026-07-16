@@ -283,3 +283,82 @@ def test_dotenv_overrides_environment_variables(tmp_path, monkeypatch):
     assert s.gate_stats_channel_id == 222            # .env beats env
     assert s.gate_rewards_map() == {"a": 1, "b": 2}  # .env beats env
     assert s.milestone_channel_id == 777             # env-only field still read
+
+
+# ── parse_duration: seconds parser with s/m/h suffixes and combos ────────────
+# Mirrors the style of parse_reminder_hm / parse_gate_rewards in config.py.
+# Returns whole seconds; bad/empty input raises ValueError so the caller
+# (RuntimeConfig) can fall back.
+
+
+def test_parse_duration_plain_integer_is_seconds():
+    from n3x_bot.config import parse_duration
+    assert parse_duration("90") == 90
+
+
+def test_parse_duration_seconds_suffix():
+    from n3x_bot.config import parse_duration
+    assert parse_duration("30s") == 30
+
+
+def test_parse_duration_minutes_suffix():
+    from n3x_bot.config import parse_duration
+    assert parse_duration("1m") == 60
+    assert parse_duration("5m") == 300
+
+
+def test_parse_duration_hours_suffix():
+    from n3x_bot.config import parse_duration
+    assert parse_duration("2h") == 7200
+
+
+def test_parse_duration_combined_minutes_and_seconds():
+    from n3x_bot.config import parse_duration
+    assert parse_duration("1m30s") == 90
+
+
+def test_parse_duration_combined_hours_minutes_seconds():
+    from n3x_bot.config import parse_duration
+    assert parse_duration("1h1m1s") == 3661
+
+
+@pytest.mark.parametrize("bad", ["", "   ", "abc", "1x", "m", "1m1x"])
+def test_parse_duration_rejects_malformed_input(bad):
+    from n3x_bot.config import parse_duration
+    with pytest.raises(ValueError):
+        parse_duration(bad)
+
+
+def test_parse_duration_rejects_non_ascii_digits():
+    # str.isdigit()/`\d` accept Unicode digits (Arabic-Indic, fullwidth); the
+    # parser is ASCII-strict, so these must raise like any other junk.
+    from n3x_bot.config import parse_duration
+    with pytest.raises(ValueError):
+        parse_duration("١٢")
+
+
+# ── Settings.gate_message_delete_delay field ────────────────────────────────
+
+
+def test_gate_message_delete_delay_defaults_to_one_minute():
+    s = Settings(**BASE)
+    assert s.gate_message_delete_delay == "1m"
+
+
+def test_gate_message_delete_delay_read_from_env(monkeypatch):
+    monkeypatch.setenv("GATE_MESSAGE_DELETE_DELAY", "5m")
+    s = Settings(
+        discord_token="tok",
+        target_role_id=1,
+        welcome_channel_id=2,
+        reminder_channel_id=3,
+        _env_file=None,
+    )
+    assert s.gate_message_delete_delay == "5m"
+
+
+def test_env_example_documents_gate_message_delete_delay():
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    text = (root / ".env.example").read_text()
+    assert "GATE_MESSAGE_DELETE_DELAY" in text
