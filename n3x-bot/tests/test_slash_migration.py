@@ -261,3 +261,168 @@ async def test_overview_app_command_defers_before_posting():
     assert order == ["defer", "post", "followup"]  # defer FIRST, followup LAST
 
     await repo.close()
+
+
+# ── Phase 2: gate GATE commands migrated to slash-only ───────────────────────
+#
+# `stat` and `del` were prefix gate commands wired by register_gate_commands.
+# Phase 2 makes them slash-ONLY app commands on `bot.tree`:
+#   /stat gate:<choice>            -> gate stats embed
+#   /del  gate:<choice> index:<int> -> role-gated delete + embed refresh
+# `gate` is an app_commands.Choice over the 7 gate letters, so the callback
+# receives the raw `str` value ("a".."k") and an invalid gate can never reach
+# it. `del` is a Python keyword, so the command NAME is "del" but the callback
+# function is named differently; tests only ever address it by name via the
+# tree, so the function name is irrelevant here.
+
+def _fake_channel(send_return_id=1, channel_id=555):
+    channel = MagicMock()
+    channel.id = channel_id
+    channel.send = AsyncMock(return_value=SimpleNamespace(id=send_return_id))
+    old = MagicMock()
+    old.delete = AsyncMock()
+    old.edit = AsyncMock()
+    channel.fetch_message = AsyncMock(return_value=old)
+    return channel
+
+
+# ── /stat ────────────────────────────────────────────────────────────────────
+
+async def test_stat_is_app_command_not_prefix_command():
+    repo = await _flatfile_repo()
+    bot = build_bot(_settings(), repo)
+
+    assert bot.get_command("stat") is None       # dropped from prefix registry
+    assert _app_cmd(bot, "stat") is not None      # present on the app tree
+
+    await repo.close()
+
+
+async def test_stat_app_command_sends_costs_embed():
+    repo = await _flatfile_repo()
+    bot = build_bot(_settings(), repo)
+    await repo.add_gate_entry("a", 46892, 1, "u1")
+    await repo.add_gate_entry("a", 47000, 2, "u2")
+
+    interaction = _fake_interaction()
+    await _app_cmd(bot, "stat").callback(interaction, gate="a")
+
+    embed = _embed_of(interaction.response.send_message)
+    assert embed is not None
+    assert "46.892" in embed.description
+    assert "47.000" in embed.description
+
+    await repo.close()
+
+
+async def test_stat_app_command_sends_extra_embeds_via_followup_on_overflow():
+    # Enough entries that build_gate_stat_embeds chunks into >1 embed: the first
+    # goes through response.send_message, the remainder through followup.send.
+    repo = await _flatfile_repo()
+    bot = build_bot(_settings(), repo)
+    for i in range(300):
+        await repo.add_gate_entry("a", 46000 + i, i, f"u{i}")
+
+    from n3x_bot.bot import build_gate_stat_embeds
+    costs = await repo.list_gate_costs("a")
+    assert len(build_gate_stat_embeds("a", costs)) > 1  # precondition: overflow
+
+    interaction = _fake_interaction()
+    await _app_cmd(bot, "stat").callback(interaction, gate="a")
+
+    # first embed acks the interaction
+    assert _embed_of(interaction.response.send_message) is not None
+    # at least one continuation embed is delivered via followup
+    followup_embeds = [c.kwargs.get("embed")
+                       for c in interaction.followup.send.await_args_list
+                       if c.kwargs.get("embed") is not None]
+    assert len(followup_embeds) >= 1
+
+    await repo.close()
+
+
+async def test_stat_app_command_reports_no_data_when_empty():
+    repo = await _flatfile_repo()
+    bot = build_bot(_settings(), repo)
+
+    interaction = _fake_interaction()
+    await _app_cmd(bot, "stat").callback(interaction, gate="b")
+
+    # a "no data" reply is a plain-text message, not an embed
+    sent = interaction.response.send_message.await_args
+    text = sent.args[0] if sent.args else sent.kwargs.get("content", "")
+    assert "Noch keine Daten" in text
+    assert _embed_of(interaction.response.send_message) is None
+
+    await repo.close()
+
+
+# ── /del ─────────────────────────────────────────────────────────────────────
+
+async def test_del_is_app_command_not_prefix_command():
+    repo = await _flatfile_repo()
+    bot = build_bot(_settings(), repo)
+
+    assert bot.get_command("del") is None
+    assert _app_cmd(bot, "del") is not None
+
+    await repo.close()
+
+
+async def test_del_app_command_denies_without_configured_role():
+    repo = await _flatfile_repo()
+    bot = build_bot(_settings(gate_delete_role_id=42), repo)
+    await repo.add_gate_entry("a", 46892, 1, "u1")
+
+    # invoker holds role 1, not the required 42
+    interaction = _fake_interaction(user=_member(member_id=5, role_ids=(1,)))
+    await _app_cmd(bot, "del").callback(interaction, gate="a", index=1)
+
+    # deferred ephemerally up front to avoid the 3s interaction timeout
+    interaction.response.defer.assert_awaited_once()
+    assert interaction.response.defer.await_args.kwargs.get("ephemeral") is True
+    interaction.followup.send.assert_awaited_once()
+    text = interaction.followup.send.await_args.args[0]
+    assert "Keine Berechtigung" in text
+    # refusal is private to the caller
+    assert interaction.followup.send.await_args.kwargs.get("ephemeral") is True
+    # nothing deleted
+    assert await repo.list_gate_costs("a") == [46892]
+
+    await repo.close()
+
+
+async def test_del_app_command_with_role_deletes_and_refreshes_embed():
+    repo = await _flatfile_repo()
+    bot = build_bot(_settings(gate_delete_role_id=42, gate_stats_channel_id=555),
+                    repo)
+    channel = _fake_channel(channel_id=555)
+    bot.get_channel = MagicMock(return_value=channel)
+    await repo.add_gate_entry("a", 46892, 1, "u1")
+
+    interaction = _fake_interaction(user=_member(member_id=5, role_ids=(42,)))
+    await _app_cmd(bot, "del").callback(interaction, gate="a", index=1)
+
+    # deferred up front, before the delete + embed-refresh round-trips
+    interaction.response.defer.assert_awaited_once()
+    assert interaction.response.defer.await_args.kwargs.get("ephemeral") is True
+    assert await repo.list_gate_costs("a") == []       # entry removed
+    channel.send.assert_awaited()                       # gate embed refreshed
+    interaction.followup.send.assert_awaited_once()
+
+    await repo.close()
+
+
+async def test_del_app_command_reports_index_not_found():
+    repo = await _flatfile_repo()
+    bot = build_bot(_settings(gate_delete_role_id=42), repo)
+
+    interaction = _fake_interaction(user=_member(member_id=5, role_ids=(42,)))
+    await _app_cmd(bot, "del").callback(interaction, gate="a", index=5)
+
+    interaction.response.defer.assert_awaited_once()
+    interaction.followup.send.assert_awaited_once()
+    text = interaction.followup.send.await_args.args[0]
+    assert "nicht gefunden" in text
+
+    await repo.close()

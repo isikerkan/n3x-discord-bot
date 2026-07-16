@@ -109,14 +109,19 @@ async def test_build_bot_attaches_achievement_defs_baseline():
 
 
 async def test_build_bot_wires_gate_verlauf_group():
+    # Phase 2: `gate` migrated to an app_commands.Group on the tree; it is no
+    # longer a prefix command group. The `verlauf` subcommand hangs off the
+    # app group, reached via group.get_command("verlauf").
+    from discord import app_commands
     repo = await _flatfile_repo()
     settings = _settings()
 
     bot = build_bot(settings, repo)
 
-    group = bot.get_command("gate")
+    assert bot.get_command("gate") is None       # dropped from prefix registry
+    group = bot.tree.get_command("gate")
     assert group is not None
-    assert isinstance(group, commands.Group)
+    assert isinstance(group, app_commands.Group)
     assert group.get_command("verlauf") is not None
 
     await repo.close()
@@ -1225,137 +1230,11 @@ async def test_on_ready_syncs_command_tree(monkeypatch):
     await repo.close()
 
 
-# ── gate tracker: !stat command ─────────────────────────────────────────────
-
-async def test_stat_command_rejects_unknown_gate_type():
-    repo = await _flatfile_repo()
-    settings = _settings()
-    bot = build_bot(settings, repo)
-    ctx = MagicMock()
-    ctx.send = AsyncMock()
-
-    cmd = bot.get_command("stat")
-    await cmd.callback(ctx, "y")
-
-    ctx.send.assert_awaited_once()
-    assert "Ungültiger Gate-Typ" in ctx.send.await_args.args[0]
-
-    await repo.close()
-
-
-async def test_stat_command_reports_no_data_message():
-    repo = await _flatfile_repo()
-    settings = _settings()
-    bot = build_bot(settings, repo)
-    ctx = MagicMock()
-    ctx.send = AsyncMock()
-
-    cmd = bot.get_command("stat")
-    await cmd.callback(ctx, "a")
-
-    ctx.send.assert_awaited_once()
-    assert "Noch keine Daten" in ctx.send.await_args.args[0]
-
-    await repo.close()
-
-
-async def test_stat_command_lists_costs_as_embed():
-    repo = await _flatfile_repo()
-    settings = _settings()
-    bot = build_bot(settings, repo)
-    await repo.add_gate_entry("a", 46892, 1, "u1")
-    await repo.add_gate_entry("a", 47000, 2, "u2")
-    ctx = MagicMock()
-    ctx.send = AsyncMock()
-
-    cmd = bot.get_command("stat")
-    await cmd.callback(ctx, "A")  # uppercase input still resolves
-
-    ctx.send.assert_awaited_once()
-    embed = ctx.send.await_args.kwargs["embed"]
-    assert "46.892" in embed.description
-    assert "47.000" in embed.description
-
-    await repo.close()
-
-
-async def test_stat_command_chunks_long_lists_into_multiple_embeds():
-    repo = await _flatfile_repo()
-    settings = _settings()
-    bot = build_bot(settings, repo)
-    for i in range(200):  # long enough to exceed the 1900-char chunk limit
-        await repo.add_gate_entry("a", 1000000 + i, i, f"u{i}")
-    ctx = MagicMock()
-    ctx.send = AsyncMock()
-
-    cmd = bot.get_command("stat")
-    await cmd.callback(ctx, "a")
-
-    assert ctx.send.await_count > 1
-
-    await repo.close()
-
-
-# ── gate tracker: !del command ───────────────────────────────────────────────
-
-class _FakeAuthorWithRoles:
-    def __init__(self, roles):
-        self.roles = roles
-
-
-async def test_del_command_denies_without_configured_role():
-    repo = await _flatfile_repo()
-    settings = _settings(gate_delete_role_id=42)
-    bot = build_bot(settings, repo)
-    await repo.add_gate_entry("a", 46892, 1, "u1")
-    ctx = MagicMock()
-    ctx.send = AsyncMock()
-    ctx.author = _FakeAuthorWithRoles(roles=[SimpleNamespace(id=1)])
-
-    cmd = bot.get_command("del")
-    await cmd.callback(ctx, "a", 1)
-
-    ctx.send.assert_awaited_once()
-    assert "Keine Berechtigung" in ctx.send.await_args.args[0]
-    assert await repo.list_gate_costs("a") == [46892]  # untouched
-
-    await repo.close()
-
-
-async def test_del_command_with_role_deletes_and_refreshes_embed():
-    repo = await _flatfile_repo()
-    settings = _settings(gate_delete_role_id=42, gate_stats_channel_id=555)
-    bot = build_bot(settings, repo)
-    channel, _ = _fake_channel(send_return_id=1, channel_id=555)
-    bot.get_channel = MagicMock(return_value=channel)
-    await repo.add_gate_entry("a", 46892, 1, "u1")
-    ctx = MagicMock()
-    ctx.send = AsyncMock()
-    ctx.author = _FakeAuthorWithRoles(roles=[SimpleNamespace(id=42)])
-
-    cmd = bot.get_command("del")
-    await cmd.callback(ctx, "a", 1)
-
-    ctx.send.assert_awaited_once()
-    assert "gelöscht" in ctx.send.await_args.args[0]
-    assert await repo.list_gate_costs("a") == []
-    channel.send.assert_awaited_once()  # embed refresh
-
-    await repo.close()
-
-
-async def test_del_command_reports_index_not_found():
-    repo = await _flatfile_repo()
-    settings = _settings(gate_delete_role_id=42)
-    bot = build_bot(settings, repo)
-    ctx = MagicMock()
-    ctx.send = AsyncMock()
-    ctx.author = _FakeAuthorWithRoles(roles=[SimpleNamespace(id=42)])
-
-    cmd = bot.get_command("del")
-    await cmd.callback(ctx, "a", 5)
-
-    ctx.send.assert_awaited_once()
-    assert "nicht gefunden" in ctx.send.await_args.args[0]
-
-    await repo.close()
+# ── gate tracker: /stat and /del command ─────────────────────────────────────
+#
+# Phase 2 migrated `!stat` and `!del` to slash-ONLY app commands on `bot.tree`.
+# Their presence/absence and behaviour specs now live in
+# tests/test_slash_migration.py (Phase 2 section), invoked as app commands with
+# the `gate` Choice parameter. The old prefix `bot.get_command("stat")` /
+# `bot.get_command("del")` callbacks no longer exist, so the previous prefix
+# tests were removed here rather than left to AttributeError on `None.callback`.

@@ -238,7 +238,7 @@ class StatsRepository(ABC):
     async def list_gate_entries(self, gate_type: str,
                                 since: datetime | None = None,
                                 until: datetime | None = None) -> list[dict]:
-        """Timestamped gate-history read view backing the `!gate verlauf` chart.
+        """Timestamped gate-history read view backing the `/gate verlauf` chart.
 
         Returns `{"cost": int, "created_at": tz-aware datetime,
         "drops": dict[str, bool]}` for each `gate_type` entry, ordered by

@@ -211,21 +211,22 @@ async def test_command_list_contains_prefixed_top_level_commands():
     repo = await _flatfile_repo()
     bot = await _populated_bot(_settings(), repo)
     text = _embed_text(build_command_list(bot))
-    # `overview` migrated to a slash-only app command in Phase 1, so it no longer
-    # appears in the prefix-derived command list.
-    for name in ("stat", "rank", "kodex", "base"):
+    # `overview` migrated to a slash-only app command in Phase 1, and `stat`
+    # migrated to a slash-only app command in Phase 2, so neither appears in the
+    # prefix-derived command list any more.
+    for name in ("rank", "kodex", "base"):
         assert f"!{name}" in text, name
     await _cleanup(repo)
 
 
 async def test_command_list_contains_group_and_its_subcommands():
-    # Groups are walked -> their subcommands appear qualified (e.g. the `gate`
-    # group's `verlauf` sub, the `config` group's `channel` sub).
+    # Groups are walked -> their subcommands appear qualified (e.g. the `config`
+    # group's `channel` sub). The `gate` group migrated to a slash app-command
+    # group in Phase 2, so `!gate verlauf` no longer appears in the prefix list.
     from n3x_bot.bot import build_command_list
     repo = await _flatfile_repo()
     bot = await _populated_bot(_settings(), repo)
     text = _embed_text(build_command_list(bot))
-    assert "!gate verlauf" in text
     assert "!config channel" in text
     await _cleanup(repo)
 
@@ -291,14 +292,14 @@ async def test_command_list_is_deterministic():
 
 
 async def test_command_list_top_level_commands_are_sorted():
-    # `admin` sorts before `stat`; a sorted render places it earlier. (`activity`
-    # migrated to a slash-only app command in Phase 1 and is no longer in the
-    # prefix-derived list.)
+    # `admin` sorts before `base`; a sorted render places it earlier. (`activity`,
+    # `stat` and `gate` migrated to slash-only app commands and are no longer in
+    # the prefix-derived list.)
     from n3x_bot.bot import build_command_list
     repo = await _flatfile_repo()
     bot = await _populated_bot(_settings(), repo)
     text = _embed_text(build_command_list(bot))
-    assert text.index("!admin") < text.index("!stat")
+    assert text.index("!admin") < text.index("!base")
     await _cleanup(repo)
 
 
