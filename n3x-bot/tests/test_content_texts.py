@@ -416,6 +416,89 @@ async def test_content_set_stores_value_and_refreshes_live_resolver():
     await _cleanup(repo)
 
 
+async def test_content_set_welcome_dm_wrong_placeholder_rejected_no_write():
+    # welcome_dm is `.format(mention=…)`-ed at its read-site; an override using a
+    # placeholder the read-site does not supply (`{name}`) would raise KeyError
+    # there (silently swallowed). Reject on write instead — no store, no refresh.
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+    ctx = _ctx(_admin())
+
+    await _content_sub(bot, "set").callback(ctx, "welcome_dm",
+                                            value="Hi {name}!")
+
+    assert "Platzhalter" in _sent_text(ctx.send)
+    assert await repo.get_content_text("welcome_dm") is None
+    # live resolver still shows the default, untouched
+    from n3x_bot.content import CONTENT_DEFAULTS
+    assert bot.content_texts.get("welcome_dm") == CONTENT_DEFAULTS["welcome_dm"]
+
+    await _cleanup(repo)
+
+
+async def test_content_set_welcome_dm_valid_placeholder_stored():
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+    ctx = _ctx(_admin())
+
+    await _content_sub(bot, "set").callback(ctx, "welcome_dm",
+                                            value="Servus {mention}!")
+
+    assert await repo.get_content_text("welcome_dm") == "Servus {mention}!"
+    assert bot.content_texts.get("welcome_dm") == "Servus {mention}!"
+
+    await _cleanup(repo)
+
+
+async def test_content_set_record_template_extra_literal_text_stored():
+    # All required placeholders present plus extra literal text is valid.
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+    ctx = _ctx(_admin())
+
+    await _content_sub(bot, "set").callback(
+        ctx, "record_lucky", value="{user} {name} {cost} extra")
+
+    assert await repo.get_content_text("record_lucky") == "{user} {name} {cost} extra"
+    assert bot.content_texts.get("record_lucky") == "{user} {name} {cost} extra"
+
+    await _cleanup(repo)
+
+
+async def test_content_set_record_template_bad_placeholder_rejected_no_write():
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+    ctx = _ctx(_admin())
+
+    await _content_sub(bot, "set").callback(
+        ctx, "record_unlucky", value="Pech {user} {bogus} {cost}")
+
+    assert "Platzhalter" in _sent_text(ctx.send)
+    assert await repo.get_content_text("record_unlucky") is None
+
+    await _cleanup(repo)
+
+
+async def test_content_set_non_template_key_not_validated():
+    # kodex_text has no `.format` read-site, so arbitrary text (no validation).
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+    ctx = _ctx(_admin())
+
+    await _content_sub(bot, "set").callback(
+        ctx, "kodex_text", value="Ganz normaler Kodex ohne Platzhalter")
+
+    assert await repo.get_content_text("kodex_text") == (
+        "Ganz normaler Kodex ohne Platzhalter")
+
+    await _cleanup(repo)
+
+
 async def test_content_set_unknown_key_rejected_no_write():
     repo = await _flatfile_repo()
     settings = _settings()

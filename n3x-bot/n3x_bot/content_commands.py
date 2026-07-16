@@ -10,6 +10,17 @@ from n3x_bot.config import Settings
 from n3x_bot.content import CONTENT_KEYS
 from n3x_bot.storage.base import StatsRepository
 
+# Template keys are `.format(...)`-ed at their read-sites (welcome.py,
+# bot._announce_records) with exactly these named placeholders. An override with
+# a wrong/missing/positional/malformed placeholder would raise at the read-site,
+# where it is silently swallowed — so validate on write. Keys absent here carry
+# no placeholders and are never `.format`-ed, so they need no validation.
+REQUIRED_PLACEHOLDERS: dict[str, frozenset[str]] = {
+    "welcome_dm": frozenset({"mention"}),
+    "record_lucky": frozenset({"user", "name", "cost"}),
+    "record_unlucky": frozenset({"user", "name", "cost"}),
+}
+
 
 def register_content_commands(bot, repo: StatsRepository, settings: Settings) -> None:
     if bot.get_command("content") is not None:
@@ -55,6 +66,16 @@ def register_content_commands(bot, repo: StatsRepository, settings: Settings) ->
         if key not in CONTENT_KEYS:
             await ctx.send(f"❌ Unbekannter Schlüssel `{key}`.", delete_after=5)
             return
+        required = REQUIRED_PLACEHOLDERS.get(key)
+        if required is not None:
+            try:
+                value.format(**{p: "" for p in required})
+            except (KeyError, IndexError, ValueError):
+                allowed = ", ".join(f"{{{p}}}" for p in sorted(required))
+                await ctx.send(
+                    f"❌ Ungültige Platzhalter. Erlaubt für `{key}`: {allowed}",
+                    delete_after=5)
+                return
         await repo.set_content_text(key, value)
         await bot.content_texts.refresh(repo)
         await ctx.send(f"✅ `{key}` gesetzt.", delete_after=5)
