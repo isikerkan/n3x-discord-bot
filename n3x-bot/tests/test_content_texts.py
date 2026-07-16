@@ -120,32 +120,56 @@ def _non_admin():
     return _member(role_ids=(999,))
 
 
-def _ctx(author):
-    ctx = MagicMock()
-    ctx.send = AsyncMock()
-    ctx.author = author
-    return ctx
+def _fake_interaction(user=None):
+    it = MagicMock()
+    it.user = user or _admin()
+    it.response = MagicMock()
+    it.response.send_message = AsyncMock()
+    it.response.defer = AsyncMock()
+    it.followup = MagicMock()
+    it.followup.send = AsyncMock()
+    return it
 
 
-def _sent_text(send_mock) -> str:
-    """All text posted, from plain args and any embeds, joined."""
+def _sent_text(interaction) -> str:
+    """All text the callback sent the caller, via response.send_message and any
+    followup.send, joined — content arg, `content=` kwarg, or embed text."""
     parts = []
-    for call in send_mock.await_args_list:
-        if call.args and isinstance(call.args[0], str):
-            parts.append(call.args[0])
-        embed = call.kwargs.get("embed")
-        if embed is not None:
-            parts.append(str(getattr(embed, "description", "") or ""))
-            for field in getattr(embed, "fields", []):
-                parts.append(f"{field.name} {field.value}")
+    for mock in (interaction.response.send_message, interaction.followup.send):
+        for call in mock.await_args_list:
+            if call.args and isinstance(call.args[0], str):
+                parts.append(call.args[0])
+            content = call.kwargs.get("content")
+            if isinstance(content, str):
+                parts.append(content)
+            embed = call.kwargs.get("embed")
+            if embed is not None:
+                parts.append(str(getattr(embed, "description", "") or ""))
+                for field in getattr(embed, "fields", []):
+                    parts.append(f"{field.name} {field.value}")
     return "\n".join(parts)
 
 
+def _last_send(interaction):
+    calls = (list(interaction.response.send_message.await_args_list)
+             + list(interaction.followup.send.await_args_list))
+    assert calls, "the callback must reply to the caller"
+    return calls[-1]
+
+
+def _content_group(bot):
+    from discord import app_commands
+    assert bot.get_command("content") is None, \
+        "`content` must be REMOVED from the prefix registry (slash-only)"
+    group = bot.tree.get_command("content")
+    assert isinstance(group, app_commands.Group), \
+        "`content` must be an app_commands.Group on bot.tree"
+    return group
+
+
 def _content_sub(bot, name):
-    group = bot.get_command("content")
-    assert group is not None, "prefix `content` group must be registered"
-    sub = group.get_command(name)
-    assert sub is not None, f"`content {name}` subcommand must be registered"
+    sub = _content_group(bot).get_command(name)
+    assert sub is not None, f"/content {name} subcommand must be registered"
     return sub
 
 
@@ -335,15 +359,15 @@ async def test_build_bot_content_texts_behaviour_preserving_without_overrides():
     await _cleanup(repo)
 
 
-async def test_build_bot_registers_content_group():
-    from discord.ext import commands
+async def test_build_bot_registers_content_group_on_tree():
+    from discord import app_commands
     repo = await _flatfile_repo()
     settings = _settings()
 
     bot = build_bot(settings, repo)
 
-    group = bot.get_command("content")
-    assert isinstance(group, commands.Group)
+    assert bot.get_command("content") is None       # dropped from prefix registry
+    assert isinstance(bot.tree.get_command("content"), app_commands.Group)
 
     await _cleanup(repo)
 
@@ -353,8 +377,7 @@ async def test_content_group_exposes_expected_subcommands():
     settings = _settings()
     bot = build_bot(settings, repo)
 
-    group = bot.get_command("content")
-    names = {c.name for c in group.commands}
+    names = {c.name for c in _content_group(bot).commands}
     assert {"list", "show", "set", "reset"} <= names
 
     await _cleanup(repo)
@@ -371,10 +394,11 @@ async def test_register_content_commands_is_idempotent():
     settings = _settings()
     bot = build_bot(settings, repo)
 
-    register_content_commands(bot, repo, settings)
-    register_content_commands(bot, repo, settings)  # must not raise/duplicate
+    from discord import app_commands
+    register_content_commands(bot, repo, settings)  # re-register must not raise
 
-    assert bot.get_command("content") is not None
+    assert bot.get_command("content") is None
+    assert isinstance(bot.tree.get_command("content"), app_commands.Group)
 
     await _cleanup(repo)
 
@@ -397,21 +421,46 @@ async def test_on_ready_refreshes_content_texts():
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# 4. !content admin commands
+# 4. /content admin commands (slash-only)
+#
+# `content` is an app_commands.Group on bot.tree (removed from the prefix
+# registry), admin-gated via app_is_admin. Subcommands are invoked directly:
+#     bot.tree.get_command("content").get_command("set").callback(
+#         interaction, key="kodex_text", value="…")
+# `key` is a Choice[str] over CONTENT_KEYS, so an unknown key can never reach a
+# callback body — the old "unknown key" branches are gone. Refusals/errors are
+# ephemeral and perform NO write.
 # ══════════════════════════════════════════════════════════════════════════
+
+async def test_content_key_choices_are_exactly_content_keys():
+    # show/set/reset enumerate `key` over CONTENT_KEYS, so invalid keys are
+    # unreachable at the callback boundary.
+    from n3x_bot.content import CONTENT_KEYS
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+
+    for name in ("show", "set", "reset"):
+        sub = _content_sub(bot, name)
+        param = next(p for p in sub.parameters if p.name == "key")
+        assert {c.value for c in param.choices} == set(CONTENT_KEYS), name
+
+    await _cleanup(repo)
+
 
 async def test_content_set_stores_value_and_refreshes_live_resolver():
     repo = await _flatfile_repo()
     settings = _settings()
     bot = build_bot(settings, repo)
-    ctx = _ctx(_admin())
+    interaction = _fake_interaction()
 
-    await _content_sub(bot, "set").callback(ctx, "kodex_text",
+    await _content_sub(bot, "set").callback(interaction, key="kodex_text",
                                             value="Ganz neuer Kodex Text")
 
     assert await repo.get_content_text("kodex_text") == "Ganz neuer Kodex Text"
     # refresh() ran -> the live resolver reflects the override immediately.
     assert bot.content_texts.get("kodex_text") == "Ganz neuer Kodex Text"
+    assert _last_send(interaction).kwargs.get("ephemeral") is True
 
     await _cleanup(repo)
 
@@ -423,12 +472,13 @@ async def test_content_set_welcome_dm_wrong_placeholder_rejected_no_write():
     repo = await _flatfile_repo()
     settings = _settings()
     bot = build_bot(settings, repo)
-    ctx = _ctx(_admin())
+    interaction = _fake_interaction()
 
-    await _content_sub(bot, "set").callback(ctx, "welcome_dm",
+    await _content_sub(bot, "set").callback(interaction, key="welcome_dm",
                                             value="Hi {name}!")
 
-    assert "Platzhalter" in _sent_text(ctx.send)
+    assert "Platzhalter" in _sent_text(interaction)
+    assert _last_send(interaction).kwargs.get("ephemeral") is True
     assert await repo.get_content_text("welcome_dm") is None
     # live resolver still shows the default, untouched
     from n3x_bot.content import CONTENT_DEFAULTS
@@ -441,9 +491,9 @@ async def test_content_set_welcome_dm_valid_placeholder_stored():
     repo = await _flatfile_repo()
     settings = _settings()
     bot = build_bot(settings, repo)
-    ctx = _ctx(_admin())
+    interaction = _fake_interaction()
 
-    await _content_sub(bot, "set").callback(ctx, "welcome_dm",
+    await _content_sub(bot, "set").callback(interaction, key="welcome_dm",
                                             value="Servus {mention}!")
 
     assert await repo.get_content_text("welcome_dm") == "Servus {mention}!"
@@ -457,10 +507,10 @@ async def test_content_set_record_template_extra_literal_text_stored():
     repo = await _flatfile_repo()
     settings = _settings()
     bot = build_bot(settings, repo)
-    ctx = _ctx(_admin())
+    interaction = _fake_interaction()
 
     await _content_sub(bot, "set").callback(
-        ctx, "record_lucky", value="{user} {name} {cost} extra")
+        interaction, key="record_lucky", value="{user} {name} {cost} extra")
 
     assert await repo.get_content_text("record_lucky") == "{user} {name} {cost} extra"
     assert bot.content_texts.get("record_lucky") == "{user} {name} {cost} extra"
@@ -472,12 +522,12 @@ async def test_content_set_record_template_bad_placeholder_rejected_no_write():
     repo = await _flatfile_repo()
     settings = _settings()
     bot = build_bot(settings, repo)
-    ctx = _ctx(_admin())
+    interaction = _fake_interaction()
 
     await _content_sub(bot, "set").callback(
-        ctx, "record_unlucky", value="Pech {user} {bogus} {cost}")
+        interaction, key="record_unlucky", value="Pech {user} {bogus} {cost}")
 
-    assert "Platzhalter" in _sent_text(ctx.send)
+    assert "Platzhalter" in _sent_text(interaction)
     assert await repo.get_content_text("record_unlucky") is None
 
     await _cleanup(repo)
@@ -488,28 +538,13 @@ async def test_content_set_non_template_key_not_validated():
     repo = await _flatfile_repo()
     settings = _settings()
     bot = build_bot(settings, repo)
-    ctx = _ctx(_admin())
+    interaction = _fake_interaction()
 
     await _content_sub(bot, "set").callback(
-        ctx, "kodex_text", value="Ganz normaler Kodex ohne Platzhalter")
+        interaction, key="kodex_text", value="Ganz normaler Kodex ohne Platzhalter")
 
     assert await repo.get_content_text("kodex_text") == (
         "Ganz normaler Kodex ohne Platzhalter")
-
-    await _cleanup(repo)
-
-
-async def test_content_set_unknown_key_rejected_no_write():
-    repo = await _flatfile_repo()
-    settings = _settings()
-    bot = build_bot(settings, repo)
-    ctx = _ctx(_admin())
-
-    await _content_sub(bot, "set").callback(ctx, "not_a_content_key",
-                                            value="whatever")
-
-    ctx.send.assert_awaited()
-    assert await repo.all_content_texts() == {}
 
     await _cleanup(repo)
 
@@ -518,11 +553,13 @@ async def test_content_set_non_admin_refused_no_write():
     repo = await _flatfile_repo()
     settings = _settings()
     bot = build_bot(settings, repo)
-    ctx = _ctx(_non_admin())
+    interaction = _fake_interaction(user=_non_admin())
 
-    await _content_sub(bot, "set").callback(ctx, "kodex_text", value="hax")
+    await _content_sub(bot, "set").callback(interaction, key="kodex_text",
+                                            value="hax")
 
-    assert "Berechtigung" in _sent_text(ctx.send)
+    assert "Berechtigung" in _sent_text(interaction)
+    assert _last_send(interaction).kwargs.get("ephemeral") is True
     assert await repo.get_content_text("kodex_text") is None
 
     await _cleanup(repo)
@@ -537,25 +574,12 @@ async def test_content_reset_reverts_to_default():
     await bot.content_texts.refresh(repo)
     assert bot.content_texts.get("kodex_text") == "Override Kodex"  # override active
 
-    ctx = _ctx(_admin())
-    await _content_sub(bot, "reset").callback(ctx, "kodex_text")
+    interaction = _fake_interaction()
+    await _content_sub(bot, "reset").callback(interaction, key="kodex_text")
 
     assert await repo.get_content_text("kodex_text") is None
     assert bot.content_texts.get("kodex_text") == CONTENT_DEFAULTS["kodex_text"]
-
-    await _cleanup(repo)
-
-
-async def test_content_reset_unknown_key_rejected():
-    repo = await _flatfile_repo()
-    settings = _settings()
-    bot = build_bot(settings, repo)
-    ctx = _ctx(_admin())
-
-    await _content_sub(bot, "reset").callback(ctx, "not_a_content_key")
-
-    ctx.send.assert_awaited()
-    assert await repo.all_content_texts() == {}
+    assert _last_send(interaction).kwargs.get("ephemeral") is True
 
     await _cleanup(repo)
 
@@ -566,11 +590,11 @@ async def test_content_reset_non_admin_refused():
     bot = build_bot(settings, repo)
     await repo.set_content_text("kodex_text", "Override Kodex")
     await bot.content_texts.refresh(repo)
-    ctx = _ctx(_non_admin())
+    interaction = _fake_interaction(user=_non_admin())
 
-    await _content_sub(bot, "reset").callback(ctx, "kodex_text")
+    await _content_sub(bot, "reset").callback(interaction, key="kodex_text")
 
-    assert "Berechtigung" in _sent_text(ctx.send)
+    assert "Berechtigung" in _sent_text(interaction)
     # a non-admin reset must not delete the override
     assert await repo.get_content_text("kodex_text") == "Override Kodex"
 
@@ -583,25 +607,13 @@ async def test_content_show_reports_effective_value_for_key():
     bot = build_bot(settings, repo)
     await repo.set_content_text("welcome_dm", "Servus {mention}")
     await bot.content_texts.refresh(repo)
-    ctx = _ctx(_admin())
+    interaction = _fake_interaction()
 
-    await _content_sub(bot, "show").callback(ctx, "welcome_dm")
+    await _content_sub(bot, "show").callback(interaction, key="welcome_dm")
 
-    text = _sent_text(ctx.send)
+    text = _sent_text(interaction)
     assert "Servus {mention}" in text
-
-    await _cleanup(repo)
-
-
-async def test_content_show_unknown_key_rejected():
-    repo = await _flatfile_repo()
-    settings = _settings()
-    bot = build_bot(settings, repo)
-    ctx = _ctx(_admin())
-
-    await _content_sub(bot, "show").callback(ctx, "not_a_content_key")
-
-    ctx.send.assert_awaited()
+    assert _last_send(interaction).kwargs.get("ephemeral") is True
 
     await _cleanup(repo)
 
@@ -610,11 +622,11 @@ async def test_content_show_non_admin_refused():
     repo = await _flatfile_repo()
     settings = _settings()
     bot = build_bot(settings, repo)
-    ctx = _ctx(_non_admin())
+    interaction = _fake_interaction(user=_non_admin())
 
-    await _content_sub(bot, "show").callback(ctx, "kodex_text")
+    await _content_sub(bot, "show").callback(interaction, key="kodex_text")
 
-    assert "Berechtigung" in _sent_text(ctx.send)
+    assert "Berechtigung" in _sent_text(interaction)
 
     await _cleanup(repo)
 
@@ -625,14 +637,15 @@ async def test_content_list_includes_all_keys_and_overridden_marker():
     bot = build_bot(settings, repo)
     await repo.set_content_text("kodex_text", "Override")
     await bot.content_texts.refresh(repo)
-    ctx = _ctx(_admin())
+    interaction = _fake_interaction()
 
-    await _content_sub(bot, "list").callback(ctx)
+    await _content_sub(bot, "list").callback(interaction)
 
-    text = _sent_text(ctx.send)
+    text = _sent_text(interaction)
     for key in ("kodex_text", "reminder_aceball", "reminder_invasion",
                 "record_lucky", "record_unlucky", "welcome_dm"):
         assert key in text, key
+    assert _last_send(interaction).kwargs.get("ephemeral") is True
 
     await _cleanup(repo)
 
@@ -641,11 +654,11 @@ async def test_content_list_non_admin_refused():
     repo = await _flatfile_repo()
     settings = _settings()
     bot = build_bot(settings, repo)
-    ctx = _ctx(_non_admin())
+    interaction = _fake_interaction(user=_non_admin())
 
-    await _content_sub(bot, "list").callback(ctx)
+    await _content_sub(bot, "list").callback(interaction)
 
-    assert "Berechtigung" in _sent_text(ctx.send)
+    assert "Berechtigung" in _sent_text(interaction)
 
     await _cleanup(repo)
 

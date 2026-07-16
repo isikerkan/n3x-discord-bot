@@ -1,11 +1,14 @@
-"""Admin-gated `!content` prefix commands that edit `content_texts` DB
-overrides and refresh the live resolver so narrative copy changes apply without
-a restart.
+"""Admin-gated `/content` slash group that edits `content_texts` DB overrides
+and refreshes the live resolver so narrative copy changes apply without a
+restart.
 
-Structural mirror of `config_commands.register_config_commands`: module-level
-funcs, no cog, `is_admin` gate, `delete_after=5`, refresh-after-write.
+Slash-only mirror of `config_commands.register_config_commands`: an
+`app_commands.Group` named `content` on `bot.tree`, admin-gated via
+`app_is_admin`, ephemeral replies, refresh-after-write.
 """
-from n3x_bot.admin import is_admin
+from discord import app_commands
+
+from n3x_bot.admin import app_is_admin
 from n3x_bot.config import Settings
 from n3x_bot.content import CONTENT_KEYS
 from n3x_bot.storage.base import StatsRepository
@@ -23,48 +26,52 @@ REQUIRED_PLACEHOLDERS: dict[str, frozenset[str]] = {
 
 
 def register_content_commands(bot, repo: StatsRepository, settings: Settings) -> None:
-    if bot.get_command("content") is not None:
+    if bot.tree.get_command("content") is not None:
         return
 
-    @bot.group(name="content", invoke_without_command=True)
-    async def content(ctx):
-        await ctx.send("Nutze `!content list|show|set|reset ...`.", delete_after=5)
+    content_group = app_commands.Group(
+        name="content", description="Narrative Texte (Admin).")
 
-    @content.command(name="list")
-    async def list_cmd(ctx):
-        if not is_admin(ctx.author, settings):
-            await ctx.send("❌ Keine Berechtigung.", delete_after=5)
+    _key_choices = [app_commands.Choice(name=k, value=k)
+                    for k in sorted(CONTENT_KEYS)]
+
+    async def _require_admin(interaction) -> bool:
+        if app_is_admin(interaction, settings):
+            return True
+        await interaction.response.send_message(
+            "❌ Keine Berechtigung.", ephemeral=True)
+        return False
+
+    @content_group.command(name="list",
+                           description="Listet alle Content-Schlüssel.")
+    async def list_cmd(interaction):
+        if not await _require_admin(interaction):
             return
         overrides = await repo.all_content_texts()
-        chunk = ""
+        lines = []
         for key in sorted(CONTENT_KEYS):
             line = f"`{key}`"
             if key in overrides:
                 line = f"{line} (Override)"
-            if len(chunk) + len(line) + 1 > 1900:
-                await ctx.send(chunk)
-                chunk = ""
-            chunk = f"{chunk}\n{line}" if chunk else line
-        if chunk:
-            await ctx.send(chunk)
+            lines.append(line)
+        await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
-    @content.command(name="show")
-    async def show_cmd(ctx, key):
-        if not is_admin(ctx.author, settings):
-            await ctx.send("❌ Keine Berechtigung.", delete_after=5)
+    @content_group.command(name="show",
+                           description="Zeigt den effektiven Text eines Schlüssels.")
+    @app_commands.describe(key="Schlüssel")
+    @app_commands.choices(key=_key_choices)
+    async def show_cmd(interaction, key: str):
+        if not await _require_admin(interaction):
             return
-        if key not in CONTENT_KEYS:
-            await ctx.send(f"❌ Unbekannter Schlüssel `{key}`.", delete_after=5)
-            return
-        await ctx.send(f"```\n{bot.content_texts.get(key)}\n```")
+        await interaction.response.send_message(
+            f"```\n{bot.content_texts.get(key)}\n```", ephemeral=True)
 
-    @content.command(name="set")
-    async def set_cmd(ctx, key, *, value):
-        if not is_admin(ctx.author, settings):
-            await ctx.send("❌ Keine Berechtigung.", delete_after=5)
-            return
-        if key not in CONTENT_KEYS:
-            await ctx.send(f"❌ Unbekannter Schlüssel `{key}`.", delete_after=5)
+    @content_group.command(name="set",
+                           description="Setzt den Text eines Schlüssels.")
+    @app_commands.describe(key="Schlüssel", value="Neuer Text")
+    @app_commands.choices(key=_key_choices)
+    async def set_cmd(interaction, key: str, value: str):
+        if not await _require_admin(interaction):
             return
         required = REQUIRED_PLACEHOLDERS.get(key)
         if required is not None:
@@ -72,22 +79,25 @@ def register_content_commands(bot, repo: StatsRepository, settings: Settings) ->
                 value.format(**{p: "" for p in required})
             except (KeyError, IndexError, ValueError):
                 allowed = ", ".join(f"{{{p}}}" for p in sorted(required))
-                await ctx.send(
+                await interaction.response.send_message(
                     f"❌ Ungültige Platzhalter. Erlaubt für `{key}`: {allowed}",
-                    delete_after=5)
+                    ephemeral=True)
                 return
         await repo.set_content_text(key, value)
         await bot.content_texts.refresh(repo)
-        await ctx.send(f"✅ `{key}` gesetzt.", delete_after=5)
+        await interaction.response.send_message(
+            f"✅ `{key}` gesetzt.", ephemeral=True)
 
-    @content.command(name="reset")
-    async def reset_cmd(ctx, key):
-        if not is_admin(ctx.author, settings):
-            await ctx.send("❌ Keine Berechtigung.", delete_after=5)
-            return
-        if key not in CONTENT_KEYS:
-            await ctx.send(f"❌ Unbekannter Schlüssel `{key}`.", delete_after=5)
+    @content_group.command(name="reset",
+                           description="Setzt den Text eines Schlüssels zurück.")
+    @app_commands.describe(key="Schlüssel")
+    @app_commands.choices(key=_key_choices)
+    async def reset_cmd(interaction, key: str):
+        if not await _require_admin(interaction):
             return
         await repo.delete_content_text(key)
         await bot.content_texts.refresh(repo)
-        await ctx.send(f"✅ Override `{key}` entfernt.", delete_after=5)
+        await interaction.response.send_message(
+            f"✅ Override `{key}` entfernt.", ephemeral=True)
+
+    bot.tree.add_command(content_group)
