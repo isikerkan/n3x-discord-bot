@@ -120,6 +120,10 @@ def build_bot(settings: Settings, repo: StatsRepository) -> commands.Bot:
     bot.voice_lock = asyncio.Lock()
     bot._overview_state = None
     bot._timer_overview_loop = None
+    # One-shot guard: the stale-guild-command clear runs once per process, not
+    # on every on_ready (which re-fires on each gateway reconnect). Self-heals
+    # on a real restart. Set True only after a successful clear (see on_ready).
+    bot._stale_guild_commands_cleared = False
 
     _wire_events(bot, settings, repo)
     register_gate_commands(bot, repo, settings)
@@ -833,6 +837,16 @@ async def _announce_records(bot, settings: Settings, gate_type: str,
         pass
 
 
+async def clear_stale_guild_commands(bot) -> None:
+    for guild in bot.guilds:
+        try:
+            bot.tree.clear_commands(guild=guild)
+            await bot.tree.sync(guild=guild)
+        except Exception:
+            log.exception("failed to clear stale guild commands for %s",
+                          getattr(guild, "id", guild))
+
+
 def _wire_events(bot, settings: Settings, repo: StatsRepository):
     reminder_h, reminder_m = bot.runtime_config.reminder_hm()
 
@@ -907,6 +921,15 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
         # Discord. Global sync — the tree is only populated locally otherwise,
         # so the slash commands would never appear at runtime.
         await bot.tree.sync()
+        # One-shot per process: on_ready re-fires on every gateway reconnect,
+        # but the phantom guild commands only need clearing once. Guarding this
+        # (like event_reminder_task/voice_join_times above) avoids a per-guild
+        # clear+sync HTTP round-trip — and its guild-command rate-limit risk —
+        # on every reconnect forever. Flag is set only AFTER the clear returns
+        # so a transient failure retries on the next ready.
+        if not bot._stale_guild_commands_cleared:
+            await clear_stale_guild_commands(bot)
+            bot._stale_guild_commands_cleared = True
 
     @bot.event
     async def on_command_error(ctx, error):
@@ -932,14 +955,22 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
     @bot.tree.error
     async def on_app_command_error(interaction, error):
         original = getattr(error, "original", error)
+        if isinstance(error, discord.app_commands.CommandNotFound) or isinstance(
+                original, discord.app_commands.CommandNotFound):
+            # Phantom/expired guild command — the interaction is already gone,
+            # so answering it would just raise NotFound (10062). Ignore quietly.
+            return
         if isinstance(original, (ValueError, KeyError)):
             msg = f"❌ {original}"
         else:
             msg = "❌ Ein Fehler ist aufgetreten."
-        if interaction.response.is_done():
-            await interaction.followup.send(msg, ephemeral=True)
-        else:
-            await interaction.response.send_message(msg, ephemeral=True)
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(msg, ephemeral=True)
+            else:
+                await interaction.response.send_message(msg, ephemeral=True)
+        except discord.HTTPException:
+            log.exception("failed to send app-command error response")
 
     @bot.event
     async def on_message(message):
