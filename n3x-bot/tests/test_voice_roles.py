@@ -173,6 +173,31 @@ def test_transition_returns_none_for_empty_role_map():
     assert others == []
 
 
+# ── Phase 2a: optional `defs` param for threshold lookup ────────────────────
+
+def test_transition_defs_none_matches_default_behaviour():
+    role_map = {"voice_3600": 901, "voice_36000": 902}
+    grant, others = _mod().voice_role_transition(
+        ["voice_3600", "voice_36000"], role_map, defs=None)
+    assert grant == 902  # module ACHIEVEMENTS used when defs is None
+    assert set(others) == {901}
+
+
+def test_transition_uses_custom_defs_for_threshold_lookup():
+    from n3x_bot.achievements import Achievement
+    defs = [
+        Achievement(id="vr_a", category="voice", metric="voice_seconds",
+                    threshold=10, title="A", secret=False),
+        Achievement(id="vr_b", category="voice", metric="voice_seconds",
+                    threshold=20, title="B", secret=False),
+    ]
+    role_map = {"vr_a": 1, "vr_b": 2}
+    grant, others = _mod().voice_role_transition(["vr_a", "vr_b"], role_map,
+                                                 defs=defs)
+    assert grant == 2  # vr_b (threshold 20) outranks vr_a (10)
+    assert others == [1]
+
+
 # ── apply_voice_roles (async, fake member) ─────────────────────────────────
 
 async def test_apply_grants_new_role_and_revokes_lower_held_role():

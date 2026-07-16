@@ -174,6 +174,20 @@ def test_build_overview_embed_empty_user_ids_does_not_crash():
     assert "Achievement" in _embed_text(embed)
 
 
+# ── Phase 2a: optional `total` overrides the denominator ────────────────────
+
+def test_build_overview_embed_total_override_flows_into_text():
+    holders = {10: {"a_5"}}
+    embed = _mod().build_overview_embed(holders, [10], 0, total=84)
+    assert "1/84" in _embed_text(embed)
+
+
+def test_build_overview_embed_total_none_uses_module_total():
+    holders = {10: {"a_5"}}
+    embed = _mod().build_overview_embed(holders, [10], 0, total=None)
+    assert f"1/{TOTAL_ACHIEVEMENTS}" in _embed_text(embed)
+
+
 # ── post_overview ──────────────────────────────────────────────────────────
 
 async def test_post_overview_sends_embed_and_two_nav_reactions():

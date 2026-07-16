@@ -505,3 +505,61 @@ def test_milestone_line_renders_ezk_gate_names():
     assert "Epsilon" in _milestone_line(_by_id(m, "e_5"))
     assert "Zeta" in _milestone_line(_by_id(m, "z_10"))
     assert "Kappa" in _milestone_line(_by_id(m, "k_25"))
+
+
+# ── Phase 2a: Achievement.color field (trailing, default None) ──────────────
+
+def test_achievement_color_field_defaults_to_none():
+    m = _ach()
+    a = m.Achievement(id="x", category="voice", metric="voice_seconds",
+                      threshold=1, title="T", secret=False)
+    assert a.color is None
+
+
+def test_achievement_accepts_explicit_color():
+    m = _ach()
+    a = m.Achievement(id="x", category="voice", metric="voice_seconds",
+                      threshold=1, title="T", secret=False, color="#010203")
+    assert a.color == "#010203"
+
+
+def test_code_default_achievements_have_no_color():
+    # The code seed carries no explicit colour; colours stay derived (cards.py).
+    for a in _ach().ACHIEVEMENTS:
+        assert a.color is None
+
+
+# ── Phase 2a: check_achievements / recompute optional `defs` param ──────────
+
+async def test_check_achievements_defs_none_matches_default_behaviour():
+    repo = await _flatfile_repo()
+    await repo.add_activity(7, "messages", 1500)
+    unlocked = await _ach().check_achievements(repo, 7, "messages", defs=None)
+    assert "msg_1000" in {a.id for a in unlocked}
+    await repo.close()
+
+
+async def test_check_achievements_custom_defs_can_unlock_new_definition():
+    m = _ach()
+    repo = await _flatfile_repo()
+    await repo.add_activity(7, "voice_seconds", 7200000)
+    new = m.Achievement(id="voice_7200000", category="voice",
+                        metric="voice_seconds", threshold=7200000,
+                        title="Test Legende", secret=False)
+    unlocked = await m.check_achievements(repo, 7, "voice_seconds", defs=[new])
+    assert "voice_7200000" in {a.id for a in unlocked}
+    assert await repo.has_achievement(7, "voice_7200000") is True
+    await repo.close()
+
+
+async def test_recompute_user_achievements_accepts_defs_param():
+    m = _ach()
+    repo = await _flatfile_repo()
+    await repo.add_activity(7, "voice_seconds", 7200000)
+    new = m.Achievement(id="voice_7200000", category="voice",
+                        metric="voice_seconds", threshold=7200000,
+                        title="Test Legende", secret=False)
+    defs = list(m.ACHIEVEMENTS) + [new]
+    newly = await m.recompute_user_achievements(repo, 7, defs=defs)
+    assert "voice_7200000" in {a.id for a in newly}
+    await repo.close()

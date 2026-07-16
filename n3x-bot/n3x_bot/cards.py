@@ -1,4 +1,5 @@
 import importlib.resources as ir
+import string
 from io import BytesIO
 
 import discord
@@ -51,7 +52,25 @@ def _gate_tier_color(title: str) -> tuple[int, int, int]:
     return (255, 255, 255)
 
 
+def _parse_hex_color(value: str | None) -> tuple[int, int, int] | None:
+    if not isinstance(value, str):
+        return None
+    s = value.strip()
+    if len(s) != 7 or s[0] != "#":
+        return None
+    body = s[1:]
+    # int(..., 16) tolerates a leading sign and surrounding whitespace, so a
+    # body char must be an explicit hex digit — otherwise "#-f0203" / "#01 203"
+    # would parse to bad (even negative) tuples instead of falling back.
+    if not all(c in string.hexdigits for c in body):
+        return None
+    return (int(body[0:2], 16), int(body[2:4], 16), int(body[4:6], 16))
+
+
 def tier_color(achievement: Achievement) -> tuple[int, int, int]:
+    parsed = _parse_hex_color(achievement.color)
+    if parsed is not None:
+        return parsed
     if achievement.category == "gate":
         return _gate_tier_color(achievement.title)
     return ACTIVITY_CATEGORY_COLORS.get(achievement.category, (255, 255, 255))

@@ -136,3 +136,14 @@ content_texts = Table(
     Column("key", String(50), primary_key=True),
     Column("value", Text, nullable=True),
 )
+
+achievement_defs = Table(
+    "achievement_defs", metadata,
+    Column("id", String(50), primary_key=True),
+    Column("category", String(50), nullable=False),
+    Column("metric", String(50), nullable=False),
+    Column("threshold", Integer, nullable=False),
+    Column("title", Text, nullable=False),
+    Column("secret", Boolean, nullable=False),
+    Column("color", String(50), nullable=True),
+)
