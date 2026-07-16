@@ -367,13 +367,16 @@ async def test_reaction_with_unrelated_emoji_is_ignored():
     await repo.close()
 
 
-# ── !overview command ──────────────────────────────────────────────────────
+# ── /overview command ──────────────────────────────────────────────────────
 
-async def test_build_bot_registers_overview_command():
+async def test_build_bot_registers_overview_app_command():
+    # Phase 1: overview is slash-ONLY — an app command on the tree, not a
+    # prefix command in bot.commands.
     repo = await _flatfile_repo()
     settings = _settings()
     bot = build_bot(settings, repo)
-    assert bot.get_command("overview") is not None
+    assert bot.get_command("overview") is None
+    assert bot.tree.get_command("overview") is not None
     await repo.close()
 
 
@@ -386,15 +389,23 @@ async def test_overview_command_triggers_post_overview():
 
     await repo.unlock_achievement(10, "a_5")
 
-    cmd = bot.get_command("overview")
+    cmd = bot.tree.get_command("overview")
     assert cmd is not None
-    ctx = MagicMock()
-    ctx.send = AsyncMock()
-    ctx.author = SimpleNamespace(id=1, display_name="Anyone")
+    interaction = MagicMock()
+    interaction.response = MagicMock()
+    interaction.response.defer = AsyncMock()
+    interaction.followup = MagicMock()
+    interaction.followup.send = AsyncMock()
+    interaction.user = SimpleNamespace(id=1, display_name="Anyone")
 
-    await cmd.callback(ctx)
+    await cmd.callback(interaction)
 
     # end-to-end proof the command drove post_overview: an embed was posted.
     channel.send.assert_awaited_once()
     assert channel.send.await_args.kwargs.get("embed") is not None
+    # the deferred interaction is resolved with a followup so the picker's
+    # "thinking…" state clears instead of hanging forever.
+    interaction.response.defer.assert_awaited_once()
+    assert interaction.response.defer.await_args.kwargs.get("ephemeral") is True
+    interaction.followup.send.assert_awaited_once()
     await repo.close()

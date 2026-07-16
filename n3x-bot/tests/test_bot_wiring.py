@@ -1195,16 +1195,32 @@ async def test_on_ready_skips_gate_embed_when_channel_unset():
     await repo.close()
 
 
-async def test_on_ready_syncs_command_tree():
+async def test_on_ready_syncs_command_tree(monkeypatch):
+    # Publishing is GUILD-SCOPED ONLY now: on_ready no longer runs a standalone
+    # global sync — it delegates to sync_commands_to_guilds, which per guild
+    # copies the global tree and syncs, then empties the published global scope.
+    # With one connected guild that means the tree IS synced (guild sync +
+    # trailing global sync), so bot.tree.sync is awaited.
     repo = await _flatfile_repo()
     settings = _settings(gate_stats_channel_id=0)
     bot = build_bot(settings, repo)
     bot.get_channel = MagicMock(return_value=None)
     bot.tree.sync = AsyncMock()
 
+    guild = MagicMock()
+    guild.id = 11
+
+    def fetch_members(limit=None):
+        raise RuntimeError("no gateway")
+
+    guild.fetch_members = fetch_members
+    guild.members = []
+    guild.voice_channels = []
+    monkeypatch.setattr(type(bot), "guilds", property(lambda self: [guild]))
+
     await bot.on_ready()
 
-    bot.tree.sync.assert_awaited_once()
+    bot.tree.sync.assert_awaited()  # tree published via the guild-sync helper
 
     await repo.close()
 

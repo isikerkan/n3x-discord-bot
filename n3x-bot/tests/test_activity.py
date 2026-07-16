@@ -210,21 +210,25 @@ def test_today_local_matches_settings_timezone_date():
 
 # ── handler: register_activity + build_bot wiring ─────────────────────────
 
-async def test_build_bot_registers_activity_view_command():
+async def test_build_bot_registers_activity_app_command():
+    # Phase 1: activity is slash-ONLY — an app command on the tree, not a
+    # prefix command in bot.commands.
     repo = await _flatfile_repo()
     settings = _settings()
     bot = build_bot(settings, repo)
-    assert bot.get_command("activity") is not None
+    assert bot.get_command("activity") is None
+    assert bot.tree.get_command("activity") is not None
     await repo.close()
 
 
-async def test_register_activity_registers_command_on_bot():
+async def test_register_activity_registers_app_command_on_tree():
     from n3x_bot.bot import register_activity
     repo = await _flatfile_repo()
     settings = _settings()
     bot = build_bot(settings, repo)
     register_activity(bot, repo, settings)
-    assert bot.get_command("activity") is not None
+    assert bot.get_command("activity") is None
+    assert bot.tree.get_command("activity") is not None
     await repo.close()
 
 
@@ -624,7 +628,7 @@ async def test_on_ready_voice_seeding_is_idempotent(monkeypatch):
     await repo.close()
 
 
-# ── view command: !activity ───────────────────────────────────────────────
+# ── view command: /activity ───────────────────────────────────────────────
 
 async def test_activity_command_reports_tracked_values():
     from n3x_bot.bot import register_activity
@@ -639,15 +643,16 @@ async def test_activity_command_reports_tracked_values():
     await repo.set_streak(7, 13, "2026-07-13", 29)
     await repo.set_night(7, 8, "2026-07-13")
 
-    cmd = bot.get_command("activity")
-    ctx = MagicMock()
-    ctx.send = AsyncMock()
-    ctx.author = SimpleNamespace(id=7, display_name="Erkan")
+    cmd = bot.tree.get_command("activity")
+    interaction = MagicMock()
+    interaction.response = MagicMock()
+    interaction.response.send_message = AsyncMock()
+    interaction.user = SimpleNamespace(id=7, display_name="Erkan")
 
-    await cmd.callback(ctx)
+    await cmd.callback(interaction)  # no member -> defaults to the caller
 
-    ctx.send.assert_awaited_once()
-    blob = _send_text(ctx.send)
+    interaction.response.send_message.assert_awaited_once()
+    blob = _send_text(interaction.response.send_message)
     for token in ("17", "23", "13", "29", "8"):
         assert token in blob, f"expected {token!r} in activity summary: {blob!r}"
 

@@ -142,10 +142,14 @@ def build_bot(settings: Settings, repo: StatsRepository) -> commands.Bot:
 
 def register_overview_and_sync_commands(bot, repo: StatsRepository,
                                         settings: Settings) -> None:
-    if bot.get_command("overview") is None:
-        async def _overview_cmd(ctx):
+    if bot.tree.get_command("overview") is None:
+        @bot.tree.command(name="overview",
+                          description="Postet die Achievement-Übersicht.")
+        async def overview(interaction):
+            await interaction.response.defer(ephemeral=True)
             await post_overview(bot, repo, settings)
-        bot.add_command(commands.Command(_overview_cmd, name="overview"))
+            await interaction.followup.send("Übersicht aktualisiert.",
+                                             ephemeral=True)
 
     if bot.get_command("sync_achievements") is None:
         async def _sync_cmd(ctx):
@@ -364,9 +368,6 @@ _COMMAND_DESCRIPTIONS: dict[str, str] = {
     "del": "Löscht einen Gate-Eintrag (nur mit Berechtigung).",
     "gate": "Gate-Auswertungen.",
     "gate verlauf": "Zeigt den Preisverlauf eines Gates als Diagramm.",
-    "overview": "Postet die Achievement-Übersicht.",
-    "erfolge": "Zeigt deine freigeschalteten Erfolge.",
-    "activity": "Zeigt deine Aktivitätsstatistik.",
     "kodex": "Sendet dir den Kodex zur Bestätigung.",
     "kodex_check": "Prüft, wer den Kodex bestätigt hat.",
     "base": "Startet einen Basis-Timer.",
@@ -842,14 +843,26 @@ async def _announce_records(bot, settings: Settings, gate_type: str,
         pass
 
 
-async def clear_stale_guild_commands(bot) -> None:
+async def sync_commands_to_guilds(bot) -> None:
+    if not bot.guilds:
+        return
     for guild in bot.guilds:
         try:
             bot.tree.clear_commands(guild=guild)
+            bot.tree.copy_global_to(guild=guild)
             await bot.tree.sync(guild=guild)
         except Exception:
-            log.exception("failed to clear stale guild commands for %s",
+            log.exception("failed to sync commands to guild %s",
                           getattr(guild, "id", guild))
+    # Empty the GLOBAL scope so previously-published global commands (e.g. the
+    # historically-published global /admin) don't double-list alongside the
+    # guild-scoped copies. This runs AFTER the per-guild copy_global_to reads
+    # the in-memory global tree, so it doesn't wipe what we just copied.
+    try:
+        bot.tree.clear_commands(guild=None)
+        await bot.tree.sync()
+    except Exception:
+        log.exception("failed to clear global commands")
 
 
 def _wire_events(bot, settings: Settings, repo: StatsRepository):
@@ -922,18 +935,22 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
             await update_command_list(bot, repo, settings)
         except Exception:
             log.exception("command-list update failed")
-        # Publish the /admin ... slash group (and any other app commands) to
-        # Discord. Global sync — the tree is only populated locally otherwise,
-        # so the slash commands would never appear at runtime.
-        await bot.tree.sync()
+        # Publish app commands GUILD-SCOPED ONLY (instant availability on this
+        # single-guild bot). We deliberately do NOT run a standalone global
+        # bot.tree.sync() here: the tree is still populated globally in-memory
+        # by the register_* calls, but publishing it both globally AND
+        # guild-scoped would double-list every command in the picker.
+        # sync_commands_to_guilds copies the global tree into each guild and,
+        # once, empties the published global scope.
         # One-shot per process: on_ready re-fires on every gateway reconnect,
-        # but the phantom guild commands only need clearing once. Guarding this
-        # (like event_reminder_task/voice_join_times above) avoids a per-guild
+        # but the guild sync only needs to happen once. Guarding this (like
+        # event_reminder_task/voice_join_times above) avoids a per-guild
         # clear+sync HTTP round-trip — and its guild-command rate-limit risk —
-        # on every reconnect forever. Flag is set only AFTER the clear returns
-        # so a transient failure retries on the next ready.
-        if not bot._stale_guild_commands_cleared:
-            await clear_stale_guild_commands(bot)
+        # on every reconnect forever. Gated on bot.guilds so an empty-guilds
+        # first ready retries on a later ready; the flag is set only AFTER the
+        # sync so a transient failure retries too.
+        if bot.guilds and not bot._stale_guild_commands_cleared:
+            await sync_commands_to_guilds(bot)
             bot._stale_guild_commands_cleared = True
 
     @bot.event
