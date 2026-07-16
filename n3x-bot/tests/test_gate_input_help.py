@@ -133,19 +133,21 @@ def test_help_documents_new_kappa_gate():
     assert "LF4-U" in text
 
 
-def test_help_documents_reaction_drop_confirmation():
+def test_help_drops_no_longer_confirmed_by_check_cross_reactions():
     from n3x_bot.bot import build_gate_input_help
     text = _help_text(build_gate_input_help())
-    # Delta/Epsilon/Zeta confirm the drop via ✅ / ❎ reactions.
-    assert "✅" in text
-    assert "❎" in text
+    # The old ✅ (Drop) / ❎ (kein Drop) confirmation reactions are gone: d/e/z/k
+    # now confirm by clicking the drop ICON reaction (or ❌ for no drop). The ❎
+    # "no drop" reaction in particular must no longer appear.
+    assert "❎" not in text
 
 
-def test_help_documents_kappa_button_confirmation():
+def test_help_no_longer_documents_kappa_buttons():
     from n3x_bot.bot import build_gate_input_help
     text = _help_text(build_gate_input_help())
-    # Kappa confirms via Buttons (KappaConfirmView), not reactions.
-    assert "Button" in text
+    # Kappa no longer uses a button panel (KappaConfirmView is removed); it now
+    # confirms via drop-icon reactions like the other drop gates.
+    assert "Button" not in text
 
 
 def test_help_keeps_v3_instant_hint():

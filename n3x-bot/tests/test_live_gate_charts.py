@@ -21,10 +21,9 @@ attribute, never a collection-time import error):
     channel_messages key format:  f"gate_chart_{gate_type}"   (e.g. "gate_chart_a")
 
 Wiring pinned (via existing entry-point symbols):
-    handle_gate_input_message (a/b/c) -> update_gate_chart(..., gate_type)
-    handle_delta_confirmation (d/e/z) -> update_gate_chart(..., gate_type)
-    KappaConfirmView.on_submit  (k)   -> update_gate_chart(..., "k")
-    on_ready                          -> update_all_gate_charts(...)
+    handle_gate_input_message      (a/b/c) -> update_gate_chart(..., gate_type)
+    handle_gate_drop_confirmation (d/e/z/k) -> update_gate_chart(..., gate_type)
+    on_ready                                -> update_all_gate_charts(...)
 
 Discord I/O is faked (AsyncMock/MagicMock); the repo is a real, connected
 JsonRepository (integration over mocks for anything DB-touching). matplotlib
@@ -116,18 +115,22 @@ def _fake_reaction_payload(*, message_id: int, user_id: int, emoji: str,
                            emoji=emoji, channel_id=channel_id, guild_id=1)
 
 
-def _fake_interaction(user_id: int):
-    interaction = MagicMock()
-    interaction.user = SimpleNamespace(id=user_id)
-    interaction.response = MagicMock()
-    interaction.response.send_message = AsyncMock()
-    interaction.response.edit_message = AsyncMock()
-    interaction.response.defer = AsyncMock()
-    interaction.message = MagicMock()
-    interaction.message.edit = AsyncMock()
-    interaction.followup = MagicMock()
-    interaction.followup.send = AsyncMock()
-    return interaction
+def _fallback_guild():
+    """A guild with no custom emojis, so the drop-icon resolver uses the fixed
+    unicode fallbacks (added to the user's message as plain strings)."""
+    guild = MagicMock()
+    guild.emojis = []
+    return guild
+
+
+async def _seed_gate_drop(bot, repo, settings, content, *, message_id):
+    """Run the input handler for a d/e/z/k message and return (message, added
+    reactions in item-then-❌ order)."""
+    message = _fake_gate_message(content, message_id=message_id)
+    message.guild = _fallback_guild()
+    await handle_gate_input_message(bot, repo, settings, message)
+    added = [c.args[0] for c in message.add_reaction.await_args_list]
+    return message, added
 
 
 # ══ 1. Config: Settings.gate_chart_channel_id ══════════════════════════════
@@ -418,53 +421,58 @@ async def test_gate_input_entry_refreshes_affected_gate_chart():
     await repo.close()
 
 
-async def test_delta_confirmation_refreshes_gate_chart_d():
-    from n3x_bot.bot import handle_delta_confirmation
+async def test_gate_drop_confirmation_refreshes_gate_chart_d():
+    from n3x_bot.bot import handle_gate_drop_confirmation
     repo = await _flatfile_repo()
     settings = _settings(gate_input_channel_id=777, gate_chart_channel_id=CHART_CHANNEL)
     bot = build_bot(settings, repo)
-    channel, _ = _fake_chart_channel()
+    channel, fetched = _fake_chart_channel()
+    fetched.delete = AsyncMock()
     bot.get_channel = MagicMock(return_value=channel)
-    bot._pending_delta = {5001: {"cost": 250000, "user_id": 7,
-                                 "username": "Erkan"}}
-    payload = _fake_reaction_payload(message_id=5001, user_id=7,
-                                     emoji="✅", channel_id=777)
+    _msg, added = await _seed_gate_drop(bot, repo, settings, "d 250.000",
+                                        message_id=5001)
 
-    await handle_delta_confirmation(bot, repo, settings, payload)
+    payload = _fake_reaction_payload(message_id=5001, user_id=7,
+                                     emoji=added[0], channel_id=777)
+    await handle_gate_drop_confirmation(bot, repo, settings, payload)
 
     assert await repo.get_channel_message("gate_chart_d") is not None
 
     await repo.close()
 
 
-async def test_kappa_submit_refreshes_gate_chart_k():
-    from n3x_bot.gates import KappaConfirmView
+async def test_gate_drop_confirmation_refreshes_gate_chart_k():
+    from n3x_bot.bot import handle_gate_drop_confirmation
     repo = await _flatfile_repo()
     settings = _settings(gate_input_channel_id=777, gate_chart_channel_id=CHART_CHANNEL)
     bot = build_bot(settings, repo)
-    channel, _ = _fake_chart_channel()
+    channel, fetched = _fake_chart_channel()
+    fetched.delete = AsyncMock()
     bot.get_channel = MagicMock(return_value=channel)
-    view = KappaConfirmView(repo, bot, settings, cost=500, user_id=7,
-                            username="Erkan")
+    _msg, added = await _seed_gate_drop(bot, repo, settings, "k 500",
+                                        message_id=5003)
 
-    await view.on_submit(_fake_interaction(7))
+    payload = _fake_reaction_payload(message_id=5003, user_id=7,
+                                     emoji=added[0], channel_id=777)
+    await handle_gate_drop_confirmation(bot, repo, settings, payload)
 
     assert await repo.get_channel_message("gate_chart_k") is not None
 
     await repo.close()
 
 
-async def test_kappa_submit_processes_achievements_even_when_chart_fails(monkeypatch):
-    # The kappa chart refresh has its OWN try/except (mirroring the a/b/c and
-    # d/e/z sites): a chart failure must NOT skip the kappa entry store or the
-    # achievement award/announcement that follow it.
+async def test_kappa_store_processes_achievements_even_when_chart_fails(monkeypatch):
+    # The kappa chart refresh has its OWN try/except (mirroring the a/b/c site):
+    # a chart failure must NOT skip the kappa entry store or the achievement
+    # award/announcement that follow it.
+    from n3x_bot.bot import handle_gate_drop_confirmation
     from n3x_bot import bot as botmod
     from n3x_bot import achievements as achmod
-    from n3x_bot.gates import KappaConfirmView
     repo = await _flatfile_repo()
     settings = _settings(gate_input_channel_id=777, gate_chart_channel_id=CHART_CHANNEL)
     bot = build_bot(settings, repo)
-    channel, _ = _fake_chart_channel()
+    channel, fetched = _fake_chart_channel()
+    fetched.delete = AsyncMock()
     bot.get_channel = MagicMock(return_value=channel)
 
     chart = AsyncMock(side_effect=RuntimeError("boom"))
@@ -477,12 +485,14 @@ async def test_kappa_submit_processes_achievements_even_when_chart_fails(monkeyp
         checked.append(category)
         return await real_check(_repo, user_id, category)
 
-    monkeypatch.setattr(achmod, "check_achievements", _tracking_check)
+    monkeypatch.setattr(botmod, "check_achievements", _tracking_check)
 
-    view = KappaConfirmView(repo, bot, settings, cost=500, user_id=7,
-                            username="Erkan")
+    _msg, added = await _seed_gate_drop(bot, repo, settings, "k 500",
+                                        message_id=5005)
+    payload = _fake_reaction_payload(message_id=5005, user_id=7,
+                                     emoji=added[0], channel_id=777)
 
-    await view.on_submit(_fake_interaction(7))  # must not raise
+    await handle_gate_drop_confirmation(bot, repo, settings, payload)  # no raise
 
     assert await repo.list_gate_costs("k") == [500]  # kappa entry survived
     chart.assert_awaited()  # chart refresh was attempted
