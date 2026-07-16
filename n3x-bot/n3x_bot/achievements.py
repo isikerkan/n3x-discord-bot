@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 
 import discord
-from discord.ext import commands
 
 from n3x_bot.config import Settings
 from n3x_bot.storage.base import StatsRepository
@@ -285,41 +284,46 @@ async def sync_all_achievements(repo: StatsRepository) -> dict:
             "achievements_added": achievements_added}
 
 
+def _build_erfolge_embed(owned: set[str], display_name: str) -> discord.Embed:
+    count = len(owned)
+    embed = discord.Embed(
+        title=f"🏆 Achievements - {display_name}",
+        color=discord.Color.gold())
+    embed.description = (
+        f"**{count}/{TOTAL_ACHIEVEMENTS}** Achievements freigeschaltet")
+
+    category_labels = {"gate": "🚀 Gates", "voice": "🎙️ Voice",
+                       "streak": "🔥 Streak", "night": "🌙 Nachtaktiv"}
+    for category, label in category_labels.items():
+        defs = sorted((a for a in ACHIEVEMENTS if a.category == category),
+                      key=lambda a: a.threshold)
+        unlocked = [a for a in defs if a.id in owned]
+        nxt = next((a for a in defs if a.id not in owned), None)
+        if nxt is None:
+            nxt_text = "Alle freigeschaltet"
+        else:
+            nxt_text = f"Nächstes: {nxt.title} ({nxt.threshold})"
+        embed.add_field(
+            name=label,
+            value=f"{len(unlocked)}/{len(defs)}\n{nxt_text}",
+            inline=False)
+
+    secret_total = sum(1 for a in ACHIEVEMENTS if a.secret)
+    secret_unlocked = len(owned & {a.id for a in ACHIEVEMENTS if a.secret})
+    embed.add_field(name="🔒 Secret",
+                    value=f"{secret_unlocked}/{secret_total}", inline=False)
+
+    return embed
+
+
 def register_achievement_commands(bot, repo: StatsRepository,
                                   settings: Settings) -> None:
-    if bot.get_command("erfolge") is not None:
+    if bot.tree.get_command("erfolge") is not None:
         return
 
-    async def _erfolge(ctx):
-        owned = await repo.get_user_achievements(ctx.author.id)
-        count = len(owned)
-        embed = discord.Embed(
-            title=f"🏆 Achievements - {ctx.author.display_name}",
-            color=discord.Color.gold())
-        embed.description = (
-            f"**{count}/{TOTAL_ACHIEVEMENTS}** Achievements freigeschaltet")
-
-        category_labels = {"gate": "🚀 Gates", "voice": "🎙️ Voice",
-                           "streak": "🔥 Streak", "night": "🌙 Nachtaktiv"}
-        for category, label in category_labels.items():
-            defs = sorted((a for a in ACHIEVEMENTS if a.category == category),
-                          key=lambda a: a.threshold)
-            unlocked = [a for a in defs if a.id in owned]
-            nxt = next((a for a in defs if a.id not in owned), None)
-            if nxt is None:
-                nxt_text = "Alle freigeschaltet"
-            else:
-                nxt_text = f"Nächstes: {nxt.title} ({nxt.threshold})"
-            embed.add_field(
-                name=label,
-                value=f"{len(unlocked)}/{len(defs)}\n{nxt_text}",
-                inline=False)
-
-        secret_total = sum(1 for a in ACHIEVEMENTS if a.secret)
-        secret_unlocked = len(owned & {a.id for a in ACHIEVEMENTS if a.secret})
-        embed.add_field(name="🔒 Secret",
-                        value=f"{secret_unlocked}/{secret_total}", inline=False)
-
-        await ctx.send(embed=embed)
-
-    bot.add_command(commands.Command(_erfolge, name="erfolge"))
+    @bot.tree.command(name="erfolge",
+                      description="Zeigt deine freigeschalteten Achievements.")
+    async def erfolge(interaction):
+        owned = await repo.get_user_achievements(interaction.user.id)
+        embed = _build_erfolge_embed(owned, interaction.user.display_name)
+        await interaction.response.send_message(embed=embed)

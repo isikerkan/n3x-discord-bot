@@ -23,6 +23,12 @@ def is_admin(member, settings: Settings) -> bool:
         r.id == settings.admin_role_id for r in getattr(member, "roles", []))
 
 
+def app_is_admin(interaction, settings: Settings) -> bool:
+    return bool(settings.admin_role_id) and any(
+        r.id == settings.admin_role_id
+        for r in getattr(interaction.user, "roles", []))
+
+
 async def _resolve_message_id(repo: StatsRepository, name: str) -> int:
     for message in await repo.list_messages(include_archived=True):
         if message.name == name:

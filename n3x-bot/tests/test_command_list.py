@@ -211,7 +211,9 @@ async def test_command_list_contains_prefixed_top_level_commands():
     repo = await _flatfile_repo()
     bot = await _populated_bot(_settings(), repo)
     text = _embed_text(build_command_list(bot))
-    for name in ("stat", "rank", "kodex", "overview", "base"):
+    # `overview` migrated to a slash-only app command in Phase 1, so it no longer
+    # appears in the prefix-derived command list.
+    for name in ("stat", "rank", "kodex", "base"):
         assert f"!{name}" in text, name
     await _cleanup(repo)
 
@@ -289,12 +291,14 @@ async def test_command_list_is_deterministic():
 
 
 async def test_command_list_top_level_commands_are_sorted():
-    # `activity` sorts before `stat`; a sorted render places it earlier.
+    # `admin` sorts before `stat`; a sorted render places it earlier. (`activity`
+    # migrated to a slash-only app command in Phase 1 and is no longer in the
+    # prefix-derived list.)
     from n3x_bot.bot import build_command_list
     repo = await _flatfile_repo()
     bot = await _populated_bot(_settings(), repo)
     text = _embed_text(build_command_list(bot))
-    assert text.index("!activity") < text.index("!stat")
+    assert text.index("!admin") < text.index("!stat")
     await _cleanup(repo)
 
 

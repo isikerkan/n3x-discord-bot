@@ -3,7 +3,7 @@ from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 import discord
-from discord.ext import commands
+from discord import app_commands
 
 from n3x_bot.achievements import ACHIEVEMENTS, Achievement, check_achievements
 from n3x_bot.cards import announce_achievements
@@ -241,27 +241,34 @@ def _format_voice(vsecs: int) -> str:
     return f"{vsecs // 3600}h {vsecs % 3600 // 60}m"
 
 
+async def _build_activity_embed(repo: StatsRepository, target) -> discord.Embed:
+    msgs = await repo.get_activity(target.id, "messages")
+    reacts = await repo.get_activity(target.id, "reactions")
+    vsecs = await repo.get_activity(target.id, "voice_seconds")
+    streak = await repo.get_streak(target.id) or {"current_streak": 0, "max_streak": 0}
+    night = await repo.get_night(target.id) or {"night_count": 0}
+
+    embed = discord.Embed(
+        title=f"📊 Aktivität von {target.display_name}",
+        color=discord.Color.blurple())
+    embed.add_field(name="💬 Nachrichten", value=str(msgs))
+    embed.add_field(name="👍 Reaktionen", value=str(reacts))
+    embed.add_field(name="🎙️ Voice", value=_format_voice(vsecs))
+    embed.add_field(name="🔥 Streak",
+                    value=f"{streak['current_streak']} (Max {streak['max_streak']})")
+    embed.add_field(name="🌙 Nachtaktiv", value=str(night["night_count"]))
+    return embed
+
+
 def register_activity(bot, repo: StatsRepository, settings: Settings) -> None:
-    if bot.get_command("activity") is not None:
+    if bot.tree.get_command("activity") is not None:
         return
 
-    async def _activity_cmd(ctx, member: discord.Member = None):
-        target = member or ctx.author
-        msgs = await repo.get_activity(target.id, "messages")
-        reacts = await repo.get_activity(target.id, "reactions")
-        vsecs = await repo.get_activity(target.id, "voice_seconds")
-        streak = await repo.get_streak(target.id) or {"current_streak": 0, "max_streak": 0}
-        night = await repo.get_night(target.id) or {"night_count": 0}
-
-        embed = discord.Embed(
-            title=f"📊 Aktivität von {target.display_name}",
-            color=discord.Color.blurple())
-        embed.add_field(name="💬 Nachrichten", value=str(msgs))
-        embed.add_field(name="👍 Reaktionen", value=str(reacts))
-        embed.add_field(name="🎙️ Voice", value=_format_voice(vsecs))
-        embed.add_field(name="🔥 Streak",
-                        value=f"{streak['current_streak']} (Max {streak['max_streak']})")
-        embed.add_field(name="🌙 Nachtaktiv", value=str(night["night_count"]))
-        await ctx.send(embed=embed)
-
-    bot.add_command(commands.Command(_activity_cmd, name="activity"))
+    @bot.tree.command(name="activity",
+                      description="Zeigt die Aktivitätsstatistik.")
+    @app_commands.describe(
+        member="Nutzer, dessen Aktivität angezeigt werden soll.")
+    async def activity(interaction, member: discord.Member | None = None):
+        target = member or interaction.user
+        embed = await _build_activity_embed(repo, target)
+        await interaction.response.send_message(embed=embed)

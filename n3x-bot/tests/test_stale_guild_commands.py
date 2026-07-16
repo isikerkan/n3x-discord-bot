@@ -5,16 +5,18 @@ interaction and raises ``discord.NotFound`` 10062).
 
 Two surfaces are pinned here:
 
-* Part A — ``n3x_bot.bot.clear_stale_guild_commands(bot)``: a module-level
-  helper that, per connected guild, clears the (empty) guild command set and
-  syncs it, removing the phantoms. Guarded per-guild so one failure doesn't
+* Part A — ``n3x_bot.bot.sync_commands_to_guilds(bot)``: a module-level helper
+  (supersedes the old ``clear_stale_guild_commands``) that, per connected guild,
+  clears any guild-scoped leftovers, copies the globally-registered app commands
+  into the guild (so they appear INSTANTLY) and syncs — registering ours and
+  removing phantoms not in our tree. Guarded per-guild so one failure doesn't
   abort the rest, and never raises. Also wired into ``on_ready`` after the
   global ``bot.tree.sync()``.
 * Part B — the ``@bot.tree.error`` handler (reachable as ``bot.tree.on_error``):
   must ignore ``CommandNotFound`` (phantom/expired interaction) and swallow any
   Discord send failure (``NotFound``/``HTTPException``) instead of raising.
 
-``clear_stale_guild_commands`` is imported *inside* each test (deferred import)
+``sync_commands_to_guilds`` is imported *inside* each test (deferred import)
 so that, before the coder adds it, each test fails at reference time with a
 clear missing-symbol error rather than breaking collection of the whole file.
 """
@@ -62,17 +64,35 @@ async def _flatfile_repo() -> JsonRepository:
 # ── fakes ────────────────────────────────────────────────────────────────────
 
 class _FakeTree:
-    """Minimal stand-in for ``bot.tree`` exposing the two calls the helper
-    uses. ``clear_commands`` is sync (matches discord.py); ``sync`` is async."""
+    """Minimal stand-in for ``bot.tree`` exposing the three calls the helper
+    uses. ``clear_commands`` and ``copy_global_to`` are sync (matches
+    discord.py); ``sync`` is async."""
 
     def __init__(self, sync_side_effect=None):
         self.clear_commands = MagicMock()
+        self.copy_global_to = MagicMock()
         self.sync = AsyncMock(side_effect=sync_side_effect)
 
 
 class _FakeGuild:
     def __init__(self, guild_id):
         self.id = guild_id
+
+
+def _fake_ready_guild(guild_id):
+    """A guild rich enough to survive on_ready's member/voice seeding loops:
+    fetch_members raises (forcing the guild.members fallback), and both
+    members and voice_channels are empty so the loops are trivial no-ops."""
+    guild = MagicMock()
+    guild.id = guild_id
+
+    def fetch_members(limit=None):
+        raise RuntimeError("no gateway")
+
+    guild.fetch_members = fetch_members
+    guild.members = []
+    guild.voice_channels = []
+    return guild
 
 
 def _fake_bot(guilds, sync_side_effect=None):
@@ -88,40 +108,51 @@ def _fake_interaction(is_done=False):
     return interaction
 
 
-# ── Part A: clear_stale_guild_commands ───────────────────────────────────────
+# ── Part A: sync_commands_to_guilds ──────────────────────────────────────────
 
-async def test_clear_stale_guild_commands_clears_and_syncs_each_guild():
-    from n3x_bot.bot import clear_stale_guild_commands
+async def test_sync_commands_to_guilds_clears_copies_and_syncs_each_guild():
+    from n3x_bot.bot import sync_commands_to_guilds
 
     g1, g2 = _FakeGuild(11), _FakeGuild(22)
     bot = _fake_bot([g1, g2])
 
-    await clear_stale_guild_commands(bot)
+    await sync_commands_to_guilds(bot)
 
-    # clear_commands(guild=g) once per guild
+    # clear_commands(guild=g) once per guild, THEN a trailing clear of the
+    # GLOBAL scope (guild=None) so previously-published global commands don't
+    # double-list alongside the guild-scoped copies.
     cleared = [c.kwargs.get("guild") for c in bot.tree.clear_commands.call_args_list]
-    assert cleared == [g1, g2]
-    # sync(guild=g) awaited once per guild
+    assert cleared == [g1, g2, None]
+    # copy_global_to(guild=g) once per guild — makes the app commands appear
+    # instantly in the guild rather than waiting on global propagation. No
+    # trailing copy: the global scope is only emptied, never repopulated.
+    copied = [c.kwargs.get("guild") for c in bot.tree.copy_global_to.call_args_list]
+    assert copied == [g1, g2]
+    # sync(guild=g) awaited once per guild, THEN a trailing global sync()
+    # (guild=None) that publishes the now-empty global scope.
     synced = [c.kwargs.get("guild") for c in bot.tree.sync.await_args_list]
-    assert synced == [g1, g2]
+    assert synced == [g1, g2, None]
 
 
-async def test_clear_stale_guild_commands_syncs_after_clearing_per_guild():
-    from n3x_bot.bot import clear_stale_guild_commands
+async def test_sync_commands_to_guilds_clears_then_copies_then_syncs_per_guild():
+    from n3x_bot.bot import sync_commands_to_guilds
 
     order = []
     g = _FakeGuild(11)
     bot = _fake_bot([g])
     bot.tree.clear_commands.side_effect = lambda *a, **k: order.append("clear")
+    bot.tree.copy_global_to.side_effect = lambda *a, **k: order.append("copy")
     bot.tree.sync.side_effect = lambda *a, **k: order.append("sync")
 
-    await clear_stale_guild_commands(bot)
+    await sync_commands_to_guilds(bot)
 
-    assert order == ["clear", "sync"]
+    # per-guild: clear -> copy -> sync; then the trailing global clear -> sync
+    # that empties the published global scope.
+    assert order == ["clear", "copy", "sync", "clear", "sync"]
 
 
-async def test_clear_stale_guild_commands_processes_all_guilds_despite_one_failing():
-    from n3x_bot.bot import clear_stale_guild_commands
+async def test_sync_commands_to_guilds_processes_all_guilds_despite_one_failing():
+    from n3x_bot.bot import sync_commands_to_guilds
 
     g1, g2, g3 = _FakeGuild(11), _FakeGuild(22), _FakeGuild(33)
     bot = _fake_bot([g1, g2, g3])
@@ -134,61 +165,96 @@ async def test_clear_stale_guild_commands_processes_all_guilds_despite_one_faili
     bot.tree.sync.side_effect = _sync
 
     # must not raise even though guild g2's sync blows up
-    await clear_stale_guild_commands(bot)
+    await sync_commands_to_guilds(bot)
 
     synced = [c.kwargs.get("guild") for c in bot.tree.sync.await_args_list]
-    assert synced == [g1, g2, g3]  # all attempted, g2's failure didn't abort
+    # all guilds attempted (g2's failure didn't abort), plus the trailing
+    # global sync (guild=None).
+    assert synced == [g1, g2, g3, None]
 
 
-async def test_clear_stale_guild_commands_is_noop_with_no_guilds():
-    from n3x_bot.bot import clear_stale_guild_commands
+async def test_sync_commands_to_guilds_is_noop_with_no_guilds():
+    from n3x_bot.bot import sync_commands_to_guilds
 
     bot = _fake_bot([])
 
-    await clear_stale_guild_commands(bot)  # must not raise
+    await sync_commands_to_guilds(bot)  # must not raise
 
     bot.tree.clear_commands.assert_not_called()
+    bot.tree.copy_global_to.assert_not_called()
     bot.tree.sync.assert_not_awaited()
 
 
-# ── Part A wiring: on_ready invokes the helper after the global sync ─────────
+# ── Part A wiring: on_ready invokes the helper (no standalone global sync) ────
 
-async def test_on_ready_clears_stale_guild_commands_after_global_sync(monkeypatch):
+async def test_on_ready_syncs_commands_to_guilds_via_helper(monkeypatch):
+    # The old standalone global `bot.tree.sync()` in on_ready is GONE — global
+    # publishing now happens inside sync_commands_to_guilds. on_ready must
+    # invoke the guild-sync helper (and NOT do its own separate global sync)
+    # once there is at least one connected guild.
     repo = await _flatfile_repo()
     settings = _settings(gate_stats_channel_id=0)
     bot = build_bot(settings, repo)
     bot.get_channel = MagicMock(return_value=None)
 
-    order = []
-    bot.tree.sync = AsyncMock(side_effect=lambda *a, **k: order.append("global_sync"))
-    fake_clear = AsyncMock(side_effect=lambda *a, **k: order.append("clear_stale"))
-    monkeypatch.setattr("n3x_bot.bot.clear_stale_guild_commands", fake_clear)
+    guild = _fake_ready_guild(11)
+    monkeypatch.setattr(type(bot), "guilds", property(lambda self: [guild]))
+
+    bot.tree.sync = AsyncMock()  # would flag a stray standalone global sync
+    fake_sync = AsyncMock()
+    monkeypatch.setattr("n3x_bot.bot.sync_commands_to_guilds", fake_sync)
 
     await bot.on_ready()
 
-    fake_clear.assert_awaited_once_with(bot)
-    assert order.index("global_sync") < order.index("clear_stale")
+    fake_sync.assert_awaited_once_with(bot)
+    # on_ready itself no longer runs a standalone global sync; publishing is
+    # entirely delegated to sync_commands_to_guilds (mocked out here).
+    bot.tree.sync.assert_not_awaited()
 
     await repo.close()
 
 
-async def test_on_ready_clears_stale_guild_commands_only_once_across_reconnects(monkeypatch):
-    # on_ready re-fires on every gateway reconnect; the stale-command clear must
-    # be one-shot per process, not repeated on each reconnect. First on_ready
-    # clears; a SECOND on_ready on the same bot must NOT clear again.
+async def test_on_ready_skips_guild_sync_when_no_guilds(monkeypatch):
+    # A first on_ready that fires before any guild is available must NOT run
+    # (or flag as done) the guild sync — otherwise the one-shot guard would
+    # wedge and the commands would never publish. It retries on a later ready.
     repo = await _flatfile_repo()
     settings = _settings(gate_stats_channel_id=0)
     bot = build_bot(settings, repo)
     bot.get_channel = MagicMock(return_value=None)
 
     bot.tree.sync = AsyncMock()
-    fake_clear = AsyncMock()
-    monkeypatch.setattr("n3x_bot.bot.clear_stale_guild_commands", fake_clear)
+    fake_sync = AsyncMock()
+    monkeypatch.setattr("n3x_bot.bot.sync_commands_to_guilds", fake_sync)
+
+    await bot.on_ready()  # bot.guilds is empty
+
+    fake_sync.assert_not_awaited()
+    assert bot._stale_guild_commands_cleared is False  # guard not wedged
+
+    await repo.close()
+
+
+async def test_on_ready_syncs_commands_to_guilds_only_once_across_reconnects(monkeypatch):
+    # on_ready re-fires on every gateway reconnect; the guild command sync must
+    # be one-shot per process, not repeated on each reconnect. First on_ready
+    # syncs; a SECOND on_ready on the same bot must NOT sync again.
+    repo = await _flatfile_repo()
+    settings = _settings(gate_stats_channel_id=0)
+    bot = build_bot(settings, repo)
+    bot.get_channel = MagicMock(return_value=None)
+
+    guild = _fake_ready_guild(11)
+    monkeypatch.setattr(type(bot), "guilds", property(lambda self: [guild]))
+
+    bot.tree.sync = AsyncMock()
+    fake_sync = AsyncMock()
+    monkeypatch.setattr("n3x_bot.bot.sync_commands_to_guilds", fake_sync)
 
     await bot.on_ready()
     await bot.on_ready()
 
-    fake_clear.assert_awaited_once_with(bot)
+    fake_sync.assert_awaited_once_with(bot)
 
     await repo.close()
 

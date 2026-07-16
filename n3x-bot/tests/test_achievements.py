@@ -381,12 +381,15 @@ def _collect_text(*mocks) -> str:
     return "\n".join(parts)
 
 
-async def test_register_achievement_commands_wires_erfolge_prefix_command():
+async def test_register_achievement_commands_wires_erfolge_app_command():
+    # Phase 1: erfolge is slash-ONLY — an app command on the tree, no longer a
+    # prefix command in bot.commands.
     repo = await _flatfile_repo()
     settings = _settings()
     bot = build_bot(settings, repo)
     _ach().register_achievement_commands(bot, repo, settings)
-    assert bot.get_command("erfolge") is not None
+    assert bot.get_command("erfolge") is None            # not a prefix command
+    assert bot.tree.get_command("erfolge") is not None    # app command on tree
     await repo.close()
 
 
@@ -396,7 +399,7 @@ async def test_register_achievement_commands_is_idempotent():
     bot = build_bot(settings, repo)
     _ach().register_achievement_commands(bot, repo, settings)
     _ach().register_achievement_commands(bot, repo, settings)  # must not raise
-    assert bot.get_command("erfolge") is not None
+    assert bot.tree.get_command("erfolge") is not None
     await repo.close()
 
 
@@ -409,15 +412,19 @@ async def test_erfolge_reports_unlocked_count_and_total():
     await repo.unlock_achievement(7, "msg_1000")
     await repo.unlock_achievement(7, "voice_3600")
 
-    ctx = MagicMock()
-    ctx.author = SimpleNamespace(id=7, display_name="Erkan",
-                                 send=AsyncMock(), mention="<@7>")
-    ctx.send = AsyncMock()
+    interaction = MagicMock()
+    interaction.user = SimpleNamespace(id=7, display_name="Erkan",
+                                       send=AsyncMock(), mention="<@7>")
+    interaction.response = MagicMock()
+    interaction.response.send_message = AsyncMock()
+    interaction.followup = MagicMock()
+    interaction.followup.send = AsyncMock()
 
-    cmd = bot.get_command("erfolge")
-    await cmd.callback(ctx)
+    cmd = bot.tree.get_command("erfolge")
+    await cmd.callback(interaction)
 
-    text = _collect_text(ctx.send, ctx.author.send)
+    text = _collect_text(interaction.response.send_message,
+                         interaction.followup.send)
     assert "2/83" in text  # total grew 59 -> 83 with the E/Z/K gates
     await repo.close()
 
