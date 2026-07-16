@@ -1,7 +1,7 @@
 import json
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select, insert, update, delete, text
+from sqlalchemy import and_, func, select, insert, update, delete, text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from n3x_bot.models import User, Stat, Message
@@ -29,6 +29,10 @@ def _as_aware_utc(dt: datetime | None) -> datetime | None:
     if dt is None:
         return None
     return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+
+
+def _pk_where(table, pk_values: dict):
+    return and_(*(table.c[col] == val for col, val in pk_values.items()))
 
 
 class SqlRepository(StatsRepository):
@@ -61,6 +65,24 @@ class SqlRepository(StatsRepository):
     def _user(r) -> User:
         return User(id=r.id, discord_id=r.discord_id, display_name=r.display_name,
                     archived_at=r.archived_at, created_at=r.created_at)
+
+    # ── upsert helpers ─────────────────────────────────────────────────────
+    async def _upsert(self, conn, table, pk_values: dict, values: dict) -> None:
+        where = _pk_where(table, pk_values)
+        exists = (await conn.execute(select(table).where(where))).one_or_none()
+        if exists is None:
+            await conn.execute(insert(table).values(**pk_values, **values))
+        else:
+            await conn.execute(update(table).where(where).values(**values))
+
+    async def _insert_if_absent(self, conn, table, pk_values: dict,
+                                extra: dict | None = None) -> bool:
+        where = _pk_where(table, pk_values)
+        exists = (await conn.execute(select(table).where(where))).one_or_none()
+        if exists is not None:
+            return False
+        await conn.execute(insert(table).values(**pk_values, **(extra or {})))
+        return True
 
     # ── messages ───────────────────────────────────────────────────────────
     async def create_message(self, name, template) -> Message:
@@ -291,31 +313,15 @@ class SqlRepository(StatsRepository):
                     .where(sc.stats.c.key == stat_key))).one_or_none()
             if stat is None:
                 raise KeyError(stat_key)
-            exists = (await conn.execute(select(sc.stat_last_post)
-                      .where(sc.stat_last_post.c.stat_id == stat.id))).one_or_none()
-            if exists is None:
-                await conn.execute(insert(sc.stat_last_post).values(
-                    stat_id=stat.id, discord_message_id=discord_message_id,
-                    channel_id=channel_id))
-            else:
-                await conn.execute(update(sc.stat_last_post)
-                                   .where(sc.stat_last_post.c.stat_id == stat.id)
-                                   .values(discord_message_id=discord_message_id,
-                                           channel_id=channel_id))
+            await self._upsert(conn, sc.stat_last_post, {"stat_id": stat.id},
+                               {"discord_message_id": discord_message_id,
+                                "channel_id": channel_id})
 
     # ── channel messages ──────────────────────────────────────────────────
     async def set_channel_message(self, key, message_id, channel_id):
         async with self.engine.begin() as conn:
-            exists = (await conn.execute(select(sc.channel_messages.c.key)
-                      .where(sc.channel_messages.c.key == key))).one_or_none()
-            if exists is None:
-                await conn.execute(insert(sc.channel_messages).values(
-                    key=key, message_id=message_id, channel_id=channel_id))
-            else:
-                await conn.execute(update(sc.channel_messages)
-                                   .where(sc.channel_messages.c.key == key)
-                                   .values(message_id=message_id,
-                                           channel_id=channel_id))
+            await self._upsert(conn, sc.channel_messages, {"key": key},
+                               {"message_id": message_id, "channel_id": channel_id})
 
     async def get_channel_message(self, key):
         async with self.engine.connect() as conn:
@@ -328,15 +334,8 @@ class SqlRepository(StatsRepository):
     # ── runtime config ────────────────────────────────────────────────────
     async def set_runtime_config(self, key, value):
         async with self.engine.begin() as conn:
-            exists = (await conn.execute(select(sc.runtime_config.c.key)
-                      .where(sc.runtime_config.c.key == key))).one_or_none()
-            if exists is None:
-                await conn.execute(insert(sc.runtime_config).values(
-                    key=key, value=value))
-            else:
-                await conn.execute(update(sc.runtime_config)
-                                   .where(sc.runtime_config.c.key == key)
-                                   .values(value=value))
+            await self._upsert(conn, sc.runtime_config, {"key": key},
+                               {"value": value})
 
     async def get_runtime_config(self, key):
         async with self.engine.connect() as conn:
@@ -574,19 +573,11 @@ class SqlRepository(StatsRepository):
                     "max_streak": r.max_streak}
 
     async def set_streak(self, discord_id, current_streak, last_active_date, max_streak):
+        vals = {"current_streak": current_streak,
+                "last_active_date": last_active_date,
+                "max_streak": max_streak}
         async with self.engine.begin() as conn:
-            exists = (await conn.execute(select(sc.streak_stats.c.discord_id)
-                      .where(sc.streak_stats.c.discord_id == discord_id))).one_or_none()
-            vals = {"current_streak": current_streak,
-                    "last_active_date": last_active_date,
-                    "max_streak": max_streak}
-            if exists is None:
-                await conn.execute(insert(sc.streak_stats).values(
-                    discord_id=discord_id, **vals))
-            else:
-                await conn.execute(update(sc.streak_stats)
-                                   .where(sc.streak_stats.c.discord_id == discord_id)
-                                   .values(**vals))
+            await self._upsert(conn, sc.streak_stats, {"discord_id": discord_id}, vals)
 
     async def get_night(self, discord_id):
         async with self.engine.connect() as conn:
@@ -598,29 +589,16 @@ class SqlRepository(StatsRepository):
                     "last_night_date": r.last_night_date}
 
     async def set_night(self, discord_id, night_count, last_night_date):
+        vals = {"night_count": night_count, "last_night_date": last_night_date}
         async with self.engine.begin() as conn:
-            exists = (await conn.execute(select(sc.night_stats.c.discord_id)
-                      .where(sc.night_stats.c.discord_id == discord_id))).one_or_none()
-            vals = {"night_count": night_count, "last_night_date": last_night_date}
-            if exists is None:
-                await conn.execute(insert(sc.night_stats).values(
-                    discord_id=discord_id, **vals))
-            else:
-                await conn.execute(update(sc.night_stats)
-                                   .where(sc.night_stats.c.discord_id == discord_id)
-                                   .values(**vals))
+            await self._upsert(conn, sc.night_stats, {"discord_id": discord_id}, vals)
 
     # ── achievements ───────────────────────────────────────────────────────
     async def unlock_achievement(self, discord_id, achievement_id):
         async with self.engine.begin() as conn:
-            exists = (await conn.execute(select(sc.achievements).where(
-                (sc.achievements.c.discord_id == discord_id) &
-                (sc.achievements.c.achievement_id == achievement_id)))).one_or_none()
-            if exists is not None:
-                return False
-            await conn.execute(insert(sc.achievements).values(
-                discord_id=discord_id, achievement_id=achievement_id))
-            return True
+            return await self._insert_if_absent(
+                conn, sc.achievements,
+                {"discord_id": discord_id, "achievement_id": achievement_id})
 
     async def has_achievement(self, discord_id, achievement_id):
         async with self.engine.connect() as conn:
@@ -646,11 +624,8 @@ class SqlRepository(StatsRepository):
     # ── kodex ──────────────────────────────────────────────────────────────
     async def confirm_kodex(self, discord_id):
         async with self.engine.begin() as conn:
-            exists = (await conn.execute(select(sc.kodex_confirmations).where(
-                sc.kodex_confirmations.c.discord_id == discord_id))).one_or_none()
-            if exists is None:
-                await conn.execute(insert(sc.kodex_confirmations).values(
-                    discord_id=discord_id))
+            await self._insert_if_absent(conn, sc.kodex_confirmations,
+                                         {"discord_id": discord_id})
 
     async def has_confirmed_kodex(self, discord_id):
         async with self.engine.connect() as conn:
@@ -665,15 +640,8 @@ class SqlRepository(StatsRepository):
 
     async def save_kodex_message(self, message_id, discord_id):
         async with self.engine.begin() as conn:
-            exists = (await conn.execute(select(sc.kodex_messages).where(
-                sc.kodex_messages.c.message_id == message_id))).one_or_none()
-            if exists is None:
-                await conn.execute(insert(sc.kodex_messages).values(
-                    message_id=message_id, discord_id=discord_id))
-            else:
-                await conn.execute(update(sc.kodex_messages)
-                                   .where(sc.kodex_messages.c.message_id == message_id)
-                                   .values(discord_id=discord_id))
+            await self._upsert(conn, sc.kodex_messages, {"message_id": message_id},
+                               {"discord_id": discord_id})
 
     async def get_kodex_message_user(self, message_id):
         async with self.engine.connect() as conn:
@@ -685,15 +653,8 @@ class SqlRepository(StatsRepository):
     async def set_base_timer(self, map_name, end_time):
         stored = _as_aware_utc(end_time).astimezone(timezone.utc)
         async with self.engine.begin() as conn:
-            exists = (await conn.execute(select(sc.base_timers.c.map_name)
-                      .where(sc.base_timers.c.map_name == map_name))).one_or_none()
-            if exists is None:
-                await conn.execute(insert(sc.base_timers).values(
-                    map_name=map_name, end_time=stored))
-            else:
-                await conn.execute(update(sc.base_timers)
-                                   .where(sc.base_timers.c.map_name == map_name)
-                                   .values(end_time=stored))
+            await self._upsert(conn, sc.base_timers, {"map_name": map_name},
+                               {"end_time": stored})
 
     async def remove_base_timer(self, map_name):
         async with self.engine.begin() as conn:
