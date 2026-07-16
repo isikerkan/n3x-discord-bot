@@ -57,13 +57,15 @@ def today_local(settings: Settings) -> date:
 
 # ── voice-tier roles ───────────────────────────────────────────────────────
 
-def voice_role_transition(newly_ids: list[str],
-                          role_map: dict[str, int]) -> tuple[int | None, list[int]]:
+def voice_role_transition(newly_ids: list[str], role_map: dict[str, int],
+                          defs: list[Achievement] | None = None
+                          ) -> tuple[int | None, list[int]]:
+    source = defs if defs is not None else ACHIEVEMENTS
     mapped = [aid for aid in newly_ids if aid in role_map]
     if not mapped:
         return (None, [])
     highest_id = max(
-        mapped, key=lambda aid: next(a for a in ACHIEVEMENTS if a.id == aid).threshold)
+        mapped, key=lambda aid: next(a for a in source if a.id == aid).threshold)
     grant = role_map[highest_id]
     others = [rid for rid in role_map.values() if rid != grant]
     return (grant, others)

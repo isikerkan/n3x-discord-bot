@@ -28,6 +28,7 @@ _DATA_TABLES = (
     "activity_counters", "streak_stats", "night_stats", "achievements",
     "kodex_confirmations", "kodex_messages", "base_timers",
     "channel_messages", "runtime_config", "content_texts",
+    "achievement_defs",
 )
 
 

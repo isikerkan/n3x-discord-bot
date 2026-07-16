@@ -15,6 +15,7 @@ class Achievement:
     threshold: int
     title: str
     secret: bool
+    color: str | None = None
 
 
 GATE_NAMES = {"a": "Alpha", "b": "Beta", "c": "Gamma", "d": "Delta",
@@ -142,17 +143,20 @@ async def user_metric_value(repo: StatsRepository, discord_id: int,
 
 
 async def check_achievements(repo: StatsRepository, discord_id: int,
-                             metric: str) -> list[Achievement]:
+                             metric: str,
+                             defs: list[Achievement] | None = None
+                             ) -> list[Achievement]:
+    source = defs if defs is not None else ACHIEVEMENTS
     value = await user_metric_value(repo, discord_id, metric)
-    defs = [a for a in ACHIEVEMENTS if a.metric == metric]
+    metric_defs = [a for a in source if a.metric == metric]
     # Short-circuit: below the lowest threshold nothing can unlock, so skip the
     # get_user_achievements read entirely (the common case for low-value users).
-    if not defs or value < min(a.threshold for a in defs):
+    if not metric_defs or value < min(a.threshold for a in metric_defs):
         return []
     already = await repo.get_user_achievements(discord_id)
-    new_ids = newly_unlocked(defs, value, already)
+    new_ids = newly_unlocked(metric_defs, value, already)
     unlocked: list[Achievement] = []
-    for a in sorted((d for d in defs if d.id in new_ids),
+    for a in sorted((d for d in metric_defs if d.id in new_ids),
                     key=lambda d: d.threshold):
         if await repo.unlock_achievement(discord_id, a.id):
             unlocked.append(a)
@@ -162,17 +166,18 @@ async def check_achievements(repo: StatsRepository, discord_id: int,
 # ── overview embed ─────────────────────────────────────────────────────────
 
 def build_overview_embed(holders: dict[int, set[str]], user_ids: list[int],
-                         page: int) -> discord.Embed:
+                         page: int, total: int | None = None) -> discord.Embed:
     if not user_ids:
         return discord.Embed(
             title="🏆 Achievement-Übersicht",
             description="Noch keine Achievements freigeschaltet",
             color=discord.Color.gold())
+    denom = total if total is not None else TOTAL_ACHIEVEMENTS
     idx = page % len(user_ids)
     uid = user_ids[idx]
     count = len(holders.get(uid, set()))
     segments = 10
-    filled = round(count / TOTAL_ACHIEVEMENTS * segments) if TOTAL_ACHIEVEMENTS else 0
+    filled = round(count / denom * segments) if denom else 0
     bar = "█" * filled + "░" * (segments - filled)
     embed = discord.Embed(
         title="🏆 Achievement-Übersicht",
@@ -181,7 +186,7 @@ def build_overview_embed(holders: dict[int, set[str]], user_ids: list[int],
     # shows — the client resolves <@id> to the name, no async member lookup here.
     embed.description = (
         f"<@{uid}>\n"
-        f"**{count}/{TOTAL_ACHIEVEMENTS}** Achievements freigeschaltet\n"
+        f"**{count}/{denom}** Achievements freigeschaltet\n"
         f"{bar}\n"
         f"Seite {idx + 1}/{len(user_ids)}")
     return embed
@@ -252,12 +257,14 @@ async def handle_overview_reaction(bot, repo: StatsRepository, settings: Setting
 
 # ── additive sync ──────────────────────────────────────────────────────────
 
-async def recompute_user_achievements(repo: StatsRepository,
-                                      discord_id: int) -> list[Achievement]:
-    metrics = sorted({a.metric for a in ACHIEVEMENTS})
+async def recompute_user_achievements(repo: StatsRepository, discord_id: int,
+                                      defs: list[Achievement] | None = None
+                                      ) -> list[Achievement]:
+    source = defs if defs is not None else ACHIEVEMENTS
+    metrics = sorted({a.metric for a in source})
     newly: list[Achievement] = []
     for metric in metrics:
-        newly += await check_achievements(repo, discord_id, metric)
+        newly += await check_achievements(repo, discord_id, metric, defs=source)
     return newly
 
 

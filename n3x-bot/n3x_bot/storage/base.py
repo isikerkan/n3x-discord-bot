@@ -135,6 +135,26 @@ class StatsRepository(ABC):
         """All content overrides as `{key: value}`."""
         ...
 
+    # achievement definitions
+    @abstractmethod
+    async def set_achievement_def(self, id: str, *, category: str, metric: str,
+                                  threshold: int, title: str, secret: bool,
+                                  color: str | None = None) -> None:
+        """Upsert the achievement definition stored under `id`."""
+        ...
+    @abstractmethod
+    async def get_achievement_def(self, id: str) -> dict | None:
+        """The 7-key definition dict for `id`, or None if absent."""
+        ...
+    @abstractmethod
+    async def delete_achievement_def(self, id: str) -> bool:
+        """Delete the definition for `id`; True if a row existed."""
+        ...
+    @abstractmethod
+    async def all_achievement_defs(self) -> list[dict]:
+        """All definitions as a list of 7-key dicts, ordered by id."""
+        ...
+
     # target tracking
     @abstractmethod
     async def record_target_use(self, target_discord_id: int, stat_key: str) -> int:

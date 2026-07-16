@@ -381,6 +381,42 @@ class SqlRepository(StatsRepository):
             return {r.key: r.value
                     for r in await conn.execute(select(sc.content_texts))}
 
+    # ── achievement definitions ────────────────────────────────────────────
+    async def set_achievement_def(self, id, *, category, metric, threshold,
+                                  title, secret, color=None):
+        async with self.engine.begin() as conn:
+            await self._upsert(conn, sc.achievement_defs, {"id": id},
+                               {"category": category, "metric": metric,
+                                "threshold": threshold, "title": title,
+                                "secret": secret, "color": color})
+
+    async def get_achievement_def(self, id):
+        async with self.engine.connect() as conn:
+            r = (await conn.execute(select(sc.achievement_defs)
+                 .where(sc.achievement_defs.c.id == id))).one_or_none()
+            if r is None:
+                return None
+            return {"id": r.id, "category": r.category, "metric": r.metric,
+                    "threshold": int(r.threshold), "title": r.title,
+                    "secret": bool(r.secret), "color": r.color}
+
+    async def delete_achievement_def(self, id):
+        async with self.engine.begin() as conn:
+            exists = (await conn.execute(select(sc.achievement_defs.c.id)
+                      .where(sc.achievement_defs.c.id == id))).one_or_none()
+            await conn.execute(delete(sc.achievement_defs)
+                               .where(sc.achievement_defs.c.id == id))
+            return exists is not None
+
+    async def all_achievement_defs(self):
+        async with self.engine.connect() as conn:
+            rows = await conn.execute(select(sc.achievement_defs)
+                                      .order_by(sc.achievement_defs.c.id.asc()))
+            return [{"id": r.id, "category": r.category, "metric": r.metric,
+                     "threshold": int(r.threshold), "title": r.title,
+                     "secret": bool(r.secret), "color": r.color}
+                    for r in rows]
+
     # ── target tracking ───────────────────────────────────────────────────
     async def record_target_use(self, target_discord_id, stat_key):
         async with self.engine.begin() as conn:
@@ -807,6 +843,12 @@ class SqlRepository(StatsRepository):
                 r.key: r.value
                 for r in await conn.execute(select(sc.content_texts))
             }
+            achievement_defs = {
+                r.id: {"category": r.category, "metric": r.metric,
+                       "threshold": int(r.threshold), "title": r.title,
+                       "secret": bool(r.secret), "color": r.color}
+                for r in await conn.execute(select(sc.achievement_defs))
+            }
             seq = {}
             for key, table in (("user", sc.users), ("message", sc.messages),
                                ("stat", sc.stats), ("gate", sc.gate_entries)):
@@ -824,6 +866,7 @@ class SqlRepository(StatsRepository):
             "channel_messages": channel_messages,
             "runtime_config": runtime_config,
             "content_texts": content_texts,
+            "achievement_defs": achievement_defs,
             "seq": seq,
         }
 
@@ -903,6 +946,11 @@ class SqlRepository(StatsRepository):
             for key, value in snapshot.get("content_texts", {}).items():
                 await conn.execute(insert(sc.content_texts).values(
                     key=key, value=value))
+            for aid, v in snapshot.get("achievement_defs", {}).items():
+                await conn.execute(insert(sc.achievement_defs).values(
+                    id=aid, category=v["category"], metric=v["metric"],
+                    threshold=v["threshold"], title=v["title"],
+                    secret=v["secret"], color=v.get("color")))
             if self.engine.dialect.name == "postgresql":
                 for tbl, key in (("users", "user"), ("messages", "message"),
                                  ("stats", "stat"), ("gate_entries", "gate")):
@@ -920,5 +968,6 @@ class SqlRepository(StatsRepository):
                           sc.activity_counters, sc.streak_stats, sc.night_stats,
                           sc.kodex_confirmations, sc.kodex_messages,
                           sc.base_timers, sc.channel_messages,
-                          sc.runtime_config, sc.content_texts):
+                          sc.runtime_config, sc.content_texts,
+                          sc.achievement_defs):
                 await conn.execute(delete(table))

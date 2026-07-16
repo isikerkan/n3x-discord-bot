@@ -49,6 +49,7 @@ class JsonRepository(StatsRepository):
             "base_timers": {}, "channel_messages": {},
             "runtime_config": {},
             "content_texts": {},
+            "achievement_defs": {},
         }
 
     async def connect(self) -> None:
@@ -313,6 +314,28 @@ class JsonRepository(StatsRepository):
     async def all_content_texts(self):
         return dict(self._db["content_texts"])
 
+    # ── achievement definitions ────────────────────────────────────────────
+    async def set_achievement_def(self, id, *, category, metric, threshold,
+                                  title, secret, color=None):
+        self._db["achievement_defs"][id] = {
+            "category": category, "metric": metric, "threshold": threshold,
+            "title": title, "secret": secret, "color": color}
+        self._flush()
+
+    async def get_achievement_def(self, id):
+        row = self._db["achievement_defs"].get(id)
+        return None if row is None else {"id": id, **row}
+
+    async def delete_achievement_def(self, id):
+        existed = id in self._db["achievement_defs"]
+        self._db["achievement_defs"].pop(id, None)
+        self._flush()
+        return existed
+
+    async def all_achievement_defs(self):
+        return [{"id": k, **self._db["achievement_defs"][k]}
+                for k in sorted(self._db["achievement_defs"])]
+
     # ── target tracking ────────────────────────────────────────────────────
     async def record_target_use(self, target_discord_id, stat_key):
         stat = self._find("stats", key=stat_key)
@@ -572,6 +595,7 @@ class JsonRepository(StatsRepository):
             "channel_messages": copy.deepcopy(self._db["channel_messages"]),
             "runtime_config": copy.deepcopy(self._db["runtime_config"]),
             "content_texts": copy.deepcopy(self._db["content_texts"]),
+            "achievement_defs": copy.deepcopy(self._db["achievement_defs"]),
             "seq": {
                 "user": self._max_id(users),
                 "message": self._max_id(messages),
@@ -604,6 +628,8 @@ class JsonRepository(StatsRepository):
             snapshot.get("runtime_config", {}))
         self._db["content_texts"] = copy.deepcopy(
             snapshot.get("content_texts", {}))
+        self._db["achievement_defs"] = copy.deepcopy(
+            snapshot.get("achievement_defs", {}))
         self._db["seq"] = dict(snapshot["seq"])
         self._flush()
 

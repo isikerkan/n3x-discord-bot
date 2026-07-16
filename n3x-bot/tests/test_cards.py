@@ -29,6 +29,7 @@ import importlib
 import importlib.resources as ir
 from io import BytesIO
 
+import pytest
 from PIL import Image
 
 from n3x_bot.achievements import ACHIEVEMENTS
@@ -184,3 +185,58 @@ def test_card_texts_includes_member_display_name():
     title, subtitle, footer = cards.card_texts(_ach("a_5"), "Erkan")
     blob = " ".join((title, subtitle, footer))
     assert "Erkan" in blob
+
+
+# ── Phase 2a: tier_color honours an explicit Achievement.color ──────────────
+
+def test_tier_color_explicit_valid_hex_color_wins():
+    from n3x_bot.achievements import Achievement
+    cards = _cards()
+    ach = Achievement(id="a_5", category="gate", metric="gate_a", threshold=5,
+                      title="Alpha Bronze Pilot", secret=False, color="#010203")
+    # explicit colour overrides the substring-derived bronze colour
+    assert cards.tier_color(ach) == (1, 2, 3)
+
+
+def test_tier_color_none_color_falls_back_for_gate():
+    from n3x_bot.achievements import Achievement
+    cards = _cards()
+    ach = Achievement(id="a_5", category="gate", metric="gate_a", threshold=5,
+                      title="Alpha Bronze Pilot", secret=False, color=None)
+    assert cards.tier_color(ach) == (205, 127, 50)  # unchanged from today
+
+
+def test_tier_color_none_color_falls_back_for_non_gate():
+    from n3x_bot.achievements import Achievement
+    cards = _cards()
+    ach = Achievement(id="voice_3600", category="voice", metric="voice_seconds",
+                      threshold=3600, title="Rookie Talker", secret=False,
+                      color=None)
+    assert cards.tier_color(ach) == cards.ACTIVITY_CATEGORY_COLORS["voice"]
+
+
+def test_tier_color_malformed_color_falls_back_without_raising():
+    from n3x_bot.achievements import Achievement
+    cards = _cards()
+    ach = Achievement(id="a_5", category="gate", metric="gate_a", threshold=5,
+                      title="Alpha Bronze Pilot", secret=False, color="nothex")
+    # malformed hex must not raise; derivation still yields bronze
+    assert cards.tier_color(ach) == (205, 127, 50)
+
+
+@pytest.mark.parametrize("bad", ["#-f0203", "#+f0203", "#01 203", "nothex"])
+def test_tier_color_sign_or_whitespace_hex_falls_back(bad):
+    # int(part, 16) accepts a leading +/- and strips internal whitespace, so
+    # these are NOT valid #RRGGBB and must fall back to the derived colour
+    # (bronze here) rather than yielding a bad/negative tuple.
+    from n3x_bot.achievements import Achievement
+    cards = _cards()
+    ach = Achievement(id="a_5", category="gate", metric="gate_a", threshold=5,
+                      title="Alpha Bronze Pilot", secret=False, color=bad)
+    assert cards.tier_color(ach) == (205, 127, 50)
+
+
+@pytest.mark.parametrize("bad", ["#-f0203", "#+f0203", "#01 203", "# f0203"])
+def test_parse_hex_color_rejects_sign_and_whitespace(bad):
+    cards = _cards()
+    assert cards._parse_hex_color(bad) is None

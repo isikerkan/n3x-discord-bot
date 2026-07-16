@@ -30,6 +30,7 @@ from n3x_bot.achievements import (
 from n3x_bot.cards import announce_achievements
 from n3x_bot.config import Settings
 from n3x_bot.config_commands import register_config_commands
+from n3x_bot.achievement_defs import AchievementDefs
 from n3x_bot.content import ContentTexts
 from n3x_bot.content_commands import register_content_commands
 from n3x_bot.format import format_number
@@ -104,6 +105,7 @@ def build_bot(settings: Settings, repo: StatsRepository) -> commands.Bot:
     bot.n3x_repo = repo
     bot.runtime_config = RuntimeConfig(settings)
     bot.content_texts = ContentTexts()
+    bot.achievement_defs = AchievementDefs()
     bot._rank_last_posts = {}
     bot._target_last_posts = {}
     bot._gate_embed_msg_id = None
@@ -816,6 +818,10 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
             await bot.content_texts.refresh(repo)
         except Exception:
             log.exception("content_texts refresh failed; using defaults")
+        try:
+            await bot.achievement_defs.refresh(repo)
+        except Exception:
+            log.exception("achievement_defs refresh failed; using defaults")
         await register_stat_commands(bot, repo, settings)
         for guild in bot.guilds:
             try:
