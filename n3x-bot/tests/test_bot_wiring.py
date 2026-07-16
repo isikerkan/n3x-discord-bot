@@ -577,33 +577,10 @@ async def test_on_command_error_missing_arg_is_generic_for_gate_verlauf():
     await repo.close()
 
 
-async def test_on_command_error_missing_arg_is_generic_for_config_subcommands():
-    # The `!config` subcommands take a purpose/value/key, never a user, so a
-    # missing arg must get the generic hint — not the "specify a user" message.
-    repo = await _flatfile_repo()
-    settings = _settings()
-    bot = build_bot(settings, repo)
-
-    group = bot.get_command("config")
-    arg_subcommands = [
-        c.name for c in group.commands
-        if any(p.default is p.empty for p in c.clean_params.values())
-    ]
-    assert arg_subcommands, "config must expose subcommands with required args"
-
-    for name in arg_subcommands:
-        ctx = MagicMock()
-        ctx.send = AsyncMock()
-        ctx.command = SimpleNamespace(name=name)
-        error = commands.MissingRequiredArgument.__new__(
-            commands.MissingRequiredArgument)
-
-        await bot.on_command_error(ctx, error)
-
-        ctx.send.assert_awaited_once()
-        assert ctx.send.await_args.args[0] == "❌ Fehlendes Argument.", name
-
-    await repo.close()
+# NOTE: the former `test_on_command_error_missing_arg_is_generic_for_config_
+# subcommands` was removed in Phase 3: `config` is now a slash-only
+# app_commands.Group and has no prefix subcommands, so a prefix MissingRequired
+# Argument can never originate from it. Slash param handling is Discord-side.
 
 
 async def test_on_command_error_surfaces_admin_helper_valueerror():

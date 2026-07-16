@@ -369,12 +369,6 @@ _COMMAND_DESCRIPTIONS: dict[str, str] = {
     "kodex_check": "Prüft, wer den Kodex bestätigt hat.",
     "base": "Startet einen Basis-Timer.",
     "basestop": "Stoppt einen laufenden Basis-Timer.",
-    "config": "Verwaltet die Laufzeit-Konfiguration (Admin).",
-    "config channel": "Setzt einen Kanal für einen bestimmten Zweck.",
-    "config role": "Setzt eine Rolle für einen bestimmten Zweck.",
-    "config message": "Setzt eine Nachrichten-ID für einen Zweck.",
-    "config show": "Zeigt die aktuelle Konfiguration.",
-    "config reset": "Setzt einen Override zurück.",
     "admin": "Verwaltet Stats und Nachrichten (Admin).",
     "sync_achievements": "Synchronisiert alle Achievements (Admin).",
 }

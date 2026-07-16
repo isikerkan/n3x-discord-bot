@@ -220,14 +220,15 @@ async def test_command_list_contains_prefixed_top_level_commands():
 
 
 async def test_command_list_contains_group_and_its_subcommands():
-    # Groups are walked -> their subcommands appear qualified (e.g. the `config`
-    # group's `channel` sub). The `gate` group migrated to a slash app-command
-    # group in Phase 2, so `!gate verlauf` no longer appears in the prefix list.
+    # Groups are walked -> their subcommands appear qualified (e.g. the `admin`
+    # group's `msg` sub). The `gate`/`config`/`content` groups migrated to slash
+    # app-command groups, so they no longer appear in the prefix list; `admin`
+    # remains a prefix group.
     from n3x_bot.bot import build_command_list
     repo = await _flatfile_repo()
     bot = await _populated_bot(_settings(), repo)
     text = _embed_text(build_command_list(bot))
-    assert "!config channel" in text
+    assert "!admin msg" in text
     await _cleanup(repo)
 
 

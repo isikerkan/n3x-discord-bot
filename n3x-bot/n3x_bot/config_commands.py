@@ -1,16 +1,18 @@
-"""Admin-gated `!config` prefix commands that write `runtime_config` DB
-overrides and refresh the live resolver so changes apply without a restart.
+"""Admin-gated `/config` slash group that writes `runtime_config` DB overrides
+and refreshes the live resolver so changes apply without a restart.
 
 Phase 1 built the `runtime_config` table + the `RuntimeConfig` resolver; this
-module adds the write surface. Every write goes through `repo.set_runtime_config`
-(or `delete_runtime_config`) and then `await bot.runtime_config.refresh(repo)`.
+module adds the write surface as a slash-only `app_commands.Group` on `bot.tree`.
+Every write goes through `repo.set_runtime_config` (or `delete_runtime_config`)
+and then `await bot.runtime_config.refresh(repo)`.
 
-The channel/role pickers post a small View holding a `ChannelSelect`/`RoleSelect`;
-the select is author-locked to the invoking admin.
+Channel/role targets use native channel/role options; the callback reads only
+`.id` and writes `str(obj.id)`.
 """
 import discord
+from discord import app_commands
 
-from n3x_bot.admin import is_admin
+from n3x_bot.admin import app_is_admin
 from n3x_bot.config import Settings, parse_duration
 from n3x_bot.runtime_config import OVERRIDABLE_KEYS
 from n3x_bot.storage.base import StatsRepository
@@ -37,171 +39,132 @@ MESSAGE_PURPOSES: dict[str, str] = {
 }
 
 
-class ChannelConfigView(discord.ui.View):
-    """Posts a ChannelSelect; on pick writes `<key> = str(channel.id)` and
-    refreshes the live resolver. Author-locked to the invoking admin."""
-
-    def __init__(self, repo, bot, key: str, author_id: int):
-        super().__init__(timeout=120)
-        self.repo = repo
-        self.bot = bot
-        self.key = key
-        self.author_id = author_id
-        select = discord.ui.ChannelSelect(placeholder="Kanal wählen…")
-        select.callback = self._on_select
-        self._select = select
-        self.add_item(select)
-
-    async def _on_select(self, interaction) -> None:
-        if interaction.user.id != self.author_id:
-            await interaction.response.send_message("❌ Nicht für dich.",
-                                                    ephemeral=True)
-            return
-        channel = self._select.values[0]
-        await self.repo.set_runtime_config(self.key, str(channel.id))
-        await self.bot.runtime_config.refresh(self.repo)
-        await interaction.response.send_message(
-            f"✅ `{self.key}` = `{channel.id}`.", ephemeral=True)
-
-
-class RoleConfigView(discord.ui.View):
-    """Posts a RoleSelect; on pick writes `<key> = str(role.id)` and refreshes
-    the live resolver. Author-locked to the invoking admin."""
-
-    def __init__(self, repo, bot, key: str, author_id: int):
-        super().__init__(timeout=120)
-        self.repo = repo
-        self.bot = bot
-        self.key = key
-        self.author_id = author_id
-        select = discord.ui.RoleSelect(placeholder="Rolle wählen…")
-        select.callback = self._on_select
-        self._select = select
-        self.add_item(select)
-
-    async def _on_select(self, interaction) -> None:
-        if interaction.user.id != self.author_id:
-            await interaction.response.send_message("❌ Nicht für dich.",
-                                                    ephemeral=True)
-            return
-        role = self._select.values[0]
-        await self.repo.set_runtime_config(self.key, str(role.id))
-        await self.bot.runtime_config.refresh(self.repo)
-        await interaction.response.send_message(
-            f"✅ `{self.key}` = `{role.id}`.", ephemeral=True)
-
-
 def register_config_commands(bot, repo: StatsRepository, settings: Settings) -> None:
-    if bot.get_command("config") is not None:
+    if bot.tree.get_command("config") is not None:
         return
 
-    @bot.group(name="config", invoke_without_command=True)
-    async def config(ctx):
-        await ctx.send(
-            "Nutze `!config channel|role|message|gate-rewards|allowed-maps|"
-            "voice-roles|reminder-time|gate-delete-delay|show|reset ...`.",
-            delete_after=5)
+    config_group = app_commands.Group(
+        name="config", description="Laufzeit-Konfiguration (Admin).")
 
-    @config.command(name="channel")
-    async def channel(ctx, purpose):
-        if not is_admin(ctx.author, settings):
-            await ctx.send("❌ Keine Berechtigung.", delete_after=5)
-            return
-        if purpose not in CHANNEL_PURPOSES:
-            await ctx.send(f"❌ Unbekannter Zweck `{purpose}`.", delete_after=5)
-            return
-        view = ChannelConfigView(repo, bot, CHANNEL_PURPOSES[purpose], ctx.author.id)
-        await ctx.send(f"Kanal für `{purpose}` wählen:", view=view)
+    async def _require_admin(interaction) -> bool:
+        if app_is_admin(interaction, settings):
+            return True
+        await interaction.response.send_message(
+            "❌ Keine Berechtigung.", ephemeral=True)
+        return False
 
-    @config.command(name="role")
-    async def role(ctx, purpose):
-        if not is_admin(ctx.author, settings):
-            await ctx.send("❌ Keine Berechtigung.", delete_after=5)
-            return
-        if purpose not in ROLE_PURPOSES:
-            await ctx.send(f"❌ Unbekannter Zweck `{purpose}`.", delete_after=5)
-            return
-        view = RoleConfigView(repo, bot, ROLE_PURPOSES[purpose], ctx.author.id)
-        await ctx.send(f"Rolle für `{purpose}` wählen:", view=view)
-
-    @config.command(name="message")
-    async def message(ctx, purpose, message_id: str):
-        if not is_admin(ctx.author, settings):
-            await ctx.send("❌ Keine Berechtigung.", delete_after=5)
-            return
-        if purpose not in MESSAGE_PURPOSES:
-            await ctx.send(f"❌ Unbekannter Zweck `{purpose}`.", delete_after=5)
-            return
-        if not message_id.isdigit():
-            await ctx.send(f"❌ Ungültige ID `{message_id}`.", delete_after=5)
-            return
-        await repo.set_runtime_config(MESSAGE_PURPOSES[purpose], message_id)
-        await bot.runtime_config.refresh(repo)
-        await ctx.send(f"✅ `{MESSAGE_PURPOSES[purpose]}` = `{message_id}`.",
-                       delete_after=5)
-
-    async def _set_content(ctx, key: str, value: str):
-        if not is_admin(ctx.author, settings):
-            await ctx.send("❌ Keine Berechtigung.", delete_after=5)
-            return
+    async def _write(interaction, key: str, value: str) -> None:
         await repo.set_runtime_config(key, value)
         await bot.runtime_config.refresh(repo)
-        await ctx.send(f"✅ `{key}` gesetzt.", delete_after=5)
+        await interaction.response.send_message(
+            f"✅ `{key}` gesetzt.", ephemeral=True)
 
-    @config.command(name="gate-rewards")
-    async def gate_rewards(ctx, value: str):
-        await _set_content(ctx, "gate_rewards", value)
+    @config_group.command(name="channel",
+                          description="Setzt einen Kanal für einen bestimmten Zweck.")
+    @app_commands.describe(purpose="Zweck des Kanals", channel="Kanal")
+    @app_commands.choices(purpose=[app_commands.Choice(name=k, value=k)
+                                   for k in CHANNEL_PURPOSES])
+    async def channel(interaction, purpose: str, channel: discord.abc.GuildChannel):
+        if not await _require_admin(interaction):
+            return
+        await _write(interaction, CHANNEL_PURPOSES[purpose], str(channel.id))
 
-    @config.command(name="allowed-maps")
-    async def allowed_maps(ctx, value: str):
-        await _set_content(ctx, "allowed_maps", value)
+    @config_group.command(name="role",
+                          description="Setzt eine Rolle für einen bestimmten Zweck.")
+    @app_commands.describe(purpose="Zweck der Rolle", role="Rolle")
+    @app_commands.choices(purpose=[app_commands.Choice(name=k, value=k)
+                                   for k in ROLE_PURPOSES])
+    async def role(interaction, purpose: str, role: discord.Role):
+        if not await _require_admin(interaction):
+            return
+        await _write(interaction, ROLE_PURPOSES[purpose], str(role.id))
 
-    @config.command(name="voice-roles")
-    async def voice_roles(ctx, value: str):
-        await _set_content(ctx, "voice_achievement_roles", value)
+    @config_group.command(name="message",
+                          description="Setzt eine Nachrichten-ID für einen Zweck.")
+    @app_commands.describe(purpose="Zweck", message_id="Nachrichten-ID")
+    @app_commands.choices(purpose=[app_commands.Choice(name=k, value=k)
+                                   for k in MESSAGE_PURPOSES])
+    async def message(interaction, purpose: str, message_id: str):
+        if not await _require_admin(interaction):
+            return
+        if not message_id.isdigit():
+            await interaction.response.send_message(
+                f"❌ Ungültige ID `{message_id}`.", ephemeral=True)
+            return
+        await _write(interaction, MESSAGE_PURPOSES[purpose], message_id)
 
-    @config.command(name="reminder-time")
-    async def reminder_time(ctx, value: str):
-        await _set_content(ctx, "reminder_time", value)
+    @config_group.command(name="gate-rewards",
+                          description="Setzt die Gate-Belohnungen.")
+    @app_commands.describe(value="Wert im Format a:1,b:2")
+    async def gate_rewards(interaction, value: str):
+        if not await _require_admin(interaction):
+            return
+        await _write(interaction, "gate_rewards", value)
 
-    @config.command(name="gate-delete-delay")
-    async def gate_delete_delay(ctx, value: str):
+    @config_group.command(name="allowed-maps",
+                          description="Setzt die erlaubten Maps.")
+    @app_commands.describe(value="Wert im Format 1-1,2-2,3-3")
+    async def allowed_maps(interaction, value: str):
+        if not await _require_admin(interaction):
+            return
+        await _write(interaction, "allowed_maps", value)
+
+    @config_group.command(name="voice-roles",
+                          description="Setzt die Voice-Achievement-Rollen.")
+    @app_commands.describe(value="Wert im Format x:1,y:2")
+    async def voice_roles(interaction, value: str):
+        if not await _require_admin(interaction):
+            return
+        await _write(interaction, "voice_achievement_roles", value)
+
+    @config_group.command(name="reminder-time",
+                          description="Setzt die Reminder-Uhrzeit.")
+    @app_commands.describe(value="Uhrzeit im Format HH:MM")
+    async def reminder_time(interaction, value: str):
+        if not await _require_admin(interaction):
+            return
+        await _write(interaction, "reminder_time", value)
+
+    @config_group.command(name="gate-delete-delay",
+                          description="Setzt die Löschverzögerung der Gate-Nachricht.")
+    @app_commands.describe(value="Dauer, z.B. 30s, 1m, 5m, 2h, 90")
+    async def gate_delete_delay(interaction, value: str):
+        if not await _require_admin(interaction):
+            return
         try:
             parse_duration(value)
         except ValueError:
-            await ctx.send(
+            await interaction.response.send_message(
                 "❌ Ungültige Dauer. Beispiele: 30s, 1m, 5m, 2h, 90",
-                delete_after=10)
+                ephemeral=True)
             return
-        await _set_content(ctx, "gate_message_delete_delay", value)
+        await _write(interaction, "gate_message_delete_delay", value)
 
-    @config.command(name="show")
-    async def show(ctx):
-        if not is_admin(ctx.author, settings):
-            await ctx.send("❌ Keine Berechtigung.", delete_after=5)
+    @config_group.command(name="show",
+                          description="Zeigt die aktuelle Konfiguration.")
+    async def show(interaction):
+        if not await _require_admin(interaction):
             return
         overrides = await repo.all_runtime_config()
-        chunk = ""
+        lines = []
         for key in sorted(OVERRIDABLE_KEYS):
             if key in overrides:
-                line = f"`{key}` = `{overrides[key]}` (Override)"
+                lines.append(f"`{key}` = `{overrides[key]}` (Override)")
             else:
-                line = f"`{key}` = `{getattr(settings, key)}`"
-            if len(chunk) + len(line) + 1 > 1900:
-                await ctx.send(chunk)
-                chunk = ""
-            chunk = f"{chunk}\n{line}" if chunk else line
-        if chunk:
-            await ctx.send(chunk)
+                lines.append(f"`{key}` = `{getattr(settings, key)}`")
+        await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
-    @config.command(name="reset")
-    async def reset(ctx, key):
-        if not is_admin(ctx.author, settings):
-            await ctx.send("❌ Keine Berechtigung.", delete_after=5)
-            return
-        if key not in OVERRIDABLE_KEYS:
-            await ctx.send(f"❌ `{key}` ist nicht zurücksetzbar.", delete_after=5)
+    @config_group.command(name="reset",
+                          description="Setzt einen Override zurück.")
+    @app_commands.describe(key="Zurückzusetzender Schlüssel")
+    @app_commands.choices(key=[app_commands.Choice(name=k, value=k)
+                               for k in sorted(OVERRIDABLE_KEYS)])
+    async def reset(interaction, key: str):
+        if not await _require_admin(interaction):
             return
         await repo.delete_runtime_config(key)
         await bot.runtime_config.refresh(repo)
-        await ctx.send(f"✅ Override `{key}` entfernt.", delete_after=5)
+        await interaction.response.send_message(
+            f"✅ Override `{key}` entfernt.", ephemeral=True)
+
+    bot.tree.add_command(config_group)
