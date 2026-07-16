@@ -339,6 +339,92 @@ async def update_gate_input_help(bot, repo: StatsRepository, settings: Settings)
     await repo.set_channel_message(GATE_INPUT_HELP_KEY, new_msg.id, channel.id)
 
 
+# ── command-list channel ─────────────────────────────────────────────────────
+
+COMMAND_LIST_KEY = "command_list"
+
+# Curated short German blurbs keyed by command `qualified_name`. The map DRIVES
+# the description column of the embed; an unmapped command renders name-only.
+_COMMAND_DESCRIPTIONS: dict[str, str] = {
+    "rank": "Zeigt dein persönliches Command-Ranking.",
+    "stat": "Zeigt die erfassten Kosten eines Gates (a–k).",
+    "del": "Löscht einen Gate-Eintrag (nur mit Berechtigung).",
+    "gate": "Gate-Auswertungen.",
+    "gate verlauf": "Zeigt den Preisverlauf eines Gates als Diagramm.",
+    "overview": "Postet die Achievement-Übersicht.",
+    "erfolge": "Zeigt deine freigeschalteten Erfolge.",
+    "activity": "Zeigt deine Aktivitätsstatistik.",
+    "kodex": "Sendet dir den Kodex zur Bestätigung.",
+    "kodex_check": "Prüft, wer den Kodex bestätigt hat.",
+    "base": "Startet einen Basis-Timer.",
+    "basestop": "Stoppt einen laufenden Basis-Timer.",
+    "config": "Verwaltet die Laufzeit-Konfiguration (Admin).",
+    "config channel": "Setzt einen Kanal für einen bestimmten Zweck.",
+    "config role": "Setzt eine Rolle für einen bestimmten Zweck.",
+    "config message": "Setzt eine Nachrichten-ID für einen Zweck.",
+    "config show": "Zeigt die aktuelle Konfiguration.",
+    "config reset": "Setzt einen Override zurück.",
+    "admin": "Verwaltet Stats und Nachrichten (Admin).",
+    "sync_achievements": "Synchronisiert alle Achievements (Admin).",
+}
+
+
+def build_command_list(bot) -> discord.Embed:
+    """Build the deterministic German command-list embed from the live registry.
+
+    Registry-driven: enumerates `bot.commands` (sorted, `help` excluded), walking
+    every `commands.Group` into its subcommands, and renders each as a
+    `!`-prefixed line with the curated blurb from `_COMMAND_DESCRIPTIONS` (keyed
+    by `qualified_name`; unmapped → name only). Lines are chunked to respect
+    Discord's embed field/description limits.
+    """
+    lines: list[str] = []
+    for cmd in sorted(bot.commands, key=lambda c: c.name):
+        if cmd.name == "help":
+            continue
+        desc = _COMMAND_DESCRIPTIONS.get(cmd.qualified_name, "")
+        lines.append(f"!{cmd.name} — {desc}" if desc else f"!{cmd.name}")
+        if isinstance(cmd, commands.Group):
+            for sub in sorted(cmd.commands, key=lambda c: c.name):
+                sdesc = _COMMAND_DESCRIPTIONS.get(sub.qualified_name, "")
+                lines.append(f"!{sub.qualified_name} — {sdesc}"
+                             if sdesc else f"!{sub.qualified_name}")
+
+    chunks = _chunk_gate_lines(lines, limit=1024)
+    embed = discord.Embed(title="📋 Befehlsübersicht", description=chunks[0],
+                          color=discord.Color.blurple())
+    for extra in chunks[1:]:
+        embed.add_field(name="​", value=extra, inline=False)
+    return embed
+
+
+async def update_command_list(bot, repo: StatsRepository, settings: Settings):
+    """Refresh (or first-post) the self-editing German command-list embed.
+
+    Mirrors `update_gate_input_help`: the last-posted message id is persisted via
+    the `channel_messages` store under `COMMAND_LIST_KEY` so the list is edited in
+    place across restarts. Best-effort; never raises.
+    """
+    if not bot.runtime_config.command_list_channel_id:
+        return
+    channel = bot.get_channel(bot.runtime_config.command_list_channel_id)
+    if channel is None:
+        return
+    embed = build_command_list(bot)
+
+    stored = await repo.get_channel_message(COMMAND_LIST_KEY)
+    if stored is not None:
+        try:
+            msg = await channel.fetch_message(stored[0])
+            await msg.edit(embed=embed)
+            return
+        except Exception:
+            pass
+
+    new_msg = await channel.send(embed=embed)
+    await repo.set_channel_message(COMMAND_LIST_KEY, new_msg.id, channel.id)
+
+
 async def update_gate_stats_embed(bot, repo: StatsRepository, settings: Settings):
     """Refresh (or first-post) the live gate-stats embed.
 
@@ -757,6 +843,10 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
             await update_gate_input_help(bot, repo, settings)
         except Exception:
             log.exception("gate-input help update failed")
+        try:
+            await update_command_list(bot, repo, settings)
+        except Exception:
+            log.exception("command-list update failed")
         # Publish the /admin ... slash group (and any other app commands) to
         # Discord. Global sync — the tree is only populated locally otherwise,
         # so the slash commands would never appear at runtime.
