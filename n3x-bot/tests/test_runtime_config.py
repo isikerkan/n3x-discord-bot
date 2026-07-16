@@ -206,6 +206,56 @@ async def test_malformed_reminder_time_override_falls_back_to_settings():
     assert rc.reminder_hm() == (19, 30)
 
 
+# ── derived getter: gate_delete_delay_seconds (parse_duration, DB > .env) ────
+# Property returning whole seconds. Default .env value "1m" -> 60; a DB override
+# is parsed via parse_duration; a malformed override never crashes a read-site
+# and falls back to 60 seconds.
+
+
+async def test_gate_delete_delay_seconds_default_is_sixty():
+    from n3x_bot.runtime_config import RuntimeConfig
+    settings = _settings()  # gate_message_delete_delay default "1m"
+    rc = RuntimeConfig(settings)
+    assert rc.gate_delete_delay_seconds == 60
+
+
+async def test_gate_delete_delay_seconds_reads_env_value():
+    from n3x_bot.runtime_config import RuntimeConfig
+    settings = _settings(gate_message_delete_delay="5m")
+    rc = RuntimeConfig(settings)
+    assert rc.gate_delete_delay_seconds == 300
+
+
+async def test_gate_delete_delay_seconds_db_override_wins():
+    from n3x_bot.runtime_config import RuntimeConfig
+    settings = _settings(gate_message_delete_delay="1m")
+    rc = RuntimeConfig(settings, {"gate_message_delete_delay": "2m"})
+    assert rc.gate_delete_delay_seconds == 120
+
+
+async def test_gate_delete_delay_seconds_malformed_override_falls_back_to_sixty():
+    from n3x_bot.runtime_config import RuntimeConfig
+    settings = _settings(gate_message_delete_delay="1m")
+    rc = RuntimeConfig(settings, {"gate_message_delete_delay": "garbage"})
+    # no raise; falls back to 60 seconds
+    assert rc.gate_delete_delay_seconds == 60
+
+
+async def test_gate_delete_delay_seconds_both_malformed_falls_back_to_sixty():
+    # Outer guard: when BOTH the DB override AND the .env base are malformed,
+    # `_derived`'s fallback() itself raises, so the property's own try/except
+    # must catch it and return the safe 60s default without raising.
+    from n3x_bot.runtime_config import RuntimeConfig
+    settings = _settings(gate_message_delete_delay="garbage")
+    rc = RuntimeConfig(settings, {"gate_message_delete_delay": "also-garbage"})
+    assert rc.gate_delete_delay_seconds == 60
+
+
+async def test_gate_message_delete_delay_is_overridable_key():
+    from n3x_bot.runtime_config import OVERRIDABLE_KEYS
+    assert "gate_message_delete_delay" in OVERRIDABLE_KEYS
+
+
 # ── non-overridable keys: pass-through, and DB override is IGNORED ───────────
 
 async def test_non_overridable_field_passes_through_to_settings():

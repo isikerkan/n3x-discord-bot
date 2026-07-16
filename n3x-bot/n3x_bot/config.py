@@ -1,3 +1,4 @@
+import re
 from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import model_validator
@@ -33,6 +34,20 @@ def parse_voice_roles(raw: str) -> dict[str, int]:
             except ValueError:
                 continue
     return out
+
+
+def parse_duration(raw: str) -> int:
+    raw = raw.strip()
+    if not raw:
+        raise ValueError("empty duration")
+    if re.fullmatch(r"[0-9]+", raw):
+        return int(raw)
+    if not re.fullmatch(r"(?:[0-9]+[hms])+", raw):
+        raise ValueError(f"invalid duration: {raw!r}")
+    total = 0
+    for value, unit in re.findall(r"([0-9]+)([hms])", raw):
+        total += int(value) * {"h": 3600, "m": 60, "s": 1}[unit]
+    return total
 
 
 class Settings(BaseSettings):
@@ -78,6 +93,7 @@ class Settings(BaseSettings):
     command_list_channel_id: int = 0
     gate_delete_role_id: int = 0
     gate_rewards: str = "a:46892,b:93820,c:139522,d:75361,e:46719,z:66661,k:62955"
+    gate_message_delete_delay: str = "1m"
 
     milestone_channel_id: int = 0
     overview_channel_id: int = 0

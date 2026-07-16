@@ -3,6 +3,7 @@ import logging
 from n3x_bot.config import (
     Settings,
     parse_allowed_maps,
+    parse_duration,
     parse_gate_rewards,
     parse_reminder_hm,
     parse_voice_roles,
@@ -19,6 +20,7 @@ OVERRIDABLE_KEYS: frozenset[str] = frozenset({
     "timer_overview_message_id", "target_role_id", "gate_delete_role_id",
     "base_timer_role_id",
     "gate_rewards", "voice_achievement_roles", "allowed_maps", "reminder_time",
+    "gate_message_delete_delay",
 })
 
 
@@ -142,6 +144,19 @@ class RuntimeConfig:
     def reminder_hm(self) -> tuple[int, int]:
         return self._derived("reminder_time", parse_reminder_hm,
                              self._settings.reminder_hm)
+
+    @property
+    def gate_delete_delay_seconds(self) -> int:
+        # This resolves on the hot gate-store path; a malformed DB override OR a
+        # malformed .env base must never raise there. `_derived` already tolerates
+        # a bad override, but its fallback would still raise on a malformed base,
+        # so the whole body is guarded to a safe 60s default.
+        try:
+            return self._derived(
+                "gate_message_delete_delay", parse_duration,
+                lambda: parse_duration(self._settings.gate_message_delete_delay))
+        except Exception:
+            return 60
 
     # ── non-overridable pass-through (never consults the cache) ──────────────
     @property

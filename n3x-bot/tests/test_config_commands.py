@@ -545,6 +545,37 @@ async def test_config_reminder_time_sets_value_and_refreshes():
     await _cleanup(repo)
 
 
+async def test_config_gate_delete_delay_sets_value_verbatim_and_refreshes():
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = await _bot_with_config(settings, repo)
+    ctx = _ctx(_admin())
+
+    await _config_sub(bot, "gate-delete-delay").callback(ctx, "2m")
+
+    # the raw value is written verbatim (parsing happens at the resolver)…
+    assert await repo.get_runtime_config("gate_message_delete_delay") == "2m"
+    # …and the live resolver reflects it immediately after refresh().
+    assert bot.runtime_config.gate_delete_delay_seconds == 120
+
+    await _cleanup(repo)
+
+
+async def test_config_gate_delete_delay_rejects_invalid_duration():
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = await _bot_with_config(settings, repo)
+    ctx = _ctx(_admin())
+
+    await _config_sub(bot, "gate-delete-delay").callback(ctx, "banana")
+
+    # nothing written; the operator gets an error instead of a false "gesetzt".
+    assert await repo.get_runtime_config("gate_message_delete_delay") is None
+    assert "Ungültige Dauer" in _sent_text(ctx.send)
+
+    await _cleanup(repo)
+
+
 async def test_config_content_setter_non_admin_refused():
     repo = await _flatfile_repo()
     settings = _settings()
@@ -704,7 +735,8 @@ async def test_config_group_exposes_expected_subcommands():
     group = bot.get_command("config")
     names = {c.name for c in group.commands}
     expected = {"channel", "role", "message", "gate-rewards", "allowed-maps",
-                "voice-roles", "reminder-time", "show", "reset"}
+                "voice-roles", "reminder-time", "gate-delete-delay", "show",
+                "reset"}
     assert expected <= names
 
     await _cleanup(repo)

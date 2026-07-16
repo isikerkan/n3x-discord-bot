@@ -11,7 +11,7 @@ the select is author-locked to the invoking admin.
 import discord
 
 from n3x_bot.admin import is_admin
-from n3x_bot.config import Settings
+from n3x_bot.config import Settings, parse_duration
 from n3x_bot.runtime_config import OVERRIDABLE_KEYS
 from n3x_bot.storage.base import StatsRepository
 
@@ -99,7 +99,8 @@ def register_config_commands(bot, repo: StatsRepository, settings: Settings) -> 
     async def config(ctx):
         await ctx.send(
             "Nutze `!config channel|role|message|gate-rewards|allowed-maps|"
-            "voice-roles|reminder-time|show|reset ...`.", delete_after=5)
+            "voice-roles|reminder-time|gate-delete-delay|show|reset ...`.",
+            delete_after=5)
 
     @config.command(name="channel")
     async def channel(ctx, purpose):
@@ -162,6 +163,17 @@ def register_config_commands(bot, repo: StatsRepository, settings: Settings) -> 
     @config.command(name="reminder-time")
     async def reminder_time(ctx, value: str):
         await _set_content(ctx, "reminder_time", value)
+
+    @config.command(name="gate-delete-delay")
+    async def gate_delete_delay(ctx, value: str):
+        try:
+            parse_duration(value)
+        except ValueError:
+            await ctx.send(
+                "❌ Ungültige Dauer. Beispiele: 30s, 1m, 5m, 2h, 90",
+                delete_after=10)
+            return
+        await _set_content(ctx, "gate_message_delete_delay", value)
 
     @config.command(name="show")
     async def show(ctx):

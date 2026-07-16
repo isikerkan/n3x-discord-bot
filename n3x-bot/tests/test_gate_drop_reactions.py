@@ -390,6 +390,8 @@ async def test_kappa_nothing_click_stores_both_false():
 # ── confirmation: message deletion after a successful store ──────────────────
 
 async def test_message_deleted_after_successful_store():
+    # Deletion is now SCHEDULED with the configured delay (default .env "1m" ->
+    # 60s) rather than immediate — the drop message lingers briefly like a/b/c.
     guild = _fake_guild()
     bot, repo, settings, message, added = await _seed_input(
         "d 250.000", guild=guild, message_id=7301)
@@ -397,7 +399,30 @@ async def test_message_deleted_after_successful_store():
     await _dispatch(bot, repo, settings, message_id=7301, user_id=7,
                     emoji=added[0])
 
-    message.delete.assert_awaited()
+    message.delete.assert_awaited_once_with(delay=60)
+
+    await repo.close()
+
+
+async def test_message_delete_delay_reflects_configured_seconds(monkeypatch):
+    # The delay is driven by bot.runtime_config.gate_delete_delay_seconds, not a
+    # hardcoded constant: a resolver reporting 120 yields delete(delay=120).
+    from n3x_bot import bot as botmod
+    monkeypatch.setattr(botmod, "update_gate_stats_embed", AsyncMock())
+    monkeypatch.setattr(botmod, "update_gate_chart", AsyncMock())
+    monkeypatch.setattr(botmod, "_announce_records", AsyncMock())
+    monkeypatch.setattr(botmod, "check_achievements", AsyncMock(return_value=[]))
+    monkeypatch.setattr(botmod, "announce_achievements", AsyncMock())
+
+    guild = _fake_guild()
+    bot, repo, settings, message, added = await _seed_input(
+        "d 250.000", guild=guild, message_id=7303)
+    bot.runtime_config = SimpleNamespace(gate_delete_delay_seconds=120)
+
+    await _dispatch(bot, repo, settings, message_id=7303, user_id=7,
+                    emoji=added[0])
+
+    message.delete.assert_awaited_once_with(delay=120)
 
     await repo.close()
 
@@ -413,7 +438,7 @@ async def test_store_survives_delete_failure():
                     emoji=added[0])
 
     assert await repo.list_gate_costs("d") == [250000]  # store still happened
-    message.delete.assert_awaited()
+    message.delete.assert_awaited_once_with(delay=60)
 
     await repo.close()
 
