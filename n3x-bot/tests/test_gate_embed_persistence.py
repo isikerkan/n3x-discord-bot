@@ -67,6 +67,7 @@ def _fake_channel(send_return_id: int = 42, channel_id: int = 555):
     channel.send = AsyncMock(return_value=SimpleNamespace(id=send_return_id))
     fetched = MagicMock()
     fetched.edit = AsyncMock()
+    fetched.add_reaction = AsyncMock()
     channel.fetch_message = AsyncMock(return_value=fetched)
     return channel, fetched
 
@@ -184,4 +185,18 @@ async def test_noop_when_channel_missing_persists_nothing():
 
     assert await repo.get_channel_message(GATE_STATS_KEY) is None
 
+    await repo.close()
+
+
+async def test_edit_path_seeds_reload_reaction_on_existing_message():
+    from n3x_bot.bot import build_bot, update_gate_stats_embed
+    repo = await _flatfile_repo()
+    settings = _settings(gate_stats_channel_id=555)
+    bot = build_bot(settings, repo)
+    channel, fetched = _fake_channel(send_return_id=42, channel_id=555)
+    bot.get_channel = MagicMock(return_value=channel)
+
+    await update_gate_stats_embed(bot, repo, settings)   # first post
+    await update_gate_stats_embed(bot, repo, settings)   # edit path
+    fetched.add_reaction.assert_any_await("🔄")
     await repo.close()
