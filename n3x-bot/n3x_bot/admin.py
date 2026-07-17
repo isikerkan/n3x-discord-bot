@@ -1,9 +1,9 @@
 """Role-gated admin CRUD for stats and messages.
 
 Discord-free async helpers (`admin_*`) do the real work through `repo`, so
-they're unit-testable in isolation (mirroring `build_output`). Both the prefix
-`!admin ...` group and the `/admin ...` slash group are thin wrappers that gate
-on `is_admin` and delegate to these helpers, wired via `register_admin_commands`.
+they're unit-testable in isolation (mirroring `build_output`). The `/admin ...`
+slash group is a thin wrapper that gates on `is_admin` and delegates to these
+helpers, wired via `register_admin_commands`.
 """
 from discord import app_commands
 from discord.ext import commands
@@ -133,110 +133,7 @@ async def admin_list_messages(repo: StatsRepository,
 # ── command wiring ───────────────────────────────────────────────────────────
 
 def register_admin_commands(bot, repo: StatsRepository, settings: Settings) -> None:
-    _register_prefix_commands(bot, repo, settings)
     _register_slash_commands(bot, repo, settings)
-
-
-def _register_prefix_commands(bot, repo: StatsRepository, settings: Settings) -> None:
-    @bot.group(name="admin", invoke_without_command=True)
-    async def admin_group(ctx):
-        await ctx.send("Nutze `!admin stat ...` oder `!admin msg ...`.", delete_after=5)
-
-    @admin_group.group(name="stat", invoke_without_command=True)
-    async def admin_stat(ctx):
-        await ctx.send("Nutze `!admin stat add|edit|archive|rm|list`.", delete_after=5)
-
-    @admin_group.group(name="msg", invoke_without_command=True)
-    async def admin_msg(ctx):
-        await ctx.send("Nutze `!admin msg add|edit|archive|rm|list`.", delete_after=5)
-
-    @admin_stat.command(name="add")
-    async def admin_stat_add(ctx, key: str, name: str, targeted: bool = False,
-                             message: str | None = None):
-        if not is_admin(ctx.author, settings):
-            await ctx.send("❌ Keine Berechtigung.", delete_after=5)
-            return
-        await admin_create_stat(bot, repo, settings, key, name,
-                                targeted=targeted, message_name=message)
-        await ctx.send(f"✅ Stat `{key}` erstellt.", delete_after=5)
-
-    @admin_stat.command(name="edit")
-    async def admin_stat_edit(ctx, key: str, name: str | None = None,
-                              message: str | None = None):
-        if not is_admin(ctx.author, settings):
-            await ctx.send("❌ Keine Berechtigung.", delete_after=5)
-            return
-        await admin_edit_stat(bot, repo, settings, key, name=name,
-                              message_name=message)
-        await ctx.send(f"✅ Stat `{key}` aktualisiert.", delete_after=5)
-
-    @admin_stat.command(name="archive")
-    async def admin_stat_archive(ctx, key: str):
-        if not is_admin(ctx.author, settings):
-            await ctx.send("❌ Keine Berechtigung.", delete_after=5)
-            return
-        await admin_archive_stat(bot, repo, settings, key)
-        await ctx.send(f"✅ Stat `{key}` archiviert.", delete_after=5)
-
-    @admin_stat.command(name="rm")
-    async def admin_stat_rm(ctx, key: str):
-        if not is_admin(ctx.author, settings):
-            await ctx.send("❌ Keine Berechtigung.", delete_after=5)
-            return
-        await admin_delete_stat(bot, repo, settings, key)
-        await ctx.send(f"✅ Stat `{key}` gelöscht.", delete_after=5)
-
-    @admin_stat.command(name="list")
-    async def admin_stat_list(ctx):
-        if not is_admin(ctx.author, settings):
-            await ctx.send("❌ Keine Berechtigung.", delete_after=5)
-            return
-        stats = await admin_list_stats(repo)
-        text = "\n".join(f"`{s.key}` — {s.name}" for s in stats) or "Keine Stats."
-        await ctx.send(text)
-
-    @admin_msg.command(name="add")
-    async def admin_msg_add(ctx, name: str, *, template: str):
-        if not is_admin(ctx.author, settings):
-            await ctx.send("❌ Keine Berechtigung.", delete_after=5)
-            return
-        await admin_create_message(repo, name, template)
-        await ctx.send(f"✅ Nachricht `{name}` erstellt.", delete_after=5)
-
-    @admin_msg.command(name="edit")
-    async def admin_msg_edit(ctx, message_id: int, name: str | None = None,
-                             *, template: str | None = None):
-        if not is_admin(ctx.author, settings):
-            await ctx.send("❌ Keine Berechtigung.", delete_after=5)
-            return
-        await admin_edit_message(repo, message_id, name=name, template=template)
-        await ctx.send(f"✅ Nachricht `{message_id}` aktualisiert.", delete_after=5)
-
-    @admin_msg.command(name="archive")
-    async def admin_msg_archive(ctx, message_id: int):
-        if not is_admin(ctx.author, settings):
-            await ctx.send("❌ Keine Berechtigung.", delete_after=5)
-            return
-        await admin_archive_message(repo, message_id)
-        await ctx.send(f"✅ Nachricht `{message_id}` archiviert.", delete_after=5)
-
-    @admin_msg.command(name="rm")
-    async def admin_msg_rm(ctx, message_id: int):
-        if not is_admin(ctx.author, settings):
-            await ctx.send("❌ Keine Berechtigung.", delete_after=5)
-            return
-        await admin_delete_message(repo, message_id)
-        await ctx.send(f"✅ Nachricht `{message_id}` gelöscht.", delete_after=5)
-
-    @admin_msg.command(name="list")
-    async def admin_msg_list(ctx):
-        if not is_admin(ctx.author, settings):
-            await ctx.send("❌ Keine Berechtigung.", delete_after=5)
-            return
-        messages = await admin_list_messages(repo)
-        text = "\n".join(f"`{m.id}` {m.name} — {m.template}" for m in messages) \
-            or "Keine Nachrichten."
-        await ctx.send(text)
 
 
 def _register_slash_commands(bot, repo: StatsRepository, settings: Settings) -> None:
