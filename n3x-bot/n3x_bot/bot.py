@@ -944,12 +944,21 @@ async def sync_commands_to_guilds(bot) -> None:
         log.exception("failed to reset global command scope")
 
 
-def _wire_events(bot, settings: Settings, repo: StatsRepository):
-    reminder_h, reminder_m = bot.runtime_config.reminder_hm()
+def reminder_loop_time(runtime_config, settings: Settings) -> time:
+    """The daily event-reminder fire time as a TZ-AWARE `time`.
 
-    @tasks.loop(time=time(hour=reminder_h, minute=reminder_m))
+    discord.py's `tasks.loop(time=...)` treats a NAIVE time as UTC, so a bare
+    `time(19, 30)` fired at 19:30 UTC (= 20:30/21:30 Europe/Berlin — the "1h
+    late" bug). Attaching `tzinfo` makes it fire at that local wall-clock time.
+    """
+    h, m = runtime_config.reminder_hm()
+    return time(hour=h, minute=m, tzinfo=ZoneInfo(settings.timezone))
+
+
+def _wire_events(bot, settings: Settings, repo: StatsRepository):
+    @tasks.loop(time=reminder_loop_time(bot.runtime_config, settings))
     async def event_reminder_task():
-        weekday = datetime.now().weekday()
+        weekday = now_local(settings).weekday()
         channel = bot.get_channel(bot.runtime_config.reminder_channel_id)
         if channel is None:
             return
