@@ -3,10 +3,9 @@ import importlib.resources as ir
 from io import BytesIO
 
 import discord
-from discord.ext import commands
 from PIL import Image, ImageDraw, ImageFont
 
-from n3x_bot.admin import is_admin
+from n3x_bot.admin import app_is_admin
 from n3x_bot.cards import _font_bytes
 from n3x_bot.config import Settings
 
@@ -95,20 +94,23 @@ async def send_welcome_card(bot, settings: Settings, member) -> bool:
 
 
 def register_welcome_commands(bot, settings: Settings) -> None:
-    if bot.get_command("sync_welcome") is not None:
+    if bot.tree.get_command("sync_welcome") is not None:
         return
 
-    async def _sync_welcome_cmd(ctx):
-        if not is_admin(ctx.author, settings):
-            await ctx.send("❌ Keine Berechtigung.", delete_after=5)
+    @bot.tree.command(name="sync_welcome",
+                      description="Postet eine Willkommenskarte pro Mitglied (Admin).")
+    async def sync_welcome_cmd(interaction):
+        if not app_is_admin(interaction, settings):
+            await interaction.response.send_message(
+                "❌ Keine Berechtigung.", ephemeral=True)
             return
+        await interaction.response.defer(ephemeral=True)
         count = 0
-        for member in ctx.guild.members:
+        for member in interaction.guild.members:
             if getattr(member, "bot", False):
                 continue
             if await send_welcome_card(bot, settings, member):
                 count += 1
                 await asyncio.sleep(1)
-        await ctx.send(f"✅ {count} Willkommenskarten verschickt.", delete_after=5)
-
-    bot.add_command(commands.Command(_sync_welcome_cmd, name="sync_welcome"))
+        await interaction.followup.send(
+            f"✅ {count} Willkommenskarten verschickt.", ephemeral=True)

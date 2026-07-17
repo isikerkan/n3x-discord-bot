@@ -36,6 +36,7 @@ from unittest.mock import AsyncMock, MagicMock
 from zoneinfo import ZoneInfo
 
 import discord
+from discord import app_commands
 
 from n3x_bot.bot import build_bot
 from n3x_bot.config import Settings
@@ -91,6 +92,43 @@ def _overview_channel():
     channel.fetch_message = AsyncMock(return_value=msg)
     channel._msg = msg
     return channel
+
+
+def _fake_interaction(user, guild=None):
+    """A slash-interaction fake mirroring the /admin & /config slash tests."""
+    it = MagicMock()
+    it.user = user
+    it.guild = guild
+    it.response = MagicMock()
+    it.response.send_message = AsyncMock()
+    it.response.defer = AsyncMock()
+    it.followup = MagicMock()
+    it.followup.send = AsyncMock()
+    return it
+
+
+def _map_autocomplete(bot, command_name):
+    """The autocomplete callback bound to the ``map`` param of a tree command.
+
+    discord.py stores it on the command's parameter; its signature is
+    ``(interaction, current: str)`` and it returns a list of
+    ``app_commands.Choice``. Calling it directly is the unit under test for the
+    live map suggestions (no re-sync needed when `/config allowed-maps` changes).
+    """
+    cmd = bot.tree.get_command(command_name)
+    return cmd._params["map"].autocomplete
+
+
+def _sent_text(interaction) -> str:
+    """All first-positional strings the callback sent, via either
+    ``response.send_message`` or ``followup.send`` (base/basestop reply either
+    way depending on whether they defer)."""
+    parts = []
+    for mock in (interaction.response.send_message, interaction.followup.send):
+        for call in mock.await_args_list:
+            if call.args:
+                parts.append(str(call.args[0]))
+    return " ".join(parts)
 
 
 # ── build_timer_overview_embed (pure) ──────────────────────────────────────
@@ -304,9 +342,18 @@ async def test_update_timer_overview_swallows_edit_failure():
     await repo.close()
 
 
-# ── register_timer_commands ─────────────────────────────────────────────────
+# ── register_timer_commands (Phase 5: slash-ONLY /base + /basestop) ──────────
+#
+# Phase 5 migrates `!base` / `!basestop` to slash-ONLY app commands on
+# `bot.tree`. Both are role-gated by `has_base_timer_role(interaction.user, ...)`
+# and take a `map` param with a LIVE autocomplete (sourced from
+# `bot.runtime_config.allowed_maps_list` for /base, and active timers for
+# /basestop, so `/config allowed-maps` changes reflect without a re-sync). The
+# `map` value is validated in-callback (autocomplete is non-binding). Commands
+# are addressed via the tree and invoked with the `map`/`zeit` params by name:
+#     bot.tree.get_command("base").callback(interaction, map="4-1", zeit=30)
 
-async def test_register_timer_commands_registers_base_and_basestop():
+async def test_register_timer_commands_registers_base_and_basestop_as_slash_only():
     from n3x_bot import timers
     repo = await _flatfile_repo()
     settings = _settings()
@@ -314,8 +361,10 @@ async def test_register_timer_commands_registers_base_and_basestop():
 
     timers.register_timer_commands(bot, repo, settings)
 
-    assert bot.get_command("base") is not None
-    assert bot.get_command("basestop") is not None
+    assert bot.get_command("base") is None          # dropped from prefix registry
+    assert bot.get_command("basestop") is None
+    assert bot.tree.get_command("base") is not None  # present on the app tree
+    assert bot.tree.get_command("basestop") is not None
     await repo.close()
 
 
@@ -328,12 +377,56 @@ async def test_register_timer_commands_is_idempotent():
     timers.register_timer_commands(bot, repo, settings)
     timers.register_timer_commands(bot, repo, settings)  # must not raise/dup
 
-    assert bot.get_command("base") is not None
-    assert bot.get_command("basestop") is not None
+    assert bot.tree.get_command("base") is not None
+    assert bot.tree.get_command("basestop") is not None
     await repo.close()
 
 
-async def test_base_command_stores_timer_and_refreshes_overview_for_role_holder():
+# ── /base autocomplete (live map suggestions) ───────────────────────────────
+
+async def test_base_map_autocomplete_returns_choices_from_allowed_maps():
+    from n3x_bot import timers
+    repo = await _flatfile_repo()
+    settings = _settings(base_timer_role_id=555)
+    bot = build_bot(settings, repo)
+    timers.register_timer_commands(bot, repo, settings)
+
+    ac = _map_autocomplete(bot, "base")
+    interaction = _fake_interaction(_member(role_ids=(555,)))
+
+    choices = await ac(interaction, "")
+
+    assert choices  # non-empty
+    assert all(isinstance(c, app_commands.Choice) for c in choices)
+    values = {c.value for c in choices}
+    allowed = set(bot.runtime_config.allowed_maps_list)
+    assert values <= allowed          # sourced live from allowed_maps_list
+    assert "4-1" in values            # a default allowed map is suggested
+    await repo.close()
+
+
+async def test_base_map_autocomplete_filters_by_current_input():
+    from n3x_bot import timers
+    repo = await _flatfile_repo()
+    settings = _settings(base_timer_role_id=555)
+    bot = build_bot(settings, repo)
+    timers.register_timer_commands(bot, repo, settings)
+
+    ac = _map_autocomplete(bot, "base")
+    interaction = _fake_interaction(_member(role_ids=(555,)))
+
+    choices = await ac(interaction, "4-")
+
+    values = {c.value for c in choices}
+    assert values  # the "4-" maps match
+    assert all("4-" in c.value for c in choices)  # filtered by the partial input
+    assert "1-5" not in values                     # non-matching maps excluded
+    await repo.close()
+
+
+# ── /base callback (role gate + in-callback map validation) ─────────────────
+
+async def test_base_slash_stores_timer_and_refreshes_overview_for_role_holder():
     from n3x_bot import timers
     repo = await _flatfile_repo()
     settings = _settings(base_timer_role_id=555,
@@ -344,20 +437,20 @@ async def test_base_command_stores_timer_and_refreshes_overview_for_role_holder(
     bot.get_channel = MagicMock(return_value=channel)
     timers.register_timer_commands(bot, repo, settings)
 
-    ctx = MagicMock()
-    ctx.author = _member(role_ids=(555,))
-    ctx.send = AsyncMock()
+    interaction = _fake_interaction(_member(role_ids=(555,)))
 
-    await bot.get_command("base").callback(ctx, "4-1", 30)
+    await bot.tree.get_command("base").callback(interaction, map="4-1", zeit=30)
 
     stored = await repo.list_base_timers()
     assert "4-1" in stored
     assert stored["4-1"].tzinfo is not None  # B6: tz-aware
     channel._msg.edit.assert_awaited()       # overview refreshed
+    # ephemeral confirmation to the caller
+    assert _sent_text(interaction)           # some confirm was sent
     await repo.close()
 
 
-async def test_base_command_refused_for_non_role_holder():
+async def test_base_slash_refused_for_non_role_holder_does_no_work():
     from n3x_bot import timers
     repo = await _flatfile_repo()
     settings = _settings(base_timer_role_id=555,
@@ -368,19 +461,17 @@ async def test_base_command_refused_for_non_role_holder():
     bot.get_channel = MagicMock(return_value=channel)
     timers.register_timer_commands(bot, repo, settings)
 
-    ctx = MagicMock()
-    ctx.author = _member(role_ids=(111,))  # lacks the base-timer role
-    ctx.send = AsyncMock()
+    interaction = _fake_interaction(_member(role_ids=(111,)))  # lacks the role
 
-    await bot.get_command("base").callback(ctx, "4-1", 30)
+    await bot.tree.get_command("base").callback(interaction, map="4-1", zeit=30)
 
     assert await repo.list_base_timers() == {}   # nothing stored
     channel._msg.edit.assert_not_awaited()        # overview not touched
-    ctx.send.assert_awaited()                     # user got a refusal
+    assert "Keine Berechtigung" in _sent_text(interaction)  # ephemeral refusal
     await repo.close()
 
 
-async def test_base_command_rejects_invalid_map_and_names_allowed_maps():
+async def test_base_slash_rejects_invalid_map_and_names_allowed_maps():
     from n3x_bot import timers
     repo = await _flatfile_repo()
     settings = _settings(base_timer_role_id=555,
@@ -389,20 +480,39 @@ async def test_base_command_rejects_invalid_map_and_names_allowed_maps():
     bot = build_bot(settings, repo)
     timers.register_timer_commands(bot, repo, settings)
 
-    ctx = MagicMock()
-    ctx.author = _member(role_ids=(555,))
-    ctx.send = AsyncMock()
+    interaction = _fake_interaction(_member(role_ids=(555,)))
 
-    await bot.get_command("base").callback(ctx, "9-9", 30)  # must not crash
+    # autocomplete is non-binding, so a bogus map can still arrive; the callback
+    # must validate it in-body, store nothing, and list the allowed maps.
+    await bot.tree.get_command("base").callback(interaction, map="9-9", zeit=30)
 
     assert await repo.list_base_timers() == {}
-    ctx.send.assert_awaited()
-    sent = " ".join(str(a) for c in ctx.send.call_args_list for a in c.args)
-    assert "4-1" in sent  # the allowed-map list is surfaced to the user
+    assert "4-1" in _sent_text(interaction)  # allowed-map list surfaced
     await repo.close()
 
 
-async def test_basestop_command_removes_timer_and_refreshes_overview():
+# ── /basestop autocomplete + callback ───────────────────────────────────────
+
+async def test_basestop_map_autocomplete_lists_only_active_timers():
+    from n3x_bot import timers
+    repo = await _flatfile_repo()
+    settings = _settings(base_timer_role_id=555)
+    bot = build_bot(settings, repo)
+    timers.register_timer_commands(bot, repo, settings)
+    await repo.set_base_timer("4-1", _now() + timedelta(minutes=30))
+
+    ac = _map_autocomplete(bot, "basestop")
+    interaction = _fake_interaction(_member(role_ids=(555,)))
+
+    choices = await ac(interaction, "")
+
+    values = {c.value for c in choices}
+    assert "4-1" in values       # a map with a running timer is suggested
+    assert "4-2" not in values   # maps without an active timer are not
+    await repo.close()
+
+
+async def test_basestop_slash_removes_timer_and_refreshes_overview():
     from n3x_bot import timers
     repo = await _flatfile_repo()
     settings = _settings(base_timer_role_id=555,
@@ -414,18 +524,17 @@ async def test_basestop_command_removes_timer_and_refreshes_overview():
     timers.register_timer_commands(bot, repo, settings)
     await repo.set_base_timer("4-1", _now() + timedelta(minutes=30))
 
-    ctx = MagicMock()
-    ctx.author = _member(role_ids=(555,))
-    ctx.send = AsyncMock()
+    interaction = _fake_interaction(_member(role_ids=(555,)))
 
-    await bot.get_command("basestop").callback(ctx, "4-1")
+    await bot.tree.get_command("basestop").callback(interaction, map="4-1")
 
     assert await repo.list_base_timers() == {}
     channel._msg.edit.assert_awaited()
+    assert _sent_text(interaction)  # ephemeral confirmation
     await repo.close()
 
 
-async def test_basestop_command_on_unknown_map_reports_no_active_timer():
+async def test_basestop_slash_on_unknown_map_reports_no_active_timer():
     from n3x_bot import timers
     repo = await _flatfile_repo()
     settings = _settings(base_timer_role_id=555,
@@ -435,17 +544,15 @@ async def test_basestop_command_on_unknown_map_reports_no_active_timer():
     bot.get_channel = MagicMock(return_value=_overview_channel())
     timers.register_timer_commands(bot, repo, settings)
 
-    ctx = MagicMock()
-    ctx.author = _member(role_ids=(555,))
-    ctx.send = AsyncMock()
+    interaction = _fake_interaction(_member(role_ids=(555,)))
 
-    await bot.get_command("basestop").callback(ctx, "4-1")  # not running
+    await bot.tree.get_command("basestop").callback(interaction, map="4-1")  # not running
 
-    ctx.send.assert_awaited()  # a "kein aktiver Timer" style reply, no crash
+    assert "Kein aktiver Timer" in _sent_text(interaction)
     await repo.close()
 
 
-async def test_basestop_command_refused_for_non_role_holder():
+async def test_basestop_slash_refused_for_non_role_holder():
     from n3x_bot import timers
     repo = await _flatfile_repo()
     settings = _settings(base_timer_role_id=555)
@@ -453,13 +560,12 @@ async def test_basestop_command_refused_for_non_role_holder():
     timers.register_timer_commands(bot, repo, settings)
     await repo.set_base_timer("4-1", _now() + timedelta(minutes=30))
 
-    ctx = MagicMock()
-    ctx.author = _member(role_ids=(111,))
-    ctx.send = AsyncMock()
+    interaction = _fake_interaction(_member(role_ids=(111,)))
 
-    await bot.get_command("basestop").callback(ctx, "4-1")
+    await bot.tree.get_command("basestop").callback(interaction, map="4-1")
 
     assert set(await repo.list_base_timers()) == {"4-1"}  # untouched
+    assert "Keine Berechtigung" in _sent_text(interaction)
     await repo.close()
 
 
@@ -500,12 +606,14 @@ async def test_start_timer_overview_loop_is_guarded_against_double_start():
 
 # ── bot.py wiring ───────────────────────────────────────────────────────────
 
-async def test_build_bot_registers_base_and_basestop():
+async def test_build_bot_registers_base_and_basestop_as_slash_only():
     repo = await _flatfile_repo()
     settings = _settings(base_timer_role_id=555)
 
     bot = build_bot(settings, repo)
 
-    assert bot.get_command("base") is not None
-    assert bot.get_command("basestop") is not None
+    assert bot.get_command("base") is None          # slash-only, not prefix
+    assert bot.get_command("basestop") is None
+    assert bot.tree.get_command("base") is not None
+    assert bot.tree.get_command("basestop") is not None
     await repo.close()

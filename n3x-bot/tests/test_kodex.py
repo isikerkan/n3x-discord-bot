@@ -91,6 +91,21 @@ def _reaction_payload(message_id, user_id, emoji="✅"):
                            guild_id=None, channel_id=0, member=None)
 
 
+def _fake_interaction(user, guild=None):
+    """A slash-interaction fake mirroring the /admin & /config slash tests:
+    ``.user`` / ``.guild`` / ``.response.send_message`` / ``.response.defer`` /
+    ``.followup.send``."""
+    it = MagicMock()
+    it.user = user
+    it.guild = guild
+    it.response = MagicMock()
+    it.response.send_message = AsyncMock()
+    it.response.defer = AsyncMock()
+    it.followup = MagicMock()
+    it.followup.send = AsyncMock()
+    return it
+
+
 def _join_member(member_id=555, display_name="Newbie"):
     """A joining member wired just enough that the unconditionally-invoked
     ``enforce_prefix`` takes its early-return path, plus a DM-capable ``.send``.
@@ -244,9 +259,17 @@ async def test_build_kodex_report_chunks_long_member_lists_within_limit():
     assert all(len(c) <= 1900 for c in chunks)
 
 
-# ── register_kodex_commands ─────────────────────────────────────────────────
+# ── register_kodex_commands (Phase 5: slash-ONLY /kodex + /kodex_check) ──────
+#
+# Phase 5 migrates `!kodex` / `!kodex_check` to slash-ONLY app commands on
+# `bot.tree`. Both are admin-gated; the admin path DEFERS ephemerally before the
+# slow member fan-out (kodex: DM each member; kodex_check: scan + build report)
+# and delivers the result via `interaction.followup`. Non-admin is refused up
+# front with an ephemeral "❌ Keine Berechtigung." and does NO work / NO defer.
+# The commands are addressed via the tree, e.g.
+#     bot.tree.get_command("kodex").callback(interaction)
 
-async def test_register_kodex_commands_registers_both_commands():
+async def test_register_kodex_commands_registers_both_as_slash_only():
     from n3x_bot import kodex
     repo = await _flatfile_repo()
     settings = _settings(admin_role_id=42, kodex_check_channel_id=555)
@@ -254,8 +277,10 @@ async def test_register_kodex_commands_registers_both_commands():
 
     kodex.register_kodex_commands(bot, repo, settings)
 
-    assert bot.get_command("kodex") is not None
-    assert bot.get_command("kodex_check") is not None
+    assert bot.get_command("kodex") is None          # dropped from prefix registry
+    assert bot.get_command("kodex_check") is None
+    assert bot.tree.get_command("kodex") is not None  # present on the app tree
+    assert bot.tree.get_command("kodex_check") is not None
 
     await repo.close()
 
@@ -269,13 +294,13 @@ async def test_register_kodex_commands_is_idempotent():
     kodex.register_kodex_commands(bot, repo, settings)
     kodex.register_kodex_commands(bot, repo, settings)  # must not raise/duplicate
 
-    assert bot.get_command("kodex") is not None
-    assert bot.get_command("kodex_check") is not None
+    assert bot.tree.get_command("kodex") is not None
+    assert bot.tree.get_command("kodex_check") is not None
 
     await repo.close()
 
 
-async def test_kodex_command_refuses_non_admin_and_sends_no_dms():
+async def test_kodex_slash_refuses_non_admin_and_sends_no_dms():
     from n3x_bot import kodex
     repo = await _flatfile_repo()
     settings = _settings(admin_role_id=42)
@@ -283,21 +308,24 @@ async def test_kodex_command_refuses_non_admin_and_sends_no_dms():
     kodex.register_kodex_commands(bot, repo, settings)
 
     m1, m2 = _dm_member(member_id=1), _dm_member(member_id=2)
-    ctx = MagicMock()
-    ctx.author = _member(member_id=9, role_ids=(999,))  # not admin
-    ctx.guild = SimpleNamespace(members=[m1, m2])
-    ctx.send = AsyncMock()
+    interaction = _fake_interaction(
+        user=_member(member_id=9, role_ids=(999,)),  # not admin
+        guild=SimpleNamespace(members=[m1, m2]))
 
-    await bot.get_command("kodex").callback(ctx)
+    await bot.tree.get_command("kodex").callback(interaction)
 
     m1.send.assert_not_awaited()
     m2.send.assert_not_awaited()
-    ctx.send.assert_awaited()  # a refusal was sent
+    # refused ephemerally, and NO slow work was even deferred
+    interaction.response.send_message.assert_awaited_once()
+    assert "Keine Berechtigung" in interaction.response.send_message.await_args.args[0]
+    assert interaction.response.send_message.await_args.kwargs.get("ephemeral") is True
+    interaction.response.defer.assert_not_awaited()
 
     await repo.close()
 
 
-async def test_kodex_command_admin_dms_each_non_bot_member():
+async def test_kodex_slash_admin_defers_then_dms_each_non_bot_member_then_summarizes():
     from n3x_bot import kodex
     repo = await _flatfile_repo()
     settings = _settings(admin_role_id=42)
@@ -306,23 +334,42 @@ async def test_kodex_command_admin_dms_each_non_bot_member():
 
     m1, m2 = _dm_member(member_id=1, msg_id=101), _dm_member(member_id=2, msg_id=102)
     bot_m = _dm_member(member_id=3, is_bot=True)
-    ctx = MagicMock()
-    ctx.author = _member(member_id=9, role_ids=(42,))  # admin
-    ctx.guild = SimpleNamespace(members=[m1, m2, bot_m])
-    ctx.send = AsyncMock()
 
-    await bot.get_command("kodex").callback(ctx)
+    order: list[str] = []
+    interaction = _fake_interaction(
+        user=_member(member_id=9, role_ids=(42,)),  # admin
+        guild=SimpleNamespace(members=[m1, m2, bot_m]))
+    interaction.response.defer = AsyncMock(
+        side_effect=lambda *a, **k: order.append("defer"))
+    interaction.followup.send = AsyncMock(
+        side_effect=lambda *a, **k: order.append("followup"))
 
+    m1.send = AsyncMock(side_effect=lambda *a, **k: order.append("dm") or m1._sent_msg)
+    m2.send = AsyncMock(side_effect=lambda *a, **k: order.append("dm") or m2._sent_msg)
+
+    await bot.tree.get_command("kodex").callback(interaction)
+
+    # deferred ephemerally up front, BEFORE the slow DM fan-out
+    interaction.response.defer.assert_awaited_once()
+    assert interaction.response.defer.await_args.kwargs.get("ephemeral") is True
     m1.send.assert_awaited_once_with(kodex.KODEX_TEXT)
     m2.send.assert_awaited_once_with(kodex.KODEX_TEXT)
-    bot_m.send.assert_not_awaited()
+    bot_m.send.assert_not_awaited()  # bots are skipped by send_kodex_dm
+    # a German summary followup resolves the deferred ack, mentioning the count
+    interaction.followup.send.assert_awaited()
+    summary = " ".join(str(c.args[0]) for c in interaction.followup.send.await_args_list
+                       if c.args)
+    assert "2" in summary
+    # defer FIRST, DMs in the middle, followup LAST
+    assert order[0] == "defer" and order[-1] == "followup"
+    assert order.count("dm") == 2
 
     await repo.close()
 
 
-async def test_kodex_command_continues_bulk_loop_when_one_members_reaction_fails():
+async def test_kodex_slash_continues_bulk_loop_when_one_members_reaction_fails():
     # A rate-limit / HTTPException on one member's add_reaction (or a storage
-    # error on save) must NOT abort the whole !kodex loop — remaining members
+    # error on save) must NOT abort the whole /kodex loop — remaining members
     # still get DM'd. And because the mapping is saved before the reaction is
     # seeded, the failing member's message is still recorded so a manual ✅ works.
     from n3x_bot import kodex
@@ -334,12 +381,11 @@ async def test_kodex_command_continues_bulk_loop_when_one_members_reaction_fails
     m1 = _dm_member(member_id=1, msg_id=101)
     m1._sent_msg.add_reaction.side_effect = RuntimeError("rate limited")
     m2 = _dm_member(member_id=2, msg_id=102)
-    ctx = MagicMock()
-    ctx.author = _member(member_id=9, role_ids=(42,))  # admin
-    ctx.guild = SimpleNamespace(members=[m1, m2])
-    ctx.send = AsyncMock()
+    interaction = _fake_interaction(
+        user=_member(member_id=9, role_ids=(42,)),  # admin
+        guild=SimpleNamespace(members=[m1, m2]))
 
-    await bot.get_command("kodex").callback(ctx)  # must not raise
+    await bot.tree.get_command("kodex").callback(interaction)  # must not raise
 
     # m1's reaction failed but the loop reached m2...
     m2.send.assert_awaited_once_with(kodex.KODEX_TEXT)
@@ -351,29 +397,29 @@ async def test_kodex_command_continues_bulk_loop_when_one_members_reaction_fails
     await repo.close()
 
 
-async def test_kodex_check_command_refuses_non_admin_and_posts_nothing():
+async def test_kodex_check_slash_refuses_non_admin_and_reports_nothing():
     from n3x_bot import kodex
     repo = await _flatfile_repo()
     settings = _settings(admin_role_id=42, kodex_check_channel_id=555)
     bot = build_bot(settings, repo)
     kodex.register_kodex_commands(bot, repo, settings)
 
-    channel = MagicMock()
-    channel.send = AsyncMock()
-    bot.get_channel = MagicMock(return_value=channel)
-    ctx = MagicMock()
-    ctx.author = _member(member_id=9, role_ids=(999,))  # not admin
-    ctx.guild = SimpleNamespace(members=[_report_member(1, "Alice")])
-    ctx.send = AsyncMock()
+    interaction = _fake_interaction(
+        user=_member(member_id=9, role_ids=(999,)),  # not admin
+        guild=SimpleNamespace(members=[_report_member(1, "Alice")]))
 
-    await bot.get_command("kodex_check").callback(ctx)
+    await bot.tree.get_command("kodex_check").callback(interaction)
 
-    channel.send.assert_not_awaited()
+    interaction.followup.send.assert_not_awaited()  # no report chunks delivered
+    interaction.response.defer.assert_not_awaited()
+    interaction.response.send_message.assert_awaited_once()
+    assert "Keine Berechtigung" in interaction.response.send_message.await_args.args[0]
+    assert interaction.response.send_message.await_args.kwargs.get("ephemeral") is True
 
     await repo.close()
 
 
-async def test_kodex_check_command_admin_posts_report_to_check_channel():
+async def test_kodex_check_slash_admin_defers_then_followups_report():
     from n3x_bot import kodex
     repo = await _flatfile_repo()
     settings = _settings(admin_role_id=42, kodex_check_channel_id=555)
@@ -382,19 +428,21 @@ async def test_kodex_check_command_admin_posts_report_to_check_channel():
 
     await repo.confirm_kodex(1)  # Alice confirmed, Bob not
 
-    channel = MagicMock()
-    channel.send = AsyncMock()
-    bot.get_channel = MagicMock(return_value=channel)
-    ctx = MagicMock()
-    ctx.author = _member(member_id=9, role_ids=(42,))  # admin
-    ctx.guild = SimpleNamespace(
-        members=[_report_member(1, "Alice"), _report_member(2, "Bob")])
-    ctx.send = AsyncMock()
+    interaction = _fake_interaction(
+        user=_member(member_id=9, role_ids=(42,)),  # admin
+        guild=SimpleNamespace(
+            members=[_report_member(1, "Alice"), _report_member(2, "Bob")]))
 
-    await bot.get_command("kodex_check").callback(ctx)
+    await bot.tree.get_command("kodex_check").callback(interaction)
 
-    bot.get_channel.assert_called_with(555)
-    channel.send.assert_awaited()
+    # deferred ephemerally up front, then the report is delivered via followup
+    interaction.response.defer.assert_awaited_once()
+    assert interaction.response.defer.await_args.kwargs.get("ephemeral") is True
+    interaction.followup.send.assert_awaited()
+    report = "\n".join(str(c.args[0]) for c in interaction.followup.send.await_args_list
+                       if c.args)
+    assert "<@1>" in report and "✅" in report  # Alice confirmed
+    assert "<@2>" in report and "❌" in report  # Bob not confirmed
 
     await repo.close()
 
@@ -440,12 +488,14 @@ async def test_on_raw_reaction_add_confirms_kodex_on_tracked_message():
 
 # ── wiring: build_bot registers the kodex commands ──────────────────────────
 
-async def test_build_bot_registers_kodex_commands():
+async def test_build_bot_registers_kodex_slash_commands():
     repo = await _flatfile_repo()
     settings = _settings(admin_role_id=42)
     bot = build_bot(settings, repo)
 
-    assert bot.get_command("kodex") is not None
-    assert bot.get_command("kodex_check") is not None
+    assert bot.get_command("kodex") is None          # slash-only, not prefix
+    assert bot.get_command("kodex_check") is None
+    assert bot.tree.get_command("kodex") is not None
+    assert bot.tree.get_command("kodex_check") is not None
 
     await repo.close()

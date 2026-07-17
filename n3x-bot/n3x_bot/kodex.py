@@ -1,6 +1,4 @@
-from discord.ext import commands
-
-from n3x_bot.admin import is_admin
+from n3x_bot.admin import app_is_admin
 from n3x_bot.config import Settings
 from n3x_bot.storage.base import StatsRepository
 
@@ -65,28 +63,35 @@ def build_kodex_report(confirmed: set[int], members: list) -> list[str]:
 
 
 def register_kodex_commands(bot, repo: StatsRepository, settings: Settings) -> None:
-    if bot.get_command("kodex") is not None:
-        return
+    if bot.tree.get_command("kodex") is None:
+        @bot.tree.command(name="kodex",
+                          description="Sendet allen Mitgliedern den Kodex (Admin).")
+        async def kodex_cmd(interaction):
+            if not app_is_admin(interaction, settings):
+                await interaction.response.send_message(
+                    "❌ Keine Berechtigung.", ephemeral=True)
+                return
+            await interaction.response.defer(ephemeral=True)
+            count = 0
+            for member in interaction.guild.members:
+                if getattr(member, "bot", False):
+                    continue
+                await send_kodex_dm(bot, repo, member)
+                count += 1
+            await interaction.followup.send(
+                f"✅ Kodex an {count} Mitglieder verschickt.", ephemeral=True)
 
-    async def _kodex_cmd(ctx):
-        if not is_admin(ctx.author, settings):
-            await ctx.send("❌ Keine Berechtigung.", delete_after=5)
-            return
-        for member in ctx.guild.members:
-            await send_kodex_dm(bot, repo, member)
-        await ctx.send("✅ Kodex verschickt.", delete_after=5)
-
-    async def _kodex_check_cmd(ctx):
-        if not is_admin(ctx.author, settings):
-            await ctx.send("❌ Keine Berechtigung.", delete_after=5)
-            return
-        confirmed = await repo.list_kodex_confirmed()
-        members = [m for m in ctx.guild.members if not getattr(m, "bot", False)]
-        chunks = build_kodex_report(confirmed, members)
-        channel = bot.get_channel(bot.runtime_config.kodex_check_channel_id)
-        if channel is not None:
-            for chunk in chunks:
-                await channel.send(chunk)
-
-    bot.add_command(commands.Command(_kodex_cmd, name="kodex"))
-    bot.add_command(commands.Command(_kodex_check_cmd, name="kodex_check"))
+    if bot.tree.get_command("kodex_check") is None:
+        @bot.tree.command(name="kodex_check",
+                          description="Prüft, wer den Kodex bestätigt hat (Admin).")
+        async def kodex_check_cmd(interaction):
+            if not app_is_admin(interaction, settings):
+                await interaction.response.send_message(
+                    "❌ Keine Berechtigung.", ephemeral=True)
+                return
+            await interaction.response.defer(ephemeral=True)
+            confirmed = await repo.list_kodex_confirmed()
+            members = [m for m in interaction.guild.members
+                       if not getattr(m, "bot", False)]
+            for chunk in build_kodex_report(confirmed, members):
+                await interaction.followup.send(chunk, ephemeral=True)

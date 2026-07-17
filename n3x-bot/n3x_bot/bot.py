@@ -365,10 +365,6 @@ COMMAND_LIST_KEY = "command_list"
 # the description column of the embed; an unmapped command renders name-only.
 _COMMAND_DESCRIPTIONS: dict[str, str] = {
     "rank": "Zeigt dein persönliches Command-Ranking.",
-    "kodex": "Sendet dir den Kodex zur Bestätigung.",
-    "kodex_check": "Prüft, wer den Kodex bestätigt hat.",
-    "base": "Startet einen Basis-Timer.",
-    "basestop": "Stoppt einen laufenden Basis-Timer.",
     "sync_achievements": "Synchronisiert alle Achievements (Admin).",
 }
 
