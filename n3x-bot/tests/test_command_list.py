@@ -34,7 +34,8 @@ PINNED ASSUMPTIONS (flagged in the handoff report):
     ``"rank"``, ``"gate verlauf"``), and whatever German blurb it holds for a
     key flows verbatim into the embed text. The tests assert the map DRIVES the
     embed (map value appears in the text) rather than hardcoding German prose.
-  * The list is ``!``-prefixed and sorted (deterministic).
+  * Phase 7: the list is TREE-driven (enumerates ``bot.tree``), ``/``-prefixed
+    and sorted (deterministic). Group subcommands render as ``/group sub``.
   * Per-stat dynamic commands (tit/smart/…) ARE included once registered.
   * The built-in ``help`` command MAY be included or excluded — not asserted.
 
@@ -51,16 +52,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-# Phase 6 moved the per-stat counters and `rank` off the prefix registry onto
-# `bot.tree`. `build_command_list` still enumerates the prefix `bot.commands`
-# (its registry-source rework is Phase 7), so the assertions that expect `!rank`
-# or per-stat lines in the prefix-derived embed no longer hold. Mark them xfail
-# (non-strict) with a Phase-7 reason rather than deleting the coverage.
-_PHASE7 = pytest.mark.xfail(
-    reason="Phase 7: build_command_list reads prefix bot.commands; rank + "
-           "per-stat counters moved to the app tree in Phase 6.",
-    strict=False,
-)
+# Phase 7 reworks build_command_list to enumerate the app tree (`bot.tree`)
+# instead of the prefix `bot.commands`, rendering `/name` (and `/group sub`).
+# The formerly-xfail'd assertions are now live RED specs for that rework.
 
 # Pinned in the report. Hard-coded here so the assertions double as the contract.
 COMMAND_LIST_KEY = "command_list"
@@ -219,68 +213,61 @@ async def test_command_list_title_is_german():
 
 # ── build_command_list: names registered top-level commands, !-prefixed ──────
 
-@_PHASE7
-async def test_command_list_contains_prefixed_top_level_commands():
+async def test_command_list_contains_slash_top_level_commands():
+    # Phase 7: build_command_list enumerates `bot.tree` and renders every
+    # top-level app command as `/name` — never the retired `!` prefix.
     from n3x_bot.bot import build_command_list
     repo = await _flatfile_repo()
     bot = await _populated_bot(_settings(), repo)
     text = _embed_text(build_command_list(bot))
-    # overview/stat/gate/config/content/admin and (Phase 5) kodex/base/basestop/
-    # sync_welcome migrated to slash-only app commands, so they no longer appear
-    # in the prefix-derived list. `rank` and `sync_achievements` remain prefix.
-    for name in ("rank", "sync_achievements"):
-        assert f"!{name}" in text, name
+    for name in ("rank", "erfolge", "overview", "activity"):
+        assert f"/{name}" in text, name
+    assert "!rank" not in text  # the prefix surface is gone
     await _cleanup(repo)
 
 
-async def test_command_list_has_no_prefix_groups_after_admin_migration():
-    # Phase 4 removed the last prefix command GROUP (`!admin`): `gate`/`config`/
-    # `content`/`admin` are all slash app-command groups now. So the prefix-derived
-    # command list contains no group subcommands — in particular no `!admin msg`
-    # line — and every remaining prefix command is flat (not a commands.Group).
-    from discord.ext import commands
+async def test_command_list_includes_slash_group_subcommands():
+    # Phase 7: the tree-driven list walks each app-command Group into its
+    # subcommands, rendering them as `/group sub` (nested groups included, so
+    # the `admin > stat > add` chain renders `/admin stat add`).
     from n3x_bot.bot import build_command_list
     repo = await _flatfile_repo()
     bot = await _populated_bot(_settings(), repo)
 
-    assert bot.get_command("admin") is None  # prefix admin group gone
-    assert not any(isinstance(c, commands.Group) for c in bot.commands)
-
     text = _embed_text(build_command_list(bot))
-    assert "!admin msg" not in text  # no group subcommand lines remain
+    for sub in ("/gate verlauf", "/admin stat add", "/config channel",
+                "/content set"):
+        assert sub in text, sub
 
     await _cleanup(repo)
 
 
-@_PHASE7
 async def test_command_list_includes_dynamic_per_stat_commands():
-    # Per-stat commands are registered dynamically by register_stat_commands;
-    # a registry-driven list must surface them too.
+    # Per-stat counters are app commands on the tree (registered dynamically by
+    # register_stat_commands); the tree-driven list must surface them as `/name`.
     from n3x_bot.bot import build_command_list
     repo = await _flatfile_repo()
     bot = await _populated_bot(_settings(), repo)
-    stat_names = {c.name for c in bot.commands} & {"tit", "smart", "afk", "cry"}
+    stat_names = {c.name for c in bot.tree.get_commands()} & {"tit", "smart", "afk", "cry"}
     assert stat_names, "precondition: at least one per-stat command registered"
     text = _embed_text(build_command_list(bot))
     for name in stat_names:
-        assert f"!{name}" in text, name
+        assert f"/{name}" in text, name
     await _cleanup(repo)
 
 
 # ── build_command_list: PROVABLY registry-derived (not a hardcoded list) ─────
 
-async def test_command_list_is_derived_from_the_live_registry():
-    # Enumerate the live registry and assert every top-level command surfaces.
-    # (`help`, discord.py's built-in, is exempt — its inclusion is the coder's
-    # call.) This fails if the list is hardcoded and drifts from the registry.
+async def test_command_list_is_derived_from_the_live_tree():
+    # Enumerate the live app-command tree and assert every top-level command
+    # surfaces as `/name` (groups surface by their group name). This fails if the
+    # list is hardcoded and drifts from the tree.
     from n3x_bot.bot import build_command_list
     repo = await _flatfile_repo()
     bot = await _populated_bot(_settings(), repo)
     text = _embed_text(build_command_list(bot))
-    for command in bot.commands:
-        if command.name == "help":
-            continue
-        assert f"!{command.name}" in text, command.name
+    for command in bot.tree.get_commands():
+        assert f"/{command.name}" in text, command.name
     await _cleanup(repo)
 
 
@@ -292,7 +279,6 @@ async def test_curated_description_map_has_rank_blurb():
     assert _COMMAND_DESCRIPTIONS.get("rank")  # non-empty German blurb
 
 
-@_PHASE7
 async def test_curated_rank_description_appears_in_embed():
     # Whatever blurb the map holds for `rank`, it must flow into the embed —
     # proving the description column is map-driven, not invented per-render.
@@ -314,16 +300,14 @@ async def test_command_list_is_deterministic():
     await _cleanup(repo)
 
 
-@_PHASE7
 async def test_command_list_top_level_commands_are_sorted():
-    # `rank` sorts before `sync_achievements`; a sorted render places it earlier.
-    # (admin/activity/stat/gate/config/content and Phase-5 kodex/base migrated to
-    # slash-only app commands and are no longer in the prefix-derived list.)
+    # `erfolge` sorts before `rank`; a sorted tree render places it earlier.
     from n3x_bot.bot import build_command_list
     repo = await _flatfile_repo()
     bot = await _populated_bot(_settings(), repo)
     text = _embed_text(build_command_list(bot))
-    assert text.index("!rank") < text.index("!sync_achievements")
+    assert "/erfolge" in text and "/rank" in text
+    assert text.index("/erfolge") < text.index("/rank")
     await _cleanup(repo)
 
 

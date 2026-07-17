@@ -56,17 +56,6 @@ log = logging.getLogger("N3X-Bot")
 HOME_KEY = "home"
 GATE_STAT_CHUNK_LIMIT = 1900
 
-# Commands whose only required arg is NOT a member/user. A missing-argument
-# error on these gets a generic hint; everything else (the targeted stat
-# commands, which take a `member`) is told to specify a user. Covers the gate
-# commands, the admin CRUD subcommand tokens, and the `!config` subcommands
-# (which take a purpose/value/key, never a user).
-_GENERIC_ARG_COMMANDS = frozenset(
-    {"stat", "del", "admin", "msg", "add", "edit", "archive", "rm", "list",
-     "channel", "role", "message", "gate-rewards", "allowed-maps",
-     "voice-roles", "reminder-time", "gate-delete-delay", "reset", "gate",
-     "verlauf"})
-
 
 async def build_output(repo: StatsRepository, stat_key: str,
                        discord_id: int, display_name: str) -> str:
@@ -152,16 +141,20 @@ def register_overview_and_sync_commands(bot, repo: StatsRepository,
             await interaction.followup.send("Übersicht aktualisiert.",
                                              ephemeral=True)
 
-    if bot.get_command("sync_achievements") is None:
-        async def _sync_cmd(ctx):
-            if not is_admin(ctx.author, settings):
-                await ctx.send("❌ Keine Berechtigung.", delete_after=5)
+    if bot.tree.get_command("sync_achievements") is None:
+        @bot.tree.command(name="sync_achievements",
+                          description="Synchronisiert alle Achievements (Admin).")
+        async def sync_achievements(interaction):
+            if not is_admin(interaction.user, settings):
+                await interaction.response.send_message(
+                    "❌ Keine Berechtigung.", ephemeral=True)
                 return
+            await interaction.response.defer(ephemeral=True)
             summary = await sync_all_achievements(repo)
-            await ctx.send(
+            await interaction.followup.send(
                 f"✅ Sync: {summary['users_processed']} Nutzer, "
-                f"{summary['achievements_added']} neue Achievements.")
-        bot.add_command(commands.Command(_sync_cmd, name="sync_achievements"))
+                f"{summary['achievements_added']} neue Achievements.",
+                ephemeral=True)
 
 
 async def _send_or_update(bot, repo, settings, stat_key: str, text: str):
@@ -374,30 +367,46 @@ COMMAND_LIST_KEY = "command_list"
 # the description column of the embed; an unmapped command renders name-only.
 _COMMAND_DESCRIPTIONS: dict[str, str] = {
     "rank": "Zeigt dein persönliches Command-Ranking.",
+    "erfolge": "Zeigt deine freigeschalteten Achievements.",
+    "activity": "Zeigt die Aktivitätsstatistik.",
+    "overview": "Postet die Achievement-Übersicht.",
     "sync_achievements": "Synchronisiert alle Achievements (Admin).",
+    "stat": "Zeigt die Gate-Statistik.",
+    "del": "Löscht einen Gate-Eintrag (Rolle erforderlich).",
+    "gate verlauf": "Zeigt den Gate-Kostenverlauf als Diagramm.",
+    "base": "Startet einen Base-Timer.",
+    "basestop": "Stoppt einen Base-Timer.",
+    "kodex": "Sendet den Kodex an alle Mitglieder (Admin).",
+    "kodex_check": "Prüft die Kodex-Bestätigungen (Admin).",
+    "sync_welcome": "Sendet Willkommenskarten nach (Admin).",
+    "config": "Laufzeit-Konfiguration (Admin).",
+    "content": "Verwaltet Textbausteine (Admin).",
+    "admin": "Admin-Verwaltung (Stats & Nachrichten).",
 }
 
 
 def build_command_list(bot) -> discord.Embed:
     """Build the deterministic German command-list embed from the live registry.
 
-    Registry-driven: enumerates `bot.commands` (sorted, `help` excluded), walking
-    every `commands.Group` into its subcommands, and renders each as a
-    `!`-prefixed line with the curated blurb from `_COMMAND_DESCRIPTIONS` (keyed
-    by `qualified_name`; unmapped → name only). Lines are chunked to respect
-    Discord's embed field/description limits.
+    Tree-driven: enumerates `bot.tree.get_commands()` (sorted), recursing into
+    every `app_commands.Group` and rendering each command as a `/`-prefixed line
+    keyed by its `qualified_name` (so `admin > stat > add` renders
+    `/admin stat add`). The curated blurb from `_COMMAND_DESCRIPTIONS` (keyed by
+    `qualified_name`; unmapped → name only) drives the description column. Lines
+    are chunked to respect Discord's embed field/description limits.
     """
     lines: list[str] = []
-    for cmd in sorted(bot.commands, key=lambda c: c.name):
-        if cmd.name == "help":
-            continue
+
+    def _emit(cmd):
         desc = _COMMAND_DESCRIPTIONS.get(cmd.qualified_name, "")
-        lines.append(f"!{cmd.name} — {desc}" if desc else f"!{cmd.name}")
-        if isinstance(cmd, commands.Group):
+        lines.append(f"/{cmd.qualified_name} — {desc}" if desc
+                     else f"/{cmd.qualified_name}")
+        if isinstance(cmd, app_commands.Group):
             for sub in sorted(cmd.commands, key=lambda c: c.name):
-                sdesc = _COMMAND_DESCRIPTIONS.get(sub.qualified_name, "")
-                lines.append(f"!{sub.qualified_name} — {sdesc}"
-                             if sdesc else f"!{sub.qualified_name}")
+                _emit(sub)
+
+    for cmd in sorted(bot.tree.get_commands(), key=lambda c: c.name):
+        _emit(cmd)
 
     chunks = _chunk_gate_lines(lines, limit=1024)
     embed = discord.Embed(title="📋 Befehlsübersicht", description=chunks[0],
@@ -997,27 +1006,6 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
             await sync_commands_to_guilds(bot)
             bot._stale_guild_commands_cleared = True
 
-    @bot.event
-    async def on_command_error(ctx, error):
-        if isinstance(error, commands.CommandOnCooldown):
-            await ctx.send(f"Warte bitte {error.retry_after:.1f} Sekunden.",
-                           delete_after=5)
-        elif isinstance(error, commands.MissingRequiredArgument):
-            if ctx.command and ctx.command.name in _GENERIC_ARG_COMMANDS:
-                await ctx.send("❌ Fehlendes Argument.", delete_after=5)
-            else:
-                await ctx.send("❌ Bitte gib einen Nutzer an.", delete_after=5)
-        elif isinstance(error, commands.MemberNotFound):
-            await ctx.send("❌ Nutzer nicht gefunden.", delete_after=5)
-        elif isinstance(error, commands.BadArgument):
-            await ctx.send("❌ Ungültiges Argument.", delete_after=5)
-        elif (isinstance(error, commands.CommandInvokeError)
-              and isinstance(error.original, (ValueError, KeyError))):
-            # Admin CRUD helpers raise ValueError/KeyError (duplicate key,
-            # message-not-found, unknown key, ...). Surface the reason to the
-            # admin instead of failing silently.
-            await ctx.send(f"❌ {error.original}", delete_after=5)
-
     @bot.tree.error
     async def on_app_command_error(interaction, error):
         original = getattr(error, "original", error)
@@ -1053,12 +1041,6 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
                     pass
         if bot.runtime_config.gate_input_channel_id and message.channel.id == bot.runtime_config.gate_input_channel_id:
             await handle_gate_input_message(bot, repo, settings, message)
-        if message.content.startswith(settings.command_prefix):
-            try:
-                await message.delete(delay=5.0)
-            except Exception:
-                pass
-        await bot.process_commands(message)
 
     @bot.event
     async def on_voice_state_update(member, before, after):
