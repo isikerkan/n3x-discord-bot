@@ -390,6 +390,7 @@ _COMMAND_DESCRIPTIONS: dict[str, str] = {
     "config": "Laufzeit-Konfiguration (Admin).",
     "content": "Verwaltet Textbausteine (Admin).",
     "admin": "Admin-Verwaltung (Stats & Nachrichten).",
+    "achievement": "Achievement-Definitionen verwalten (Admin).",
 }
 
 
