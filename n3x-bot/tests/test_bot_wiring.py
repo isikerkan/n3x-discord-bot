@@ -453,23 +453,26 @@ async def test_non_targeted_stat_slash_calls_build_output(monkeypatch):
     await repo.close()
 
 
-# ── on_message / on_command_error event handlers ─────────────────────────
+# ── on_message event handler / prefix-machinery teardown (Phase 7) ────────
 
-async def test_on_message_deletes_command_prefixed_messages_then_processes():
+async def test_on_message_does_not_delete_prefixed_messages_nor_process():
+    # Phase 7 teardown: no prefix commands remain, so on_message must NOT delete
+    # a `!`-prefixed message and must NOT call process_commands.
     repo = await _flatfile_repo()
     settings = _settings()
     bot = build_bot(settings, repo)
     bot.process_commands = AsyncMock()
 
     message = MagicMock()
-    message.author = "someone-else"
+    message.author = SimpleNamespace(id=5, bot=False)
     message.content = "!tit"
+    message.channel = SimpleNamespace(id=123)
     message.delete = AsyncMock()
 
     await bot.on_message(message)
 
-    message.delete.assert_awaited_once_with(delay=5.0)
-    bot.process_commands.assert_awaited_once_with(message)
+    message.delete.assert_not_called()
+    bot.process_commands.assert_not_called()
 
     await repo.close()
 
@@ -496,197 +499,47 @@ async def test_on_message_ignores_messages_from_self():
     await repo.close()
 
 
-async def test_on_message_passes_through_non_command_text_without_deleting():
+async def test_on_message_records_activity_for_normal_message_without_processing():
+    # A normal human message still records activity (kept), but is neither
+    # deleted nor routed through process_commands (removed in Phase 7).
     repo = await _flatfile_repo()
     settings = _settings()
     bot = build_bot(settings, repo)
     bot.process_commands = AsyncMock()
 
     message = MagicMock()
-    message.author = "someone-else"
+    message.author = SimpleNamespace(id=4242, bot=False)
     message.content = "just chatting"
+    message.channel = SimpleNamespace(id=123)
     message.delete = AsyncMock()
 
     await bot.on_message(message)
 
+    assert await repo.get_activity(4242, "messages") >= 1  # activity recorded
     message.delete.assert_not_called()
-    bot.process_commands.assert_awaited_once_with(message)
+    bot.process_commands.assert_not_called()
 
     await repo.close()
 
 
-async def test_on_message_swallows_delete_failure_and_still_processes():
-    repo = await _flatfile_repo()
-    settings = _settings()
-    bot = build_bot(settings, repo)
-    bot.process_commands = AsyncMock()
-
-    message = MagicMock()
-    message.author = "someone-else"
-    message.content = "!tit"
-    message.delete = AsyncMock(side_effect=RuntimeError("no perms"))
-
-    await bot.on_message(message)  # must not raise
-
-    bot.process_commands.assert_awaited_once_with(message)
-
-    await repo.close()
-
-
-async def test_on_command_error_notifies_on_cooldown():
+async def test_on_command_error_handler_is_removed():
+    # Phase 7 teardown: no prefix commands remain, so the custom prefix error
+    # handler is gone. `@bot.event` registers a handler as an INSTANCE attribute
+    # shadowing the class default; its absence from the instance dict proves the
+    # override was removed (discord.py's no-op class default remains).
     repo = await _flatfile_repo()
     settings = _settings()
     bot = build_bot(settings, repo)
 
-    ctx = MagicMock()
-    ctx.send = AsyncMock()
-    cooldown = commands.Cooldown(1, 20.0)
-    error = commands.CommandOnCooldown(cooldown, 4.2, commands.BucketType.user)
-
-    await bot.on_command_error(ctx, error)
-
-    ctx.send.assert_awaited_once()
-    args, kwargs = ctx.send.await_args
-    assert "4.2" in args[0]
-    assert kwargs.get("delete_after") == 5
+    assert "on_command_error" not in bot.__dict__
 
     await repo.close()
 
 
-async def test_on_command_error_missing_arg_is_generic_for_gate_commands():
-    repo = await _flatfile_repo()
-    settings = _settings()
-    bot = build_bot(settings, repo)
-
-    ctx = MagicMock()
-    ctx.send = AsyncMock()
-    ctx.command = SimpleNamespace(name="stat")
-    error = commands.MissingRequiredArgument.__new__(commands.MissingRequiredArgument)
-
-    await bot.on_command_error(ctx, error)
-
-    ctx.send.assert_awaited_once()
-    assert ctx.send.await_args.args[0] == "❌ Fehlendes Argument."
-
-    await repo.close()
-
-
-async def test_on_command_error_missing_arg_asks_for_user_on_targeted_commands():
-    repo = await _flatfile_repo()
-    settings = _settings()
-    bot = build_bot(settings, repo)
-
-    ctx = MagicMock()
-    ctx.send = AsyncMock()
-    ctx.command = SimpleNamespace(name="smart")
-    error = commands.MissingRequiredArgument.__new__(commands.MissingRequiredArgument)
-
-    await bot.on_command_error(ctx, error)
-
-    ctx.send.assert_awaited_once()
-    assert ctx.send.await_args.args[0] == "❌ Bitte gib einen Nutzer an."
-
-    await repo.close()
-
-
-async def test_on_command_error_reports_bad_argument():
-    repo = await _flatfile_repo()
-    settings = _settings()
-    bot = build_bot(settings, repo)
-
-    ctx = MagicMock()
-    ctx.send = AsyncMock()
-    ctx.command = SimpleNamespace(name="del")
-    error = commands.BadArgument("not an int")
-
-    await bot.on_command_error(ctx, error)
-
-    ctx.send.assert_awaited_once()
-    assert ctx.send.await_args.args[0] == "❌ Ungültiges Argument."
-
-    await repo.close()
-
-
-async def test_on_command_error_ignores_other_errors():
-    repo = await _flatfile_repo()
-    settings = _settings()
-    bot = build_bot(settings, repo)
-
-    ctx = MagicMock()
-    ctx.send = AsyncMock()
-
-    await bot.on_command_error(ctx, RuntimeError("boom"))
-
-    ctx.send.assert_not_called()
-
-    await repo.close()
-
-
-async def test_on_command_error_missing_arg_is_generic_for_admin_commands():
-    repo = await _flatfile_repo()
-    settings = _settings()
-    bot = build_bot(settings, repo)
-
-    ctx = MagicMock()
-    ctx.send = AsyncMock()
-    ctx.command = SimpleNamespace(name="add")  # e.g. `!admin stat add`
-    error = commands.MissingRequiredArgument.__new__(commands.MissingRequiredArgument)
-
-    await bot.on_command_error(ctx, error)
-
-    ctx.send.assert_awaited_once()
-    assert ctx.send.await_args.args[0] == "❌ Fehlendes Argument."
-
-    await repo.close()
-
-
-async def test_on_command_error_missing_arg_is_generic_for_gate_verlauf():
-    # `!gate verlauf` with no gate takes a gate token, never a user — a missing
-    # arg must get the generic hint, not the "specify a user" message.
-    repo = await _flatfile_repo()
-    settings = _settings()
-    bot = build_bot(settings, repo)
-
-    ctx = MagicMock()
-    ctx.send = AsyncMock()
-    ctx.command = SimpleNamespace(name="verlauf")
-    error = commands.MissingRequiredArgument.__new__(
-        commands.MissingRequiredArgument)
-
-    await bot.on_command_error(ctx, error)
-
-    ctx.send.assert_awaited_once()
-    assert ctx.send.await_args.args[0] == "❌ Fehlendes Argument."
-    assert ctx.send.await_args.args[0] != "❌ Bitte gib einen Nutzer an."
-
-    await repo.close()
-
-
-# NOTE: the former `test_on_command_error_missing_arg_is_generic_for_config_
-# subcommands` was removed in Phase 3: `config` is now a slash-only
-# app_commands.Group and has no prefix subcommands, so a prefix MissingRequired
-# Argument can never originate from it. Slash param handling is Discord-side.
-
-
-async def test_on_command_error_surfaces_admin_helper_valueerror():
-    # A ValueError raised by an admin helper is wrapped by discord.py in a
-    # CommandInvokeError; the admin must see the reason, not silence.
-    repo = await _flatfile_repo()
-    settings = _settings()
-    bot = build_bot(settings, repo)
-
-    ctx = MagicMock()
-    ctx.send = AsyncMock()
-    ctx.command = SimpleNamespace(name="add")
-    error = commands.CommandInvokeError(ValueError("stat 'tit' already exists"))
-
-    await bot.on_command_error(ctx, error)
-
-    ctx.send.assert_awaited_once()
-    assert "already exists" in ctx.send.await_args.args[0]
-    assert ctx.send.await_args.kwargs.get("delete_after") == 5
-
-    await repo.close()
+def test_generic_arg_commands_symbol_is_removed():
+    # `_GENERIC_ARG_COMMANDS` fed the prefix missing-argument branch; with the
+    # prefix error handler gone it is dead and must not be referenced.
+    assert not hasattr(botmod, "_GENERIC_ARG_COMMANDS")
 
 
 async def test_tree_on_error_surfaces_helper_error_to_interaction():
@@ -1216,7 +1069,8 @@ async def test_on_message_routes_gate_input_channel_to_gate_handler():
 
     message.add_reaction.assert_awaited_once_with("✅")
     assert await repo.list_gate_costs("a") == [100]
-    bot.process_commands.assert_awaited_once_with(message)
+    # Phase 7: gate-input routing is kept, but there is no more prefix processing.
+    bot.process_commands.assert_not_called()
 
     await repo.close()
 

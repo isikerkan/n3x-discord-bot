@@ -16,8 +16,10 @@ Surfaces:
    activity/gate data) and returns ``{"users_processed": int,
    "achievements_added": int}``.
 
-3. A standalone ``!sync_achievements`` prefix command, gated on ``is_admin``:
-   non-admins are refused and mutate nothing; admins trigger the additive sync.
+3. A ``/sync_achievements`` app command on ``bot.tree`` (off the prefix
+   registry), admin-gated: non-admins are refused and mutate nothing; admins
+   defer(ephemeral) then trigger the additive sync and get a German summary via
+   followup.
 
 New symbols are resolved lazily inside test bodies so a missing symbol fails the
 individual test (correct pre-impl RED) rather than breaking collection.
@@ -30,8 +32,11 @@ Assumptions pinned here (flag for the Architect):
     row yet — is still processed. This is the B17 additive-recovery case.
   * ``sync_all_achievements`` return dict has keys ``users_processed`` and
     ``achievements_added``.
-  * ``!sync_achievements`` is registered by ``build_bot`` and gated exactly like
-    the other admin surfaces via ``n3x_bot.admin.is_admin``.
+  * ``/sync_achievements`` is registered on ``bot.tree`` by ``build_bot`` and
+    gated exactly like the phase-5 admin slash commands via
+    ``n3x_bot.admin.is_admin`` (against ``interaction.user``). The refusal-path
+    channel (response.send_message vs a deferred followup) is the coder's call;
+    the tests scan both.
 """
 
 import importlib
@@ -165,67 +170,132 @@ async def test_sync_all_backfills_missing_row_for_over_threshold_user():
     await repo.close()
 
 
-# ── !sync_achievements command ─────────────────────────────────────────────
+# ── /sync_achievements app command ─────────────────────────────────────────
 
-async def test_build_bot_registers_sync_achievements_command():
+def _fake_interaction(user):
+    it = MagicMock()
+    it.user = user
+    it.response = MagicMock()
+    it.response.send_message = AsyncMock()
+    it.response.defer = AsyncMock()
+    it.followup = MagicMock()
+    it.followup.send = AsyncMock()
+    return it
+
+
+def _all_sent_text(interaction) -> str:
+    """Flatten every text payload sent via response.send_message OR followup."""
+    parts = []
+    for mock in (interaction.response.send_message, interaction.followup.send):
+        for call in mock.await_args_list:
+            if call.args:
+                parts.append(str(call.args[0]))
+            if "content" in call.kwargs:
+                parts.append(str(call.kwargs["content"]))
+    return "\n".join(parts)
+
+
+async def test_sync_achievements_is_app_command_not_prefix_command():
+    # Phase 7: the last prefix command migrates to a slash app command on the
+    # tree and leaves the prefix registry.
     repo = await _flatfile_repo()
     settings = _settings(admin_role_id=42)
     bot = build_bot(settings, repo)
-    assert bot.get_command("sync_achievements") is not None
+
+    assert bot.get_command("sync_achievements") is None          # off prefix
+    assert bot.tree.get_command("sync_achievements") is not None  # on the tree
     await repo.close()
 
 
-async def test_sync_command_refuses_non_admin_and_mutates_nothing():
+async def test_sync_achievements_refuses_non_admin_and_mutates_nothing():
     repo = await _flatfile_repo()
     settings = _settings(admin_role_id=42)
     bot = build_bot(settings, repo)
     await repo.add_activity(7, "messages", 1500)  # would unlock msg_1000
 
-    cmd = bot.get_command("sync_achievements")
+    cmd = bot.tree.get_command("sync_achievements")
     assert cmd is not None
-    ctx = MagicMock()
-    ctx.send = AsyncMock()
-    ctx.author = _member(member_id=5, role_ids=(999,))  # NOT the admin role
+    interaction = _fake_interaction(_member(member_id=5, role_ids=(999,)))  # NOT admin
 
-    await cmd.callback(ctx)
+    await cmd.callback(interaction)
 
     assert await repo.has_achievement(7, "msg_1000") is False  # no mutation
-    ctx.send.assert_awaited()  # a refusal was sent
+    assert "Berechtigung" in _all_sent_text(interaction)       # a refusal surfaced
     await repo.close()
 
 
-async def test_sync_command_admin_records_threshold_met_achievements():
+async def test_sync_achievements_defers_ephemeral_then_sends_followup():
     repo = await _flatfile_repo()
     settings = _settings(admin_role_id=42)
     bot = build_bot(settings, repo)
     await repo.add_activity(7, "messages", 1500)
 
-    cmd = bot.get_command("sync_achievements")
-    ctx = MagicMock()
-    ctx.send = AsyncMock()
-    ctx.author = _member(member_id=5, role_ids=(42,))  # admin role
+    order = []
+    cmd = bot.tree.get_command("sync_achievements")
+    assert cmd is not None
+    interaction = _fake_interaction(_member(member_id=5, role_ids=(42,)))  # admin
+    interaction.response.defer = AsyncMock(
+        side_effect=lambda *a, **k: order.append("defer"))
+    interaction.followup.send = AsyncMock(
+        side_effect=lambda *a, **k: order.append("followup"))
 
-    await cmd.callback(ctx)
+    await cmd.callback(interaction)
+
+    interaction.response.defer.assert_awaited_once()
+    assert interaction.response.defer.await_args.kwargs.get("ephemeral") is True
+    interaction.followup.send.assert_awaited_once()
+    assert order == ["defer", "followup"]  # defer FIRST, summary LAST
+    await repo.close()
+
+
+async def test_sync_achievements_admin_records_threshold_met_achievements():
+    repo = await _flatfile_repo()
+    settings = _settings(admin_role_id=42)
+    bot = build_bot(settings, repo)
+    await repo.add_activity(7, "messages", 1500)
+
+    cmd = bot.tree.get_command("sync_achievements")
+    assert cmd is not None
+    interaction = _fake_interaction(_member(member_id=5, role_ids=(42,)))  # admin
+
+    await cmd.callback(interaction)
 
     assert await repo.has_achievement(7, "msg_1000") is True
     await repo.close()
 
 
-async def test_sync_command_admin_second_run_adds_nothing_new():
+async def test_sync_achievements_admin_second_run_adds_nothing_new():
     repo = await _flatfile_repo()
     settings = _settings(admin_role_id=42)
     bot = build_bot(settings, repo)
     await repo.add_activity(7, "messages", 1500)
 
-    cmd = bot.get_command("sync_achievements")
-    ctx = MagicMock()
-    ctx.send = AsyncMock()
-    ctx.author = _member(member_id=5, role_ids=(42,))
+    cmd = bot.tree.get_command("sync_achievements")
+    assert cmd is not None
+    interaction = _fake_interaction(_member(member_id=5, role_ids=(42,)))
 
-    await cmd.callback(ctx)
+    await cmd.callback(interaction)
     before = await repo.list_achievement_holders()
-    await cmd.callback(ctx)
+    await cmd.callback(interaction)
     after = await repo.list_achievement_holders()
 
     assert after == before  # idempotent: the second run changed nothing
+    await repo.close()
+
+
+async def test_sync_achievements_followup_reports_german_summary_counts():
+    repo = await _flatfile_repo()
+    settings = _settings(admin_role_id=42)
+    bot = build_bot(settings, repo)
+    await repo.add_activity(7, "messages", 1500)
+
+    cmd = bot.tree.get_command("sync_achievements")
+    assert cmd is not None
+    interaction = _fake_interaction(_member(member_id=5, role_ids=(42,)))
+
+    await cmd.callback(interaction)
+
+    interaction.followup.send.assert_awaited_once()
+    # the German summary echoes the sync counts (users processed / added)
+    assert any(ch.isdigit() for ch in _all_sent_text(interaction))
     await repo.close()
