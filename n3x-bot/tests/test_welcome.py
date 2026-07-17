@@ -319,18 +319,30 @@ async def test_send_welcome_card_bot_member_returns_false_posts_nothing():
     await repo.close()
 
 
-# ── register_welcome_commands / !sync_welcome ──────────────────────────────
+# ── register_welcome_commands / /sync_welcome (Phase 5: slash-ONLY) ─────────
+#
+# Phase 5 migrates `!sync_welcome` to a slash-ONLY app command on `bot.tree`.
+# It is admin-gated; the admin path DEFERS ephemerally before the slow
+# per-member card backfill (send_welcome_card + asyncio.sleep(1) each) and
+# reports the count via `interaction.followup`. Non-admin is refused up front
+# with an ephemeral "❌ Keine Berechtigung." and posts NO cards / does NO defer.
+# The command is addressed via the tree:
+#     bot.tree.get_command("sync_welcome").callback(interaction)
 
-def _admin_ctx(members, channel=None, is_admin=True, admin_role_id=4242):
-    ctx = MagicMock()
-    ctx.send = AsyncMock()
+def _fake_interaction(members, is_admin=True, admin_role_id=4242):
     role_id = admin_role_id if is_admin else (admin_role_id + 1)
-    ctx.author = SimpleNamespace(roles=[SimpleNamespace(id=role_id)])
-    ctx.guild = SimpleNamespace(members=members)
-    return ctx
+    it = MagicMock()
+    it.user = SimpleNamespace(roles=[SimpleNamespace(id=role_id)], bot=False)
+    it.guild = SimpleNamespace(members=members)
+    it.response = MagicMock()
+    it.response.send_message = AsyncMock()
+    it.response.defer = AsyncMock()
+    it.followup = MagicMock()
+    it.followup.send = AsyncMock()
+    return it
 
 
-async def test_register_welcome_commands_registers_sync_welcome():
+async def test_register_welcome_commands_registers_sync_welcome_slash():
     register = _welcome().register_welcome_commands
     repo = await _flatfile_repo()
     settings = _settings()
@@ -338,7 +350,8 @@ async def test_register_welcome_commands_registers_sync_welcome():
 
     register(bot, settings)
 
-    assert bot.get_command("sync_welcome") is not None
+    assert bot.get_command("sync_welcome") is None          # not a prefix command
+    assert bot.tree.get_command("sync_welcome") is not None  # on the app tree
 
     await repo.close()
 
@@ -352,7 +365,7 @@ async def test_register_welcome_commands_is_idempotent():
     register(bot, settings)
     register(bot, settings)  # must not raise / double-register
 
-    assert bot.get_command("sync_welcome") is not None
+    assert bot.tree.get_command("sync_welcome") is not None
 
     await repo.close()
 
@@ -367,18 +380,20 @@ async def test_sync_welcome_non_admin_refused_posts_no_cards():
     register(bot, settings)
 
     members = [_fake_member(mid=1), _fake_member(mid=2)]
-    ctx = _admin_ctx(members, is_admin=False, admin_role_id=4242)
+    interaction = _fake_interaction(members, is_admin=False, admin_role_id=4242)
 
-    await bot.get_command("sync_welcome").callback(ctx)
+    await bot.tree.get_command("sync_welcome").callback(interaction)
 
     channel.send.assert_not_called()
-    ctx.send.assert_awaited_once()
-    assert "Keine Berechtigung" in ctx.send.await_args.args[0]
+    interaction.response.defer.assert_not_awaited()
+    interaction.response.send_message.assert_awaited_once()
+    assert "Keine Berechtigung" in interaction.response.send_message.await_args.args[0]
+    assert interaction.response.send_message.await_args.kwargs.get("ephemeral") is True
 
     await repo.close()
 
 
-async def test_sync_welcome_admin_posts_one_card_per_non_bot_member(monkeypatch):
+async def test_sync_welcome_admin_defers_then_posts_one_card_per_non_bot_member(monkeypatch):
     monkeypatch.setattr("n3x_bot.welcome.asyncio.sleep", AsyncMock())
     register = _welcome().register_welcome_commands
     repo = await _flatfile_repo()
@@ -389,17 +404,20 @@ async def test_sync_welcome_admin_posts_one_card_per_non_bot_member(monkeypatch)
     register(bot, settings)
 
     members = [_fake_member(mid=1, name="Ann"), _fake_member(mid=2, name="Bob")]
-    ctx = _admin_ctx(members, is_admin=True, admin_role_id=4242)
+    interaction = _fake_interaction(members, is_admin=True, admin_role_id=4242)
 
-    await bot.get_command("sync_welcome").callback(ctx)
+    await bot.tree.get_command("sync_welcome").callback(interaction)
 
+    # deferred ephemerally up front, before the slow backfill
+    interaction.response.defer.assert_awaited_once()
+    assert interaction.response.defer.await_args.kwargs.get("ephemeral") is True
     assert channel.send.await_count == 2
     assert all(isinstance(m.file, discord.File) for m in sent)
 
     await repo.close()
 
 
-async def test_sync_welcome_admin_reports_count(monkeypatch):
+async def test_sync_welcome_admin_reports_count_via_followup(monkeypatch):
     monkeypatch.setattr("n3x_bot.welcome.asyncio.sleep", AsyncMock())
     register = _welcome().register_welcome_commands
     repo = await _flatfile_repo()
@@ -410,12 +428,13 @@ async def test_sync_welcome_admin_reports_count(monkeypatch):
     register(bot, settings)
 
     members = [_fake_member(mid=1), _fake_member(mid=2)]
-    ctx = _admin_ctx(members, is_admin=True, admin_role_id=4242)
+    interaction = _fake_interaction(members, is_admin=True, admin_role_id=4242)
 
-    await bot.get_command("sync_welcome").callback(ctx)
+    await bot.tree.get_command("sync_welcome").callback(interaction)
 
-    ctx.send.assert_awaited()
-    reported = " ".join(str(c.args[0]) for c in ctx.send.await_args_list)
+    interaction.followup.send.assert_awaited()
+    reported = " ".join(str(c.args[0]) for c in interaction.followup.send.await_args_list
+                        if c.args)
     assert "2" in reported
 
     await repo.close()
@@ -433,11 +452,12 @@ async def test_sync_welcome_missing_channel_reports_zero(monkeypatch):
     register(bot, settings)
 
     members = [_fake_member(mid=1), _fake_member(mid=2)]
-    ctx = _admin_ctx(members, is_admin=True, admin_role_id=4242)
+    interaction = _fake_interaction(members, is_admin=True, admin_role_id=4242)
 
-    await bot.get_command("sync_welcome").callback(ctx)
+    await bot.tree.get_command("sync_welcome").callback(interaction)
 
-    reported = " ".join(str(c.args[0]) for c in ctx.send.await_args_list)
+    reported = " ".join(str(c.args[0]) for c in interaction.followup.send.await_args_list
+                        if c.args)
     assert "0" in reported and "2" not in reported
 
     await repo.close()
@@ -454,9 +474,9 @@ async def test_sync_welcome_skips_bot_members(monkeypatch):
     register(bot, settings)
 
     members = [_fake_member(mid=1), _fake_member(mid=2, is_bot=True)]
-    ctx = _admin_ctx(members, is_admin=True, admin_role_id=4242)
+    interaction = _fake_interaction(members, is_admin=True, admin_role_id=4242)
 
-    await bot.get_command("sync_welcome").callback(ctx)
+    await bot.tree.get_command("sync_welcome").callback(interaction)
 
     assert channel.send.await_count == 1  # the bot member was skipped
 
@@ -573,11 +593,12 @@ async def test_on_member_join_still_runs_enforce_prefix(monkeypatch):
     await repo.close()
 
 
-async def test_build_bot_registers_sync_welcome_command():
+async def test_build_bot_registers_sync_welcome_slash_command():
     repo = await _flatfile_repo()
     settings = _settings()
     bot = build_bot(settings, repo)
 
-    assert bot.get_command("sync_welcome") is not None
+    assert bot.get_command("sync_welcome") is None          # slash-only, not prefix
+    assert bot.tree.get_command("sync_welcome") is not None
 
     await repo.close()

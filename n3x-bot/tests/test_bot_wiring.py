@@ -76,7 +76,10 @@ async def test_register_stat_commands_adds_one_command_per_stat_plus_rank():
     # are wired by register_gate_commands (called from build_bot itself, not
     # register_stat_commands) — only count what THIS function wires.
     assert bot.get_command("admin") is None
-    wired = [c for c in bot.commands if c.name not in ("help", "stat", "del", "gate", "config", "content", "activity", "erfolge", "overview", "sync_achievements", "kodex", "kodex_check", "sync_welcome", "base", "basestop")]
+    # Phase 5: kodex/kodex_check/sync_welcome/base/basestop are slash-ONLY, so
+    # they are no longer prefix commands and are deliberately NOT in this
+    # exclusion list — a lingering prefix copy would inflate `wired`.
+    wired = [c for c in bot.commands if c.name not in ("help", "stat", "del", "gate", "config", "content", "activity", "erfolge", "overview", "sync_achievements")]
     assert len(wired) == len(stats) + 1
 
     await repo.close()
@@ -92,8 +95,9 @@ async def test_register_stat_commands_is_idempotent():
 
     stats = await repo.list_stats()
     # Phase 4: `admin` is slash-only — omitted from the exclusion list on purpose.
+    # Phase 5: kodex/kodex_check/sync_welcome/base/basestop are slash-only too.
     assert bot.get_command("admin") is None
-    wired = [c for c in bot.commands if c.name not in ("help", "stat", "del", "gate", "config", "content", "activity", "erfolge", "overview", "sync_achievements", "kodex", "kodex_check", "sync_welcome", "base", "basestop")]
+    wired = [c for c in bot.commands if c.name not in ("help", "stat", "del", "gate", "config", "content", "activity", "erfolge", "overview", "sync_achievements")]
     assert len(wired) == len(stats) + 1
 
     await repo.close()

@@ -9,7 +9,8 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import discord
-from discord.ext import commands, tasks
+from discord import app_commands
+from discord.ext import tasks
 
 from n3x_bot.config import Settings
 from n3x_bot.storage.base import StatsRepository
@@ -65,38 +66,58 @@ async def update_timer_overview(bot, repo: StatsRepository, settings: Settings,
 
 def register_timer_commands(bot, repo: StatsRepository,
                             settings: Settings) -> None:
-    if bot.get_command("base") is None:
-        async def _base_cmd(ctx, map_name: str, zeit: int):
-            if not has_base_timer_role(ctx.author, bot.runtime_config):
-                await ctx.send("❌ Keine Berechtigung.", delete_after=5)
-                return
-            now = datetime.now(ZoneInfo(settings.timezone))
-            try:
-                await start_base_timer(repo, bot.runtime_config, map_name, zeit, now)
-            except ValueError:
-                await ctx.send(
-                    f"❌ Ungültige Map. Erlaubte Maps: "
-                    f"{', '.join(bot.runtime_config.allowed_maps_list)}", delete_after=10)
-                return
-            await update_timer_overview(bot, repo, bot.runtime_config, now)
-            await ctx.send(f"✅ Timer für {map_name} gestartet ({zeit} Min).",
-                           delete_after=5)
-        bot.add_command(commands.Command(_base_cmd, name="base"))
+    async def _allowed_maps_autocomplete(interaction, current: str):
+        needle = current.lower()
+        return [app_commands.Choice(name=m, value=m)
+                for m in bot.runtime_config.allowed_maps_list
+                if needle in m.lower()][:25]
 
-    if bot.get_command("basestop") is None:
-        async def _basestop_cmd(ctx, map_name: str):
-            if not has_base_timer_role(ctx.author, bot.runtime_config):
-                await ctx.send("❌ Keine Berechtigung.", delete_after=5)
+    async def _active_maps_autocomplete(interaction, current: str):
+        needle = current.lower()
+        active = await repo.list_base_timers()
+        return [app_commands.Choice(name=m, value=m)
+                for m in active if needle in m.lower()][:25]
+
+    if bot.tree.get_command("base") is None:
+        @bot.tree.command(name="base", description="Startet einen Base-Timer.")
+        @app_commands.describe(map="Map", zeit="Dauer in Minuten")
+        @app_commands.autocomplete(map=_allowed_maps_autocomplete)
+        async def base_cmd(interaction, map: str, zeit: int):
+            if not has_base_timer_role(interaction.user, bot.runtime_config):
+                await interaction.response.send_message(
+                    "❌ Keine Berechtigung.", ephemeral=True)
                 return
+            allowed = bot.runtime_config.allowed_maps_list
+            if map not in allowed:
+                await interaction.response.send_message(
+                    f"❌ Ungültige Map. Erlaubte Maps: {', '.join(allowed)}",
+                    ephemeral=True)
+                return
+            await interaction.response.defer(ephemeral=True)
             now = datetime.now(ZoneInfo(settings.timezone))
-            if await repo.remove_base_timer(map_name):
+            await start_base_timer(repo, bot.runtime_config, map, zeit, now)
+            await update_timer_overview(bot, repo, bot.runtime_config, now)
+            await interaction.followup.send(
+                f"✅ Timer für {map} gestartet ({zeit} Min).", ephemeral=True)
+
+    if bot.tree.get_command("basestop") is None:
+        @bot.tree.command(name="basestop", description="Stoppt einen Base-Timer.")
+        @app_commands.describe(map="Map")
+        @app_commands.autocomplete(map=_active_maps_autocomplete)
+        async def basestop_cmd(interaction, map: str):
+            if not has_base_timer_role(interaction.user, bot.runtime_config):
+                await interaction.response.send_message(
+                    "❌ Keine Berechtigung.", ephemeral=True)
+                return
+            await interaction.response.defer(ephemeral=True)
+            now = datetime.now(ZoneInfo(settings.timezone))
+            if await repo.remove_base_timer(map):
                 await update_timer_overview(bot, repo, bot.runtime_config, now)
-                await ctx.send(f"✅ Timer für {map_name} gestoppt.",
-                               delete_after=5)
+                await interaction.followup.send(
+                    f"✅ Timer für {map} gestoppt.", ephemeral=True)
             else:
-                await ctx.send(f"❌ Kein aktiver Timer für Map {map_name}.",
-                               delete_after=5)
-        bot.add_command(commands.Command(_basestop_cmd, name="basestop"))
+                await interaction.followup.send(
+                    f"❌ Kein aktiver Timer für Map {map}.", ephemeral=True)
 
 
 def start_timer_overview_loop(bot, repo: StatsRepository,

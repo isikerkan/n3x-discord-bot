@@ -211,10 +211,10 @@ async def test_command_list_contains_prefixed_top_level_commands():
     repo = await _flatfile_repo()
     bot = await _populated_bot(_settings(), repo)
     text = _embed_text(build_command_list(bot))
-    # `overview` migrated to a slash-only app command in Phase 1, and `stat`
-    # migrated to a slash-only app command in Phase 2, so neither appears in the
-    # prefix-derived command list any more.
-    for name in ("rank", "kodex", "base"):
+    # overview/stat/gate/config/content/admin and (Phase 5) kodex/base/basestop/
+    # sync_welcome migrated to slash-only app commands, so they no longer appear
+    # in the prefix-derived list. `rank` and `sync_achievements` remain prefix.
+    for name in ("rank", "sync_achievements"):
         assert f"!{name}" in text, name
     await _cleanup(repo)
 
@@ -299,14 +299,14 @@ async def test_command_list_is_deterministic():
 
 
 async def test_command_list_top_level_commands_are_sorted():
-    # `base` sorts before `kodex`; a sorted render places it earlier. (`admin`,
-    # `activity`, `stat` and `gate` migrated to slash-only app commands and are no
-    # longer in the prefix-derived list — `admin` as of Phase 4.)
+    # `rank` sorts before `sync_achievements`; a sorted render places it earlier.
+    # (admin/activity/stat/gate/config/content and Phase-5 kodex/base migrated to
+    # slash-only app commands and are no longer in the prefix-derived list.)
     from n3x_bot.bot import build_command_list
     repo = await _flatfile_repo()
     bot = await _populated_bot(_settings(), repo)
     text = _embed_text(build_command_list(bot))
-    assert text.index("!base") < text.index("!kodex")
+    assert text.index("!rank") < text.index("!sync_achievements")
     await _cleanup(repo)
 
 
