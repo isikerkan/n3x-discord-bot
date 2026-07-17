@@ -216,7 +216,8 @@ async def test_erfolge_embed_uses_resolver_total():
 
     cmd = bot.tree.get_command("erfolge")
     interaction = MagicMock()
-    interaction.user = SimpleNamespace(id=7, display_name="Erkan", mention="<@7>")
+    interaction.user = SimpleNamespace(id=7, display_name="Erkan", mention="<@7>",
+                                       send=AsyncMock())
     interaction.response = MagicMock()
     interaction.response.send_message = AsyncMock()
     interaction.followup = MagicMock()
@@ -224,8 +225,8 @@ async def test_erfolge_embed_uses_resolver_total():
 
     await cmd.callback(interaction)
 
-    sent = interaction.response.send_message.await_args
-    embed = sent.kwargs.get("embed")
+    # /erfolge now DMs the embed; the interaction reply is just the ephemeral ack.
+    embed = interaction.user.send.await_args.kwargs.get("embed")
     assert embed is not None
     assert "/84" in _embed_text(embed)
 

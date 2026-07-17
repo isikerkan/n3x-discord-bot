@@ -362,10 +362,15 @@ async def _build_erfolge_embed(repo: StatsRepository, owned: set[str], uid: int,
             live = await user_metric_value(repo, uid, nxt.metric)
             nxt_text = (f"Nächstes: {nxt.title} — "
                         f"{_milestone_progress(nxt.metric, live, nxt.threshold)}")
-        embed.add_field(
-            name=label,
-            value=f"{len(unlocked)}/{len(cat_defs)}  {bar}\n{nxt_text}",
-            inline=False)
+        lines = [f"{len(unlocked)}/{len(cat_defs)}  {bar}", nxt_text]
+        if unlocked:
+            cap = 8
+            titles = [a.title for a in unlocked[:cap]]
+            titles_text = ", ".join(titles)
+            if len(unlocked) > cap:
+                titles_text += ", …"
+            lines.append(titles_text)
+        embed.add_field(name=label, value="\n".join(lines), inline=False)
 
     secret_total = sum(1 for a in source if a.secret)
     secret_unlocked = len(owned & {a.id for a in source if a.secret})
@@ -387,4 +392,9 @@ def register_achievement_commands(bot, repo: StatsRepository,
         embed = await _build_erfolge_embed(
             repo, owned, interaction.user.id, interaction.user.display_name,
             defs=bot.achievement_defs.all(), total=bot.achievement_defs.total)
-        await interaction.response.send_message(embed=embed)
+        try:
+            await interaction.user.send(embed=embed)
+            await interaction.response.send_message(
+                "📬 Ich hab dir deine Erfolge per DM geschickt.", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.response.send_message(embed=embed, ephemeral=True)

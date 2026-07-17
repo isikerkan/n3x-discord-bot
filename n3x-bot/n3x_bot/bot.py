@@ -20,6 +20,7 @@ from n3x_bot.activity import (
     register_activity,
     record_message_activity,
     handle_voice_state_update,
+    announce_voice_change,
     handle_activity_reaction,
     flush_voice_times,
     now_local,
@@ -50,7 +51,9 @@ from n3x_bot.models import render_output
 from n3x_bot.nicknames import enforce_nick
 from n3x_bot.runtime_config import RuntimeConfig
 from n3x_bot.storage.base import GATE_TYPES, StatsRepository
-from n3x_bot.timers import register_timer_commands, start_timer_overview_loop
+from n3x_bot.timers import (
+    register_timer_commands, start_timer_overview_loop, update_timer_overview,
+)
 from n3x_bot.welcome import register_welcome_commands, send_welcome_card
 
 log = logging.getLogger("N3X-Bot")
@@ -492,6 +495,11 @@ async def update_gate_stats_embed(bot, repo: StatsRepository, settings: Settings
     new_msg = await channel.send(embed=embed)
     bot._gate_embed_msg_id = new_msg.id
     await repo.set_channel_message(GATE_STATS_KEY, new_msg.id, channel.id)
+    # Seed the 🔄 reload control so users can force an immediate refresh.
+    try:
+        await new_msg.add_reaction("🔄")
+    except Exception:
+        pass
 
 
 async def update_gate_chart(bot, repo: StatsRepository, settings: Settings,
@@ -724,6 +732,16 @@ async def handle_gate_input_message(bot, repo: StatsRepository, settings: Settin
             "cost": cost, "user_id": message.author.id,
             "username": message.author.name, "gate_type": gate_type,
             "options": options}
+        # Persist the pending entry so a restart/deploy doesn't drop an
+        # in-flight confirmation. Guarded: a persist failure must not abort the
+        # in-memory seeding (which still works for a live click this session).
+        try:
+            await repo.set_gate_pending(
+                message.id, channel_id=message.channel.id, gate_type=gate_type,
+                cost=cost, user_id=message.author.id,
+                username=message.author.name, options=options)
+        except Exception:
+            pass
         try:
             for emoji in reactions:
                 await message.add_reaction(emoji)
@@ -769,6 +787,21 @@ async def handle_gate_input_message(bot, repo: StatsRepository, settings: Settin
             pass
 
 
+async def load_pending_gate(bot, repo: StatsRepository) -> None:
+    """Repopulate ``bot._pending_gate`` from the persisted gate_pending rows.
+
+    Called on startup so a drop click after a restart/deploy uses the fast
+    in-memory confirmation path again (the DB fallback in
+    ``handle_gate_drop_confirmation`` covers any click that races the load).
+    """
+    rows = await repo.all_gate_pending()
+    bot._pending_gate = {
+        r["message_id"]: {"cost": r["cost"], "user_id": r["user_id"],
+                          "username": r["username"], "gate_type": r["gate_type"],
+                          "options": r["options"]}
+        for r in rows}
+
+
 async def handle_gate_drop_confirmation(bot, repo: StatsRepository,
                                         settings: Settings, payload) -> None:
     """Store a pending d/e/z/k gate on the author's single drop-icon click.
@@ -780,8 +813,20 @@ async def handle_gate_drop_confirmation(bot, repo: StatsRepository,
     post-processing runs.
     """
     pending = bot._pending_gate.get(payload.message_id)
+    from_db = False
     if pending is None:
-        return
+        # Restart/deploy wiped the in-memory dict: fall back to the persisted
+        # gate_pending row so a post-restart click still records the gate.
+        try:
+            row = await repo.get_gate_pending(payload.message_id)
+        except Exception:
+            row = None
+        if row is None:
+            return
+        pending = {"cost": row["cost"], "user_id": row["user_id"],
+                   "username": row["username"], "gate_type": row["gate_type"],
+                   "options": row["options"]}
+        from_db = True
     options = pending["options"]
     key = _emoji_key(payload.emoji)
     if key not in options:
@@ -792,9 +837,12 @@ async def handle_gate_drop_confirmation(bot, repo: StatsRepository,
     # or two quick clicks would otherwise both pass the guards above and each
     # store the gate (double gate_entries row on a suspending SQL backend).
     # pop() has no await, so only one dispatch wins; the rest are clean no-ops.
-    pending = bot._pending_gate.pop(payload.message_id, None)
-    if pending is None:
-        return
+    # On the DB-fallback (restart) path there is no concurrent in-memory entry;
+    # the delete_gate_pending below is the single-store gate for that case.
+    if not from_db:
+        pending = bot._pending_gate.pop(payload.message_id, None)
+        if pending is None:
+            return
     chosen = pending["options"][key]
     gate_type = pending["gate_type"]
     cost = pending["cost"]
@@ -815,6 +863,13 @@ async def handle_gate_drop_confirmation(bot, repo: StatsRepository,
             "k", cost, user_id, username,
             drops={"hercules": chosen == "hercules",
                    "lf4u": chosen == "lf4u"})
+    # The pending confirmation is resolved (stored or dedup-rejected): drop its
+    # persisted row so it isn't re-loaded on a later restart. Guarded so a
+    # delete failure never breaks the store/announce flow.
+    try:
+        await repo.delete_gate_pending(payload.message_id)
+    except Exception:
+        pass
     if inserted:
         try:
             channel = bot.get_channel(payload.channel_id)
@@ -885,6 +940,45 @@ async def handle_verlauf_removal(bot, payload) -> None:
     bot._verlauf_msgs.pop(payload.message_id, None)
 
 
+RELOAD_EMOJI = "🔄"
+
+
+async def handle_reload_reaction(bot, repo: StatsRepository, settings: Settings,
+                                 payload) -> None:
+    """🔄 on the live gate-stats or base-timer overview → refresh it now.
+
+    Lets a user force an immediate re-render instead of waiting for the 30s
+    loop / next gate entry. The bot's own seed reaction is ignored; the user's
+    reaction is removed afterwards so it can be clicked again. Best-effort.
+    """
+    if str(payload.emoji) != RELOAD_EMOJI:
+        return
+    if bot.user is not None and payload.user_id == bot.user.id:
+        return
+    rc = bot.runtime_config
+    handled = False
+    if bot._gate_embed_msg_id is not None and \
+            payload.message_id == bot._gate_embed_msg_id:
+        await update_gate_stats_embed(bot, repo, settings)
+        handled = True
+    elif rc.timer_overview_message_id and \
+            payload.message_id == rc.timer_overview_message_id:
+        await update_timer_overview(bot, repo, rc, now_local(settings))
+        handled = True
+    if not handled:
+        return
+    try:
+        channel = bot.get_channel(payload.channel_id)
+        msg = await channel.fetch_message(payload.message_id)
+        member = getattr(payload, "member", None)
+        if member is None and channel is not None and channel.guild is not None:
+            member = channel.guild.get_member(payload.user_id)
+        if member is not None:
+            await msg.remove_reaction(payload.emoji, member)
+    except Exception:
+        pass
+
+
 async def _announce_records(bot, settings: Settings, gate_type: str,
                             changed: set[str], record: dict) -> None:
     if not changed or not bot.runtime_config.milestone_channel_id:
@@ -944,12 +1038,21 @@ async def sync_commands_to_guilds(bot) -> None:
         log.exception("failed to reset global command scope")
 
 
-def _wire_events(bot, settings: Settings, repo: StatsRepository):
-    reminder_h, reminder_m = bot.runtime_config.reminder_hm()
+def reminder_loop_time(runtime_config, settings: Settings) -> time:
+    """The daily event-reminder fire time as a TZ-AWARE `time`.
 
-    @tasks.loop(time=time(hour=reminder_h, minute=reminder_m))
+    discord.py's `tasks.loop(time=...)` treats a NAIVE time as UTC, so a bare
+    `time(19, 30)` fired at 19:30 UTC (= 20:30/21:30 Europe/Berlin — the "1h
+    late" bug). Attaching `tzinfo` makes it fire at that local wall-clock time.
+    """
+    h, m = runtime_config.reminder_hm()
+    return time(hour=h, minute=m, tzinfo=ZoneInfo(settings.timezone))
+
+
+def _wire_events(bot, settings: Settings, repo: StatsRepository):
+    @tasks.loop(time=reminder_loop_time(bot.runtime_config, settings))
     async def event_reminder_task():
-        weekday = datetime.now().weekday()
+        weekday = now_local(settings).weekday()
         channel = bot.get_channel(bot.runtime_config.reminder_channel_id)
         if channel is None:
             return
@@ -981,6 +1084,10 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
             await bot.achievement_defs.refresh(repo)
         except Exception:
             log.exception("achievement_defs refresh failed; using defaults")
+        try:
+            await load_pending_gate(bot, repo)
+        except Exception:
+            log.exception("gate_pending load failed; in-flight confirms may be lost")
         await register_stat_commands(bot, repo, settings)
         for guild in bot.guilds:
             try:
@@ -1074,6 +1181,10 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
 
     @bot.event
     async def on_voice_state_update(member, before, after):
+        try:
+            await announce_voice_change(bot, member, before, after)
+        except Exception:
+            pass
         await handle_voice_state_update(bot, repo, settings, member, before, after,
                                         now_local(settings))
 
@@ -1100,6 +1211,10 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
             pass
         try:
             await handle_verlauf_removal(bot, payload)
+        except Exception:
+            pass
+        try:
+            await handle_reload_reaction(bot, repo, settings, payload)
         except Exception:
             pass
 

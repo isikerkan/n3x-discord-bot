@@ -30,6 +30,7 @@ _DATA_TABLES = (
     "channel_messages", "runtime_config", "content_texts",
     "color_config",
     "achievement_defs",
+    "gate_pending",
 )
 
 

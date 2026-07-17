@@ -278,3 +278,34 @@ def register_activity(bot, repo: StatsRepository, settings: Settings) -> None:
         target = member or interaction.user
         embed = await _build_activity_embed(repo, target)
         await interaction.response.send_message(embed=embed)
+
+
+async def announce_voice_change(bot, member, before, after) -> None:
+    """Post a German message when a member joins/leaves/moves a voice channel.
+
+    Best-effort side-channel; posts to `voice_log_channel_id` when configured.
+    Bots and pure mute/deafen state changes (same channel) are ignored.
+    """
+    if getattr(member, "bot", False):
+        return
+    b = before.channel
+    a = after.channel
+    if b is a or (b is not None and a is not None and b.id == a.id):
+        return  # no channel change (mute/deafen/self-video toggle)
+    channel_id = bot.runtime_config.voice_log_channel_id
+    if not channel_id:
+        return
+    channel = bot.get_channel(channel_id)
+    if channel is None:
+        return
+    name = member.display_name
+    if b is None and a is not None:
+        text = f"🔊 **{name}** ist **{a.name}** beigetreten."
+    elif b is not None and a is None:
+        text = f"👋 **{name}** hat **{b.name}** verlassen."
+    else:
+        text = f"🔀 **{name}**: **{b.name}** → **{a.name}**"
+    try:
+        await channel.send(text)
+    except Exception:
+        pass

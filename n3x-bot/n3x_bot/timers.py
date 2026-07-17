@@ -63,6 +63,12 @@ async def update_timer_overview(bot, repo: StatsRepository, settings: Settings,
     try:
         msg = await channel.fetch_message(settings.timer_overview_message_id)
         await msg.edit(content=None, embed=embed)
+        # Seed the 🔄 reload control (idempotent — Discord dedups the bot's own
+        # reaction). A user clicking it forces an immediate refresh.
+        try:
+            await msg.add_reaction("🔄")
+        except Exception:
+            pass
     except Exception:
         pass
 
@@ -100,8 +106,12 @@ def register_timer_commands(bot, repo: StatsRepository,
             now = datetime.now(ZoneInfo(settings.timezone))
             await start_base_timer(repo, bot.runtime_config, map, zeit, now)
             await update_timer_overview(bot, repo, bot.runtime_config, now)
-            await interaction.followup.send(
-                f"✅ Timer für {map} gestartet ({zeit} Min).", ephemeral=True)
+            # No success message — the overview embed IS the feedback. Delete the
+            # deferred ephemeral so no "thinking…" placeholder lingers.
+            try:
+                await interaction.delete_original_response()
+            except Exception:
+                pass
 
     if bot.tree.get_command("basestop") is None:
         @bot.tree.command(name="basestop", description="Stoppt einen Base-Timer.")
@@ -116,9 +126,13 @@ def register_timer_commands(bot, repo: StatsRepository,
             now = datetime.now(ZoneInfo(settings.timezone))
             if await repo.remove_base_timer(map):
                 await update_timer_overview(bot, repo, bot.runtime_config, now)
-                await interaction.followup.send(
-                    f"✅ Timer für {map} gestoppt.", ephemeral=True)
+                # No success message — overview is the feedback.
+                try:
+                    await interaction.delete_original_response()
+                except Exception:
+                    pass
             else:
+                # Keep the failure feedback so the user knows nothing happened.
                 await interaction.followup.send(
                     f"❌ Kein aktiver Timer für Map {map}.", ephemeral=True)
 
