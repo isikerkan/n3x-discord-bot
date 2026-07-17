@@ -114,3 +114,35 @@ async def test_backfill_noop_when_channel_unset(monkeypatch):
     n = await backfill_gate_input(bot, repo, settings)
     assert n == 0
     await repo.close()
+
+
+async def test_backfill_reseeds_drop_gate_without_pending_even_if_reacted(monkeypatch):
+    # A d/e/z/k message that already has the bot's drop reactions but whose
+    # pending row was lost (pre-persistence) must be RE-SEEDED so a click works.
+    import n3x_bot.bot as botmod
+    handled = []
+
+    async def _fake_handle(bot, repo, settings, message):
+        handled.append(message.content)
+    monkeypatch.setattr(botmod, "handle_gate_input_message", _fake_handle)
+    bot, repo, settings = await _bot_with_history(
+        [_msg("d 75000", reactions=[_reaction(True)])])  # reacted, no pending
+    n = await backfill_gate_input(bot, repo, settings)
+    assert n == 1 and handled == ["d 75000"]
+    await repo.close()
+
+
+async def test_backfill_skips_drop_gate_that_has_a_pending_row(monkeypatch):
+    import n3x_bot.bot as botmod
+    handled = []
+    monkeypatch.setattr(botmod, "handle_gate_input_message",
+                        AsyncMock(side_effect=lambda *a: handled.append(1)))
+    bot, repo, settings = await _bot_with_history([])  # build bot+repo first
+    m = _msg("d 75000")
+    # a pending row already tracks this message -> skip
+    await repo.set_gate_pending(m.id, channel_id=42, gate_type="d", cost=75000,
+                                user_id=9, username="u", options={"❌": None})
+    bot.get_channel.return_value.history = _History([m])
+    n = await backfill_gate_input(bot, repo, settings)
+    assert n == 0 and handled == []
+    await repo.close()

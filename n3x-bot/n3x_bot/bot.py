@@ -830,10 +830,24 @@ async def backfill_gate_input(bot, repo: StatsRepository, settings: Settings,
         async for message in channel.history(limit=limit):
             if getattr(message.author, "bot", False):
                 continue
-            if parse_gate_message(message.content) is None:
+            parsed = parse_gate_message(message.content)
+            if parsed is None:
                 continue
-            if any(getattr(r, "me", False) for r in message.reactions):
-                continue  # the bot already reacted → already handled/seeded
+            gate_type = parsed[0]
+            if gate_type in GATE_DROP_REACTION_ITEMS:
+                # Drop gate (d/e/z/k): a confirmed one is deleted, so any that
+                # survive are awaiting a click and MUST have a pending row for a
+                # click to register. Skip only if one already exists; otherwise
+                # re-seed (handle_gate_input_message re-adds the reactions
+                # idempotently and rewrites the pending row — it does NOT store
+                # until the user clicks, so this never double-counts).
+                if await repo.get_gate_pending(message.id) is not None:
+                    continue
+            else:
+                # a/b/c store immediately; the bot's own ✅/⏳ reaction marks it
+                # done. No reaction → posted while the bot was offline.
+                if any(getattr(r, "me", False) for r in message.reactions):
+                    continue
             try:
                 await handle_gate_input_message(bot, repo, settings, message)
                 processed += 1
