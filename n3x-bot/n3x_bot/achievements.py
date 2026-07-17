@@ -113,6 +113,19 @@ ACHIEVEMENTS: list[Achievement] = _build_achievements()
 TOTAL_ACHIEVEMENTS: int = len(ACHIEVEMENTS)
 
 
+def _bar(filled_num: int, total: int, segments: int = 10) -> str:
+    filled = round(filled_num / total * segments) if total else 0
+    filled = max(0, min(segments, filled))
+    return "█" * filled + "░" * (segments - filled)
+
+
+_METRIC_UNITS = {
+    "gate_a": "Läufe", "gate_b": "Läufe", "gate_c": "Läufe", "gate_d": "Läufe",
+    "gate_e": "Läufe", "gate_z": "Läufe", "gate_k": "Läufe", "gate_total": "Läufe",
+    "streak": "Tage", "night": "Nächte",
+}
+
+
 def newly_unlocked(defs_for_metric: list[Achievement], value: int,
                    already: set[str]) -> set[str]:
     return {a.id for a in defs_for_metric
@@ -174,10 +187,12 @@ def build_overview_embed(holders: dict[int, set[str]], user_ids: list[int],
     denom = total if total is not None else TOTAL_ACHIEVEMENTS
     idx = page % len(user_ids)
     uid = user_ids[idx]
-    count = len(holders.get(uid, set()))
-    segments = 10
-    filled = round(count / denom * segments) if denom else 0
-    bar = "█" * filled + "░" * (segments - filled)
+    owned = holders.get(uid, set())
+    count = len(owned)
+    bar = _bar(count, denom)
+    ranking = sorted(user_ids,
+                     key=lambda u: len(holders.get(u, set())), reverse=True)
+    rank = ranking.index(uid) + 1
     embed = discord.Embed(
         title="🏆 Achievement-Übersicht",
         color=discord.Color.gold())
@@ -187,8 +202,25 @@ def build_overview_embed(holders: dict[int, set[str]], user_ids: list[int],
         f"<@{uid}>\n"
         f"**{count}/{denom}** Achievements freigeschaltet\n"
         f"{bar}\n"
-        f"Seite {idx + 1}/{len(user_ids)}")
+        f"{_overview_breakdown(owned)}\n"
+        f"Seite {idx + 1}/{len(user_ids)} · Platz {rank}")
     return embed
+
+
+def _overview_breakdown(owned: set[str]) -> str:
+    def owned_count(*categories: str) -> int:
+        return sum(1 for a in ACHIEVEMENTS
+                   if a.category in categories and a.id in owned)
+
+    def total_count(*categories: str) -> int:
+        return sum(1 for a in ACHIEVEMENTS if a.category in categories)
+
+    return (f"🚀 {owned_count('gate')}/{total_count('gate')}  "
+            f"🎙️ {owned_count('voice')}/{total_count('voice')}  "
+            f"🔥 {owned_count('streak')}/{total_count('streak')}  "
+            f"🌙 {owned_count('night')}/{total_count('night')}  "
+            f"🔒 {owned_count('message', 'reaction')}/"
+            f"{total_count('message', 'reaction')}")
 
 
 async def post_overview(bot, repo: StatsRepository, settings: Settings) -> None:
@@ -284,13 +316,25 @@ async def sync_all_achievements(repo: StatsRepository) -> dict:
             "achievements_added": achievements_added}
 
 
-def _build_erfolge_embed(owned: set[str], display_name: str) -> discord.Embed:
+def _milestone_progress(metric: str, live: int, threshold: int) -> str:
+    if metric == "voice_seconds":
+        return f"{live // 3600}h/{threshold // 3600}h"
+    unit = _METRIC_UNITS.get(metric)
+    if unit:
+        return f"{live}/{threshold} {unit}"
+    return f"{live}/{threshold}"
+
+
+async def _build_erfolge_embed(repo: StatsRepository, owned: set[str], uid: int,
+                               display_name: str) -> discord.Embed:
     count = len(owned)
+    percent = round(count / TOTAL_ACHIEVEMENTS * 100)
     embed = discord.Embed(
         title=f"🏆 Achievements - {display_name}",
         color=discord.Color.gold())
     embed.description = (
-        f"**{count}/{TOTAL_ACHIEVEMENTS}** Achievements freigeschaltet")
+        f"**{count}/{TOTAL_ACHIEVEMENTS}** Achievements freigeschaltet\n"
+        f"{_bar(count, TOTAL_ACHIEVEMENTS)} {percent} %")
 
     category_labels = {"gate": "🚀 Gates", "voice": "🎙️ Voice",
                        "streak": "🔥 Streak", "night": "🌙 Nachtaktiv"}
@@ -298,20 +342,23 @@ def _build_erfolge_embed(owned: set[str], display_name: str) -> discord.Embed:
         defs = sorted((a for a in ACHIEVEMENTS if a.category == category),
                       key=lambda a: a.threshold)
         unlocked = [a for a in defs if a.id in owned]
+        bar = _bar(len(unlocked), len(defs))
         nxt = next((a for a in defs if a.id not in owned), None)
         if nxt is None:
             nxt_text = "Alle freigeschaltet"
         else:
-            nxt_text = f"Nächstes: {nxt.title} ({nxt.threshold})"
+            live = await user_metric_value(repo, uid, nxt.metric)
+            nxt_text = (f"Nächstes: {nxt.title} — "
+                        f"{_milestone_progress(nxt.metric, live, nxt.threshold)}")
         embed.add_field(
             name=label,
-            value=f"{len(unlocked)}/{len(defs)}\n{nxt_text}",
+            value=f"{len(unlocked)}/{len(defs)}  {bar}\n{nxt_text}",
             inline=False)
 
     secret_total = sum(1 for a in ACHIEVEMENTS if a.secret)
     secret_unlocked = len(owned & {a.id for a in ACHIEVEMENTS if a.secret})
     embed.add_field(name="🔒 Secret",
-                    value=f"{secret_unlocked}/{secret_total}", inline=False)
+                    value=f"{secret_unlocked}/{secret_total}  ???", inline=False)
 
     return embed
 
@@ -325,5 +372,6 @@ def register_achievement_commands(bot, repo: StatsRepository,
                       description="Zeigt deine freigeschalteten Achievements.")
     async def erfolge(interaction):
         owned = await repo.get_user_achievements(interaction.user.id)
-        embed = _build_erfolge_embed(owned, interaction.user.display_name)
+        embed = await _build_erfolge_embed(
+            repo, owned, interaction.user.id, interaction.user.display_name)
         await interaction.response.send_message(embed=embed)
