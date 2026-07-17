@@ -39,7 +39,7 @@ from n3x_bot.charts import render_gate_history_chart
 from n3x_bot.gates import (
     build_gate_embed, parse_gate_message, changed_records, GATE_NAMES,
     parse_de_date, resolve_drop_emoji, GATE_DROP_REACTION_ITEMS,
-    DROP_NOTHING_EMOJI,
+    DROP_NOTHING_EMOJI, _DROP_LABELS,
 )
 from n3x_bot.kodex import (
     register_kodex_commands, send_kodex_dm, handle_kodex_confirmation,
@@ -752,6 +752,13 @@ async def handle_gate_input_message(bot, repo: StatsRepository, settings: Settin
             await message.delete(delay=bot.runtime_config.gate_delete_delay_seconds)
         except Exception:
             pass
+        try:
+            confirm = await message.channel.send(
+                f"✅ {message.author.mention} Dein Wert für {GATE_NAMES[gate_type]} "
+                f"({format_number(cost)}) wurde registriert.")
+            await confirm.delete(delay=bot.runtime_config.gate_delete_delay_seconds)
+        except Exception:
+            pass
 
 
 async def handle_gate_drop_confirmation(bot, repo: StatsRepository,
@@ -805,6 +812,14 @@ async def handle_gate_drop_confirmation(bot, repo: StatsRepository,
             channel = bot.get_channel(payload.channel_id)
             msg = await channel.fetch_message(payload.message_id)
             await msg.delete(delay=bot.runtime_config.gate_delete_delay_seconds)
+        except Exception:
+            pass
+        try:
+            outcome = _DROP_LABELS[chosen] if chosen else "kein Drop"
+            confirm = await bot.get_channel(payload.channel_id).send(
+                f"✅ <@{user_id}> Dein Wert für {GATE_NAMES[gate_type]} "
+                f"({format_number(cost)}) wurde registriert — {outcome}.")
+            await confirm.delete(delay=bot.runtime_config.gate_delete_delay_seconds)
         except Exception:
             pass
         after = await repo.gate_record(gate_type)
