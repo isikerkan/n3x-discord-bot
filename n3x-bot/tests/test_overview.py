@@ -409,3 +409,64 @@ async def test_overview_command_triggers_post_overview():
     assert interaction.response.defer.await_args.kwargs.get("ephemeral") is True
     interaction.followup.send.assert_awaited_once()
     await repo.close()
+
+
+# ── richer overview layout: Platz (rank) + per-category breakdown ────────────
+#
+# Approved design keeps the existing per-user paging (mention / count/TOTAL /
+# 10-seg bar / "Seite x/y") and adds, from the SAME pure inputs:
+#   1. "Platz {rank}" — the page user's rank by unlock count among user_ids
+#      (1 = most unlocks). Shown alongside "Seite x/y".
+#   2. a per-category breakdown line computed from holders[uid] vs ACHIEVEMENTS
+#      (pure, no I/O) — gate/voice/streak/night + a single 🔒 Secret bucket that
+#      folds message + reaction categories together.
+#
+# Fixture (strictly ordered counts so ranks are unambiguous):
+#   user 10 → 5 unlocks (most)   -> Platz 1
+#   user 20 → 3 unlocks (middle) -> Platz 2   ← breakdown pinned here
+#   user 30 → 1 unlock  (least)  -> Platz 3
+# user 20's owned set {a_5, voice_3600, streak_7} → 🚀1/60 🎙️1/6 🔥1/6 🌙0/3 🔒0/8.
+
+_RANK_HOLDERS = {
+    10: {"a_5", "b_5", "voice_3600", "streak_7", "msg_1000"},   # 5
+    20: {"a_5", "voice_3600", "streak_7"},                      # 3 (middle)
+    30: {"night_10"},                                           # 1
+}
+_RANK_USER_IDS = [10, 20, 30]
+
+
+def test_overview_middle_user_shows_platz_two():
+    # page 1 → user 20, the 2nd-most-unlocked of the three.
+    embed = _mod().build_overview_embed(_RANK_HOLDERS, _RANK_USER_IDS, 1)
+    assert "Platz 2" in _embed_text(embed)
+
+
+def test_overview_top_user_shows_platz_one():
+    # page 0 → user 10, the most-unlocked (rank 1 = most, not least).
+    embed = _mod().build_overview_embed(_RANK_HOLDERS, _RANK_USER_IDS, 0)
+    assert "Platz 1" in _embed_text(embed)
+
+
+def test_overview_last_user_shows_platz_three():
+    embed = _mod().build_overview_embed(_RANK_HOLDERS, _RANK_USER_IDS, 2)
+    assert "Platz 3" in _embed_text(embed)
+
+
+def test_overview_breakdown_shows_gate_count_for_page_user():
+    # user 20 owns exactly one gate achievement (a_5) of 60.
+    embed = _mod().build_overview_embed(_RANK_HOLDERS, _RANK_USER_IDS, 1)
+    assert "1/60" in _embed_text(embed)
+
+
+def test_overview_breakdown_shows_night_and_secret_buckets():
+    # user 20 owns no night (0/3) and no secret (0/8) achievements; the secret
+    # bucket folds message + reaction categories together.
+    text = _embed_text(_mod().build_overview_embed(_RANK_HOLDERS, _RANK_USER_IDS, 1))
+    assert "0/3" in text   # 🌙 night
+    assert "0/8" in text   # 🔒 secret (message + reaction, 4 + 4)
+
+
+def test_overview_breakdown_shows_all_five_category_emojis():
+    text = _embed_text(_mod().build_overview_embed(_RANK_HOLDERS, _RANK_USER_IDS, 1))
+    for emoji in ("🚀", "🎙️", "🔥", "🌙", "🔒"):
+        assert emoji in text

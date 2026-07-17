@@ -36,6 +36,7 @@ Assumptions pinned here (flag for the Architect — see report):
 
 import importlib
 import os
+import re as _re
 import tempfile
 
 from types import SimpleNamespace
@@ -569,3 +570,192 @@ async def test_recompute_user_achievements_accepts_defs_param():
     newly = await m.recompute_user_achievements(repo, 7, defs=defs)
     assert "voice_7200000" in {a.id for a in newly}
     await repo.close()
+
+
+# ── /erfolge richer layout (progress bars + LIVE metric values) ─────────────
+#
+# Approved design pins BEHAVIOUR through the slash callback (the internal split
+# — async builder vs pre-fetched dict — stays free for the Architect):
+#
+#   🏆 Achievements — Erkan          5/83
+#   █░░░░░░░░░ 6 %
+#   🚀 Gates 1/60  …/ Nächstes: Alpha Bronze Pilot — 3/5 Läufe
+#   🎙️ Voice 3/6   …/ Nächstes: Veteran — 82h/100h
+#   🔥 Streak 2/6  …/ Nächstes: Monats-Krieger — 18/30 Tage
+#   🌙 Nachtaktiv… / 🔒 Secret 1/8  ???
+#
+# Deterministic seed recipe (see report): unlock the LOWER tiers directly so the
+# category "unlocked" count and the "next" milestone are known, while seeding the
+# raw metric so the LIVE value toward that milestone is known and independent of
+# the owned set:
+#   voice  — unlock voice_3600/36000/180000, set voice_seconds=295200 → next is
+#            Veteran (360000) with live 295200s = 82h toward 100h.
+#   streak — unlock streak_7/14, set max_streak=18 → next Monats-Krieger (30),
+#            live 18/30 Tage.
+#   gate   — unlock total_1, record 3 gate_a entries → next Alpha Bronze Pilot
+#            (a_5), live gate_a count 3/5 Läufe.
+
+
+def _bar_run(text: str, segments: int = 10) -> bool:
+    """True if `text` contains a run of >= `segments` consecutive block/shade
+    chars — i.e. a progress bar. Robust to the fill level (round vs int)."""
+    longest = 0
+    run = 0
+    for ch in text:
+        if ch in "█░":
+            run += 1
+            longest = max(longest, run)
+        else:
+            run = 0
+    return longest >= segments
+
+
+def _field_by_emoji(embed, emoji: str) -> str:
+    """Flattened name+value of the first field whose name contains `emoji`."""
+    for f in getattr(embed, "fields", []):
+        name = str(getattr(f, "name", "") or "")
+        if emoji in name:
+            return name + "\n" + str(getattr(f, "value", "") or "")
+    return ""
+
+
+async def _erfolge_embed(uid: int = 7, display_name: str = "Erkan"):
+    """Seed nothing extra; caller seeds `repo` first. Returns (repo, invoke)
+    where invoke() drives the real /erfolge slash callback and returns the
+    Embed the command sent. Behaviour-level pin — internal builder split free."""
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+    _ach().register_achievement_commands(bot, repo, settings)
+
+    async def invoke():
+        interaction = MagicMock()
+        interaction.user = SimpleNamespace(id=uid, display_name=display_name,
+                                           send=AsyncMock(), mention=f"<@{uid}>")
+        interaction.response = MagicMock()
+        interaction.response.send_message = AsyncMock()
+        interaction.followup = MagicMock()
+        interaction.followup.send = AsyncMock()
+        cmd = bot.tree.get_command("erfolge")
+        await cmd.callback(interaction)
+        for mock in (interaction.response.send_message, interaction.followup.send):
+            for call in mock.await_args_list:
+                embed = call.kwargs.get("embed")
+                if embed is not None:
+                    return embed
+        raise AssertionError("erfolge sent no embed")
+
+    return repo, invoke
+
+
+async def _seed_erfolge_default(repo, uid: int = 7):
+    """Two live-value categories (voice hours + streak days) + a gate Läufe
+    category, with a deterministic owned set → overall 5/83."""
+    await repo.add_activity(uid, "voice_seconds", 295200)          # 82h live
+    for aid in ("voice_3600", "voice_36000", "voice_180000"):
+        await repo.unlock_achievement(uid, aid)                    # → next Veteran
+    await repo.set_streak(uid, current_streak=18,
+                          last_active_date="2026-07-13", max_streak=18)
+    for aid in ("streak_7", "streak_14"):
+        await repo.unlock_achievement(uid, aid)                    # → next Monats-Krieger
+
+
+async def test_erfolge_header_shows_count_bar_and_percent():
+    # Header summary line: overall count/total (preserved), a 10-segment bar
+    # (new) and the completion percent (new). round(5/83*100) == 6 (int() too).
+    repo, invoke = await _erfolge_embed()
+    await _seed_erfolge_default(repo)
+    embed = await invoke()
+    desc = str(embed.description)
+    assert "5/83" in desc                                    # preserved invariant
+    assert _bar_run(desc), "header must render a 10-segment █/░ progress bar"
+    assert _re.search(r"6\s*%", desc), "header must show the completion percent"
+    await repo.close()
+
+
+async def test_erfolge_voice_field_shows_count_next_and_live_hours():
+    # Voice line: unlocked/total (3/6, preserved), next title (Veteran,
+    # preserved) and the LIVE value rendered in HOURS (new): voice_seconds=295200
+    # → 82h toward Veteran (360000 → 100h).
+    repo, invoke = await _erfolge_embed()
+    await _seed_erfolge_default(repo)
+    embed = await invoke()
+    voice = _field_by_emoji(embed, "🎙️")
+    assert "3/6" in voice          # 3 voice tiers of 6 unlocked (preserved)
+    assert "Veteran" in voice      # next milestone title (preserved)
+    assert "82h" in voice and "100h" in voice   # live hours (new)
+    await repo.close()
+
+
+async def test_erfolge_category_field_shows_a_progress_bar():
+    # New layout: every category field carries a progress bar (shown via voice).
+    repo, invoke = await _erfolge_embed()
+    await _seed_erfolge_default(repo)
+    embed = await invoke()
+    assert _bar_run(_field_by_emoji(embed, "🎙️")), \
+        "each category field must render a progress bar"
+    await repo.close()
+
+
+async def test_erfolge_streak_field_shows_next_title_and_live_days():
+    # Streak line: next title (preserved) + LIVE days toward it (new).
+    # max_streak=18 toward Monats-Krieger (30) → "18/30 Tage".
+    repo, invoke = await _erfolge_embed()
+    await _seed_erfolge_default(repo)
+    embed = await invoke()
+    streak = _field_by_emoji(embed, "🔥")
+    assert "Monats-Krieger" in streak   # next title (preserved)
+    assert "18/30" in streak            # live days (new)
+    assert "Tage" in streak             # unit (new)
+    await repo.close()
+
+
+async def test_erfolge_gate_field_shows_live_runs_with_laeufe_unit():
+    # Gate metrics render live counts in "Läufe": total_1 owned + 3 gate_a
+    # entries → next Alpha Bronze Pilot (a_5), live 3/5 Läufe.
+    repo, invoke = await _erfolge_embed()
+    await repo.unlock_achievement(7, "total_1")
+    for cost in (100, 200, 300):
+        await repo.add_gate_entry("a", cost, 7, "u")
+    embed = await invoke()
+    gate = _field_by_emoji(embed, "🚀")
+    assert "3/5" in gate      # live gate_a count toward a_5 threshold (new)
+    assert "Läufe" in gate    # gate unit (new)
+    await repo.close()
+
+
+async def test_erfolge_completed_category_shows_alle_freigeschaltet_with_bar():
+    # A fully-unlocked category keeps "Alle freigeschaltet" (preserved) and, in
+    # the new layout, still renders a (full) progress bar.
+    repo, invoke = await _erfolge_embed()
+    for thr in (3600, 36000, 180000, 360000, 1800000, 3600000):
+        await repo.unlock_achievement(7, f"voice_{thr}")   # all 6 voice tiers
+    embed = await invoke()
+    voice = _field_by_emoji(embed, "🎙️")
+    assert "Alle freigeschaltet" in voice   # preserved invariant
+    assert _bar_run(voice), "completed category still renders a bar"   # new
+    await repo.close()
+
+
+async def test_erfolge_secret_row_shows_count_teaser_and_hides_titles():
+    # Secret row: count/total (1/8, preserved), a "???" teaser (new) and NEVER
+    # the secret titles (security invariant preserved).
+    repo, invoke = await _erfolge_embed()
+    await repo.unlock_achievement(7, "msg_1000")   # one secret unlocked of 8
+    embed = await invoke()
+    secret = _field_by_emoji(embed, "🔒")
+    assert "1/8" in secret       # count/total (preserved)
+    assert "???" in secret       # teaser (new)
+    flat = _collect_text_of_embed(embed)
+    assert "Tastatur-Krieger" not in flat   # msg_1000 title never revealed
+    assert "Emoji-Fan" not in flat          # reaction_100 title never revealed
+    await repo.close()
+
+
+def _collect_text_of_embed(embed) -> str:
+    parts = [str(getattr(embed, "title", "") or ""),
+             str(getattr(embed, "description", "") or "")]
+    for f in getattr(embed, "fields", []):
+        parts.append(str(getattr(f, "name", "") or ""))
+        parts.append(str(getattr(f, "value", "") or ""))
+    return "\n".join(parts)
