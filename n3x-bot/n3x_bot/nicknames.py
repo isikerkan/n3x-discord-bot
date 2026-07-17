@@ -10,6 +10,12 @@ guards, delegates the decision, and edits the member only when required.
 from n3x_bot.config import Settings
 
 
+def strip_prefix(display_name: str, prefix_str: str) -> str:
+    if display_name.startswith(prefix_str):
+        return display_name[len(prefix_str):].lstrip()
+    return display_name
+
+
 def desired_nick(display_name: str, has_role: bool, prefix_str: str) -> str | None:
     if has_role:
         if display_name.startswith(prefix_str):

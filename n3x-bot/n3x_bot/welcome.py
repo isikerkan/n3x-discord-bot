@@ -8,6 +8,7 @@ from PIL import Image, ImageDraw, ImageFont
 from n3x_bot.admin import app_is_admin
 from n3x_bot.cards import _font_bytes
 from n3x_bot.config import Settings
+from n3x_bot.nicknames import strip_prefix
 
 _FONT_SIZE_LINE1 = 42
 _FONT_SIZE_LINE2 = 72
@@ -68,12 +69,6 @@ def render_welcome_card(display_name: str) -> bytes:
     buf = BytesIO()
     bg.save(buf, format="PNG")
     return buf.getvalue()
-
-
-def strip_prefix(display_name: str, prefix_str: str) -> str:
-    if display_name.startswith(prefix_str):
-        return display_name[len(prefix_str):].lstrip()
-    return display_name
 
 
 async def send_welcome_card(bot, settings: Settings, member) -> bool:

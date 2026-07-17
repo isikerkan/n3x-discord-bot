@@ -8,6 +8,7 @@ from PIL import Image, ImageDraw, ImageFont
 from n3x_bot.achievements import Achievement, GATE_NAMES
 from n3x_bot.config import Settings
 from n3x_bot.format import format_number
+from n3x_bot.nicknames import strip_prefix
 
 _AVATAR_SIZE = 455
 _AVATAR_POS = (-70, None)  # x fixed; y computed from bg height at render time
@@ -223,7 +224,8 @@ async def announce_achievements(bot, settings: Settings, member,
             highest_per_metric[ach.metric] = ach
 
     for ach in highest_per_metric.values():
-        title, subtitle, footer = card_texts(ach, member.display_name)
+        title, subtitle, footer = card_texts(
+            ach, strip_prefix(member.display_name, settings.prefix_str))
         png = render_achievement_card(avatar_bytes, title, subtitle, footer,
                                       tier_color(ach))
 
