@@ -39,6 +39,7 @@ import os
 import tempfile
 from datetime import datetime, timedelta
 from types import SimpleNamespace
+from n3x_bot.achievement_defs import AchievementDefs as _AchievementDefs
 from unittest.mock import AsyncMock, MagicMock
 from zoneinfo import ZoneInfo
 
@@ -204,6 +205,7 @@ async def test_apply_grants_new_role_and_revokes_lower_held_role():
     settings = _settings(
         voice_achievement_roles="voice_3600:901,voice_36000:902,voice_180000:903")
     bot = MagicMock()
+    bot.achievement_defs = _AchievementDefs()
     # member currently holds the lower tier role 901; 902/903 resolvable.
     member = _member(held_role_ids=(901,), known_role_ids=(901, 902, 903))
 
@@ -222,6 +224,7 @@ async def test_apply_does_not_remove_unheld_mapped_roles():
     settings = _settings(
         voice_achievement_roles="voice_3600:901,voice_36000:902,voice_180000:903")
     bot = MagicMock()
+    bot.achievement_defs = _AchievementDefs()
     # member holds NONE of the mapped roles yet.
     member = _member(held_role_ids=(), known_role_ids=(901, 902, 903))
 
@@ -237,6 +240,7 @@ async def test_apply_is_noop_for_non_voice_unlock():
     settings = _settings(
         voice_achievement_roles="voice_3600:901,voice_36000:902")
     bot = MagicMock()
+    bot.achievement_defs = _AchievementDefs()
     member = _member(held_role_ids=(901,), known_role_ids=(901, 902))
 
     await _mod().apply_voice_roles(bot, settings, member, [_ach("msg_1000")])
@@ -248,6 +252,7 @@ async def test_apply_is_noop_for_non_voice_unlock():
 async def test_apply_is_noop_when_role_map_empty():
     settings = _settings(voice_achievement_roles="")
     bot = MagicMock()
+    bot.achievement_defs = _AchievementDefs()
     member = _member(held_role_ids=(901,), known_role_ids=(901,))
 
     await _mod().apply_voice_roles(bot, settings, member, [_ach("voice_36000")])
@@ -259,6 +264,7 @@ async def test_apply_is_noop_when_role_map_empty():
 async def test_apply_is_best_effort_when_add_roles_raises():
     settings = _settings(voice_achievement_roles="voice_36000:902")
     bot = MagicMock()
+    bot.achievement_defs = _AchievementDefs()
     member = _member(held_role_ids=(), known_role_ids=(902,))
     member.add_roles = AsyncMock(side_effect=RuntimeError("missing perms"))
 
@@ -307,6 +313,7 @@ async def test_flush_crossing_voice_tier_grants_mapped_role_end_to_end():
 
     t0 = datetime(2026, 7, 13, 20, 0, tzinfo=ZoneInfo(settings.timezone))
     bot = MagicMock()
+    bot.achievement_defs = _AchievementDefs()
     bot.voice_lock = asyncio.Lock()
     bot.voice_join_times = {7: t0}
     bot.n3x_settings = settings

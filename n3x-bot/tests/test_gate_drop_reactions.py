@@ -651,7 +651,7 @@ async def test_store_invokes_post_processing(monkeypatch):
     announce_rec = AsyncMock()
     checked = []
 
-    async def _tracking_check(_repo, user_id, category):
+    async def _tracking_check(_repo, user_id, category, defs=None):
         checked.append(category)
         return []
 

@@ -16,7 +16,7 @@ Two surfaces are exercised here:
 Assumptions pinned here (flag for the Architect):
   * metric names: "voice_seconds", "messages", "reactions".
   * streak/night dict shapes carry ISO date STRINGS (matching the repo).
-  * ``record_message_activity(repo, settings, member_id, now)`` — one helper
+  * ``record_message_activity(bot, repo, settings, member_id, now)`` — one helper
     that does message +1 / streak / night, with ``now`` injected (tz-aware).
   * ``handle_voice_state_update(bot, repo, settings, member, before, after, now)``.
   * ``handle_activity_reaction(bot, repo, settings, payload)``.
@@ -46,6 +46,13 @@ BASE_SETTINGS_KWARGS = dict(
     _env_prefix="NONEXISTENT_",
 )
 
+
+def _defs_bot():
+    """Minimal bot stand-in carrying the code-default achievement resolver
+    (record_message_activity reads bot.achievement_defs for live defs)."""
+    from types import SimpleNamespace
+    from n3x_bot.achievement_defs import AchievementDefs
+    return SimpleNamespace(achievement_defs=AchievementDefs())
 
 def _settings(**overrides) -> Settings:
     kwargs = dict(BASE_SETTINGS_KWARGS)
@@ -239,7 +246,7 @@ async def test_record_message_activity_increments_message_count():
     repo = await _flatfile_repo()
     settings = _settings()
     now = datetime(2026, 7, 13, 12, 0, tzinfo=ZoneInfo(settings.timezone))
-    await act.record_message_activity(repo, settings, 7, now)
+    await act.record_message_activity(_defs_bot(), repo, settings, 7, now)
     assert await repo.get_activity(7, "messages") == 1
     await repo.close()
 
@@ -249,7 +256,7 @@ async def test_record_message_activity_starts_streak_for_today():
     repo = await _flatfile_repo()
     settings = _settings()
     now = datetime(2026, 7, 13, 12, 0, tzinfo=ZoneInfo(settings.timezone))
-    await act.record_message_activity(repo, settings, 7, now)
+    await act.record_message_activity(_defs_bot(), repo, settings, 7, now)
     assert await repo.get_streak(7) == {
         "current_streak": 1, "last_active_date": "2026-07-13", "max_streak": 1}
     await repo.close()
@@ -260,7 +267,7 @@ async def test_record_message_activity_counts_night_inside_window():
     repo = await _flatfile_repo()
     settings = _settings()
     now = datetime(2026, 7, 13, 2, 0, tzinfo=ZoneInfo(settings.timezone))
-    await act.record_message_activity(repo, settings, 7, now)
+    await act.record_message_activity(_defs_bot(), repo, settings, 7, now)
     night = await repo.get_night(7)
     assert night == {"night_count": 1, "last_night_date": "2026-07-13"}
     await repo.close()
@@ -271,7 +278,7 @@ async def test_record_message_activity_skips_night_outside_window():
     repo = await _flatfile_repo()
     settings = _settings()
     now = datetime(2026, 7, 13, 12, 0, tzinfo=ZoneInfo(settings.timezone))
-    await act.record_message_activity(repo, settings, 7, now)
+    await act.record_message_activity(_defs_bot(), repo, settings, 7, now)
     assert await repo.get_night(7) is None
     await repo.close()
 
@@ -529,7 +536,7 @@ async def test_message_rechecks_streak_night_only_when_they_change(monkeypatch):
 
     checked: list[str] = []
 
-    async def _spy(_repo, _member_id, metric):
+    async def _spy(_repo, _member_id, metric, defs=None):
         checked.append(metric)
         return []
 
@@ -537,13 +544,13 @@ async def test_message_rechecks_streak_night_only_when_they_change(monkeypatch):
 
     # night-window instant so both streak and night can move on the first message
     now = datetime(2026, 7, 13, 2, 0, tzinfo=ZoneInfo(settings.timezone))
-    await act.record_message_activity(repo, settings, 7, now)
+    await act.record_message_activity(_defs_bot(), repo, settings, 7, now)
     # first message: streak starts (change) + night counted (change) + messages
     assert checked == ["messages", "streak", "night"]
 
     checked.clear()
     later = now + timedelta(minutes=1)  # same day, same night window
-    await act.record_message_activity(repo, settings, 7, later)
+    await act.record_message_activity(_defs_bot(), repo, settings, 7, later)
     # second same-day message: only the message counter moved
     assert checked == ["messages"]
     await repo.close()

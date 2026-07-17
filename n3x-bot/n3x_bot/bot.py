@@ -31,6 +31,7 @@ from n3x_bot.achievements import (
 from n3x_bot.cards import announce_achievements
 from n3x_bot.config import Settings
 from n3x_bot.config_commands import register_config_commands
+from n3x_bot.achievement_commands import register_achievement_def_commands
 from n3x_bot.achievement_defs import AchievementDefs
 from n3x_bot.content import ContentTexts
 from n3x_bot.content_commands import register_content_commands
@@ -123,6 +124,7 @@ def build_bot(settings: Settings, repo: StatsRepository) -> commands.Bot:
     register_content_commands(bot, repo, settings)
     register_activity(bot, repo, settings)
     register_achievement_commands(bot, repo, settings)
+    register_achievement_def_commands(bot, repo, settings)
     register_overview_and_sync_commands(bot, repo, settings)
     register_kodex_commands(bot, repo, settings)
     register_welcome_commands(bot, settings)
@@ -150,7 +152,8 @@ def register_overview_and_sync_commands(bot, repo: StatsRepository,
                     "❌ Keine Berechtigung.", ephemeral=True)
                 return
             await interaction.response.defer(ephemeral=True)
-            summary = await sync_all_achievements(repo)
+            summary = await sync_all_achievements(
+                repo, defs=bot.achievement_defs.all())
             await interaction.followup.send(
                 f"✅ Sync: {summary['users_processed']} Nutzer, "
                 f"{summary['achievements_added']} neue Achievements.",
@@ -740,9 +743,12 @@ async def handle_gate_input_message(bot, repo: StatsRepository, settings: Settin
             await update_gate_chart(bot, repo, settings, gate_type)
         except Exception:
             pass
-        newly = (await check_achievements(repo, message.author.id, f"gate_{gate_type}")
-                 + await check_achievements(repo, message.author.id, "gate_total")
-                 + await check_achievements(repo, message.author.id, "gate_cost_total"))
+        newly = (await check_achievements(repo, message.author.id, f"gate_{gate_type}",
+                                          defs=bot.achievement_defs.all())
+                 + await check_achievements(repo, message.author.id, "gate_total",
+                                            defs=bot.achievement_defs.all())
+                 + await check_achievements(repo, message.author.id, "gate_cost_total",
+                                            defs=bot.achievement_defs.all()))
         if newly:
             try:
                 await announce_achievements(bot, settings, message.author, newly)
@@ -831,9 +837,12 @@ async def handle_gate_drop_confirmation(bot, repo: StatsRepository,
         except Exception:
             pass
         member = getattr(payload, "member", None)
-        newly = (await check_achievements(repo, user_id, f"gate_{gate_type}")
-                 + await check_achievements(repo, user_id, "gate_total")
-                 + await check_achievements(repo, user_id, "gate_cost_total"))
+        newly = (await check_achievements(repo, user_id, f"gate_{gate_type}",
+                                          defs=bot.achievement_defs.all())
+                 + await check_achievements(repo, user_id, "gate_total",
+                                            defs=bot.achievement_defs.all())
+                 + await check_achievements(repo, user_id, "gate_cost_total",
+                                            defs=bot.achievement_defs.all()))
         if newly:
             try:
                 await announce_achievements(bot, settings, member, newly)
@@ -1047,7 +1056,7 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
             return
         author = message.author
         if not getattr(author, "bot", False) and getattr(author, "id", None) is not None:
-            newly = await record_message_activity(repo, settings, author.id,
+            newly = await record_message_activity(bot, repo, settings, author.id,
                                                   now_local(settings))
             if newly:
                 try:
