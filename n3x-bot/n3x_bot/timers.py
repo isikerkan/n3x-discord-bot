@@ -27,8 +27,11 @@ def build_timer_overview_embed(timers: dict[str, datetime],
     ordered = sorted(timers.items(), key=lambda kv: kv[1])
     lines = []
     for map_name, end_time in ordered:
-        remaining = max(0, int((end_time - now).total_seconds() // 60))
-        lines.append(f"📍 **{map_name}** — {remaining} Min")
+        # Discord relative timestamp: the client renders <t:unix:R> as a live
+        # countdown ("in 24 Minuten") that ticks without any bot edits — the
+        # 30s loop only purges expired rows; it never needs to repaint numbers.
+        unix = int(end_time.timestamp())
+        lines.append(f"📍 **{map_name}** — endet <t:{unix}:R>")
     embed.description = "\n".join(lines)
     return embed
 
