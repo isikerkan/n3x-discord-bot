@@ -211,79 +211,88 @@ async def _send_rank(bot, settings, rank_key: str, text: str):
 
 async def register_stat_commands(bot, repo: StatsRepository, settings: Settings):
     for stat in await repo.list_stats():
-        if stat.targeted:
-            _add_targeted_stat_command(bot, repo, settings, stat.key)
-        else:
-            _add_stat_command(bot, repo, settings, stat.key)
+        # Guard per-stat: a single invalid key (e.g. an orphan row from the v3
+        # flatfile→SQLite migration) makes app_commands.Command(name=key) raise.
+        # Skip+log the bad key so it can't abort on_ready and take down startup.
+        try:
+            if stat.targeted:
+                _add_targeted_stat_command(bot, repo, settings, stat.key)
+            else:
+                _add_stat_command(bot, repo, settings, stat.key)
+        except Exception:
+            log.exception("failed to register stat command for key %r; skipping",
+                          stat.key)
 
-    async def _rank(ctx):
-        data = await repo.get_user_stats(ctx.author.id)
-        if not data:
-            text = (f"📊 **Command-Ranking von {ctx.author.display_name}**\n\n"
-                    "Du hast bisher noch keine Befehle genutzt!")
-        else:
-            ordered = sorted(data.items(), key=lambda x: x[1], reverse=True)
-            emojis = ["🥇", "🥈", "🥉"]
-            text = f"📊 **Command-Ranking von {ctx.author.display_name}**\n\n"
-            for i, (cmd, count) in enumerate(ordered):
-                pref = emojis[i] if i < 3 else f"{i+1}."
-                text += f"{pref} !{cmd:<10} {count}\n"
-        await _send_rank(bot, settings, f"rank_{ctx.author.id}", text)
+    if bot.tree.get_command("rank") is None:
+        async def _rank_cmd(interaction: discord.Interaction):
+            data = await repo.get_user_stats(interaction.user.id)
+            if not data:
+                text = (f"📊 **Command-Ranking von {interaction.user.display_name}**\n\n"
+                        "Du hast bisher noch keine Befehle genutzt!")
+            else:
+                ordered = sorted(data.items(), key=lambda x: x[1], reverse=True)
+                emojis = ["🥇", "🥈", "🥉"]
+                text = f"📊 **Command-Ranking von {interaction.user.display_name}**\n\n"
+                for i, (cmd, count) in enumerate(ordered):
+                    pref = emojis[i] if i < 3 else f"{i+1}."
+                    text += f"{pref} !{cmd:<10} {count}\n"
+            await interaction.response.send_message(text)
 
-    if bot.get_command("rank") is None:
-        bot.add_command(commands.Command(_rank, name="rank"))
+        bot.tree.add_command(app_commands.Command(
+            name="rank", description="Zeigt dein Command-Ranking.",
+            callback=_rank_cmd))
 
 
 def _add_stat_command(bot, repo, settings, key: str):
-    if bot.get_command(key) is not None:
+    if bot.tree.get_command(key) is not None:
         return
 
-    @commands.cooldown(1, 20, commands.BucketType.user)
-    async def _cmd(ctx, _key=key):
-        text = await build_output(repo, _key, ctx.author.id, ctx.author.display_name)
-        await _send_or_update(bot, repo, settings, _key, text)
+    @app_commands.checks.cooldown(1, 20)
+    async def _cmd(interaction: discord.Interaction):
+        text = await build_output(repo, key, interaction.user.id,
+                                  interaction.user.display_name)
+        await interaction.response.send_message(text)
 
-    bot.add_command(commands.Command(_cmd, name=key))
+    bot.tree.add_command(app_commands.Command(
+        name=key, description=f"Zählt {key}.", callback=_cmd))
 
 
 def _add_targeted_stat_command(bot, repo, settings, key: str):
-    """Register a targeted stat command.
+    """Register a targeted stat command as a slash app command.
 
     Ordinary targeted stats (e.g. `smart`, `crash`) take an explicit
-    `member: discord.Member` argument. `HOME_KEY` is special-cased: it has
+    `member: discord.Member` option. `HOME_KEY` is special-cased: it has
     a fixed target (`settings.julez_id`) and takes no argument. If
     `settings.julez_id` is unset (0/falsy), `home` is skipped entirely
     rather than registering a broken command with no valid target.
     """
-    if bot.get_command(key) is not None:
+    if bot.tree.get_command(key) is not None:
         return
 
     if key == HOME_KEY:
         if not settings.julez_id:
             return
 
-        @commands.cooldown(1, 20, commands.BucketType.user)
-        async def _home_cmd(ctx, _key=key):
+        @app_commands.checks.cooldown(1, 20)
+        async def _home_cmd(interaction: discord.Interaction):
             text = await build_target_output(
-                repo, _key, ctx.author.id, ctx.author.display_name,
+                repo, key, interaction.user.id, interaction.user.display_name,
                 settings.julez_id, f"<@{settings.julez_id}>")
-            await _send_or_update(bot, repo, settings, _key, text)
+            await interaction.response.send_message(text)
 
-        bot.add_command(commands.Command(_home_cmd, name=key))
+        bot.tree.add_command(app_commands.Command(
+            name=key, description=f"Zählt {key}.", callback=_home_cmd))
         return
 
-    @commands.cooldown(1, 20, commands.BucketType.user)
-    async def _tcmd(ctx, member: discord.Member, _key=key):
+    @app_commands.checks.cooldown(1, 20)
+    async def _tcmd(interaction: discord.Interaction, member: discord.Member):
         text = await build_target_output(
-            repo, _key, ctx.author.id, ctx.author.display_name,
+            repo, key, interaction.user.id, interaction.user.display_name,
             member.id, member.mention)
-        # Per-target output isn't a single row `stat_last_post` can track
-        # (many possible targets per stat), so use in-memory tracking keyed
-        # by "<stat_key>_<member_id>", same pattern as `_send_rank`.
-        await _send_ephemeral(bot, settings, bot._target_last_posts,
-                              f"{_key}_{member.id}", text)
+        await interaction.response.send_message(text)
 
-    bot.add_command(commands.Command(_tcmd, name=key))
+    bot.tree.add_command(app_commands.Command(
+        name=key, description=f"Zählt {key}.", callback=_tcmd))
 
 
 # ── gate tracker ─────────────────────────────────────────────────────────────
@@ -867,6 +876,10 @@ async def _announce_records(bot, settings: Settings, gate_type: str,
         pass
 
 
+async def resync_stat_commands(bot) -> None:
+    await sync_commands_to_guilds(bot)
+
+
 async def sync_commands_to_guilds(bot) -> None:
     if not bot.guilds:
         return
@@ -878,15 +891,22 @@ async def sync_commands_to_guilds(bot) -> None:
         except Exception:
             log.exception("failed to sync commands to guild %s",
                           getattr(guild, "id", guild))
-    # Empty the GLOBAL scope so previously-published global commands (e.g. the
-    # historically-published global /admin) don't double-list alongside the
-    # guild-scoped copies. This runs AFTER the per-guild copy_global_to reads
-    # the in-memory global tree, so it doesn't wipe what we just copied.
+    # Empty Discord's published GLOBAL scope so previously-published global
+    # commands (e.g. the historically-published global /admin) don't double-list
+    # alongside the guild-scoped copies — WITHOUT destroying the in-memory global
+    # tree. clear_commands(guild=None) wipes the in-memory global command set
+    # permanently, so a later re-sync (admin CRUD via resync_stat_commands) would
+    # copy an almost-empty tree into each guild and blow every command away until
+    # a full restart. Snapshot the global commands, publish an empty global
+    # scope, then RE-ADD them so future copy_global_to still sees the full set.
     try:
+        saved = list(bot.tree.get_commands())
         bot.tree.clear_commands(guild=None)
         await bot.tree.sync()
+        for cmd in saved:
+            bot.tree.add_command(cmd)
     except Exception:
-        log.exception("failed to clear global commands")
+        log.exception("failed to reset global command scope")
 
 
 def _wire_events(bot, settings: Settings, repo: StatsRepository):

@@ -64,13 +64,17 @@ async def _flatfile_repo() -> JsonRepository:
 # ── fakes ────────────────────────────────────────────────────────────────────
 
 class _FakeTree:
-    """Minimal stand-in for ``bot.tree`` exposing the three calls the helper
-    uses. ``clear_commands`` and ``copy_global_to`` are sync (matches
-    discord.py); ``sync`` is async."""
+    """Minimal stand-in for ``bot.tree`` exposing the calls the helper uses.
+    ``clear_commands``, ``copy_global_to``, ``get_commands`` and ``add_command``
+    are sync (matches discord.py); ``sync`` is async. ``get_commands`` returns
+    an empty snapshot by default so the trailing global reset is a no-op here —
+    the real snapshot/restore behaviour is pinned by the recording-tree test."""
 
     def __init__(self, sync_side_effect=None):
         self.clear_commands = MagicMock()
         self.copy_global_to = MagicMock()
+        self.get_commands = MagicMock(return_value=[])
+        self.add_command = MagicMock()
         self.sync = AsyncMock(side_effect=sync_side_effect)
 
 
@@ -183,6 +187,79 @@ async def test_sync_commands_to_guilds_is_noop_with_no_guilds():
     bot.tree.clear_commands.assert_not_called()
     bot.tree.copy_global_to.assert_not_called()
     bot.tree.sync.assert_not_awaited()
+
+
+class _RecordingTree:
+    """A fake tree that models the in-memory global command set and records what
+    gets *published* to each scope, so we can assert real behaviour rather than
+    just call order. Mirrors the discord.py surface the helper touches:
+    ``get_commands()`` / ``get_commands(guild=g)``, ``clear_commands(guild=…)``,
+    ``copy_global_to(guild=g)`` and the async ``sync(guild=…)``."""
+
+    def __init__(self):
+        self._global = []            # in-memory global (guild=None) commands
+        self._per_guild = {}         # gid -> in-memory guild-scoped commands
+        self.published = {}          # scope key (gid or None) -> published names
+
+    def add_command(self, cmd, *, guild=None):
+        if guild is None:
+            self._global.append(cmd)
+        else:
+            self._per_guild.setdefault(guild.id, []).append(cmd)
+
+    def get_commands(self, *, guild=None):
+        if guild is None:
+            return list(self._global)
+        return list(self._per_guild.get(guild.id, []))
+
+    def clear_commands(self, *, guild=None):
+        if guild is None:
+            self._global = []
+        else:
+            self._per_guild[guild.id] = []
+
+    def copy_global_to(self, *, guild):
+        self._per_guild[guild.id] = list(self._global)
+
+    async def sync(self, *, guild=None):
+        key = guild.id if guild is not None else None
+        cmds = self._global if guild is None else self._per_guild.get(guild.id, [])
+        self.published[key] = [c.name for c in cmds]
+        return []
+
+
+async def test_sync_publishes_full_set_and_leaves_global_tree_intact():
+    # This is the regression that a call-order-only test misses: after
+    # sync_commands_to_guilds the guild must receive the FULL command set, and
+    # the in-memory global tree must survive so a SECOND sync (as triggered by
+    # admin CRUD via resync_stat_commands) still publishes everything again.
+    from n3x_bot.bot import sync_commands_to_guilds
+
+    tree = _RecordingTree()
+    for name in ("admin", "gate", "config", "content", "overview", "rank"):
+        tree.add_command(SimpleNamespace(name=name))
+
+    guild = _FakeGuild(11)
+    bot = SimpleNamespace(tree=tree, guilds=[guild])
+    full = {"admin", "gate", "config", "content", "overview", "rank"}
+
+    await sync_commands_to_guilds(bot)
+
+    # (a) the guild received the full command set…
+    assert set(tree.published[11]) == full
+    # …and the published GLOBAL scope was emptied (no double-listing).
+    assert tree.published[None] == []
+    # (b) the in-memory global tree survived the global reset.
+    assert {c.name for c in tree.get_commands()} == full
+
+    # Simulate an admin CRUD: a new stat is added to the global tree, then a
+    # re-sync fires. The guild must get the full set PLUS the new stat — not
+    # get wiped down to just the newly-added command.
+    tree.add_command(SimpleNamespace(name="newstat"))
+    await sync_commands_to_guilds(bot)
+
+    assert set(tree.published[11]) == full | {"newstat"}
+    assert {c.name for c in tree.get_commands()} == full | {"newstat"}
 
 
 # ── Part A wiring: on_ready invokes the helper (no standalone global sync) ────

@@ -5,6 +5,8 @@ they're unit-testable in isolation (mirroring `build_output`). The `/admin ...`
 slash group is a thin wrapper that gates on `is_admin` and delegates to these
 helpers, wired via `register_admin_commands`.
 """
+import re
+
 from discord import app_commands
 from discord.ext import commands
 
@@ -16,6 +18,20 @@ from n3x_bot.storage.base import StatsRepository
 # of these writes a row but never registers a usable `!<key>` command (the
 # existing command shadows it via `bot.get_command`), so refuse them up front.
 RESERVED_STAT_KEYS = frozenset({"stat", "del", "admin", "rank", "help"})
+
+# A stat key becomes a Discord app-command name (`app_commands.Command(name=key)`),
+# which must be 1-32 chars of lowercase letters, digits, dash or underscore.
+# Validate up front so an invalid key can't write an orphan DB row that never
+# gets a usable command (the Command constructor would otherwise raise AFTER the
+# row is persisted, leaving it unrecoverable except by archive/rm).
+_STAT_KEY_RE = re.compile(r"[a-z0-9_-]{1,32}")
+
+
+def _validate_stat_key(key: str) -> None:
+    if not _STAT_KEY_RE.fullmatch(key):
+        raise ValueError(
+            f"Ungültiger Stat-Key {key!r}: nur Kleinbuchstaben, Ziffern, "
+            "'-' und '_', 1-32 Zeichen erlaubt")
 
 
 def is_admin(member, settings: Settings) -> bool:
@@ -43,6 +59,7 @@ async def admin_create_stat(bot, repo: StatsRepository, settings: Settings,
                             message_name: str | None = None) -> Stat:
     if key in RESERVED_STAT_KEYS:
         raise ValueError(f"stat key {key!r} is reserved")
+    _validate_stat_key(key)
     existing = await repo.get_stat(key)
     if existing is not None and existing.archived_at is None:
         raise ValueError(f"stat {key!r} already exists")
@@ -62,11 +79,12 @@ async def admin_create_stat(bot, repo: StatsRepository, settings: Settings,
 
     # Deferred to break the bot <-> admin import cycle: bot.py imports this
     # module at top level, so admin.py must not import bot at module scope.
-    from n3x_bot.bot import _add_stat_command, _add_targeted_stat_command
+    import n3x_bot.bot as botmod
     if targeted:
-        _add_targeted_stat_command(bot, repo, settings, key)
+        botmod._add_targeted_stat_command(bot, repo, settings, key)
     else:
-        _add_stat_command(bot, repo, settings, key)
+        botmod._add_stat_command(bot, repo, settings, key)
+    await botmod.resync_stat_commands(bot)
     return stat
 
 
@@ -87,13 +105,17 @@ async def admin_edit_stat(bot, repo: StatsRepository, settings: Settings,
 async def admin_archive_stat(bot, repo: StatsRepository, settings: Settings,
                              key: str) -> None:
     await repo.archive_stat(key)
-    bot.remove_command(key)
+    import n3x_bot.bot as botmod
+    bot.tree.remove_command(key)
+    await botmod.resync_stat_commands(bot)
 
 
 async def admin_delete_stat(bot, repo: StatsRepository, settings: Settings,
                             key: str) -> None:
     await repo.delete_stat(key)
-    bot.remove_command(key)
+    import n3x_bot.bot as botmod
+    bot.tree.remove_command(key)
+    await botmod.resync_stat_commands(bot)
 
 
 async def admin_list_stats(repo: StatsRepository,

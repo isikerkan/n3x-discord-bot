@@ -146,7 +146,8 @@ async def test_slash_admin_stat_add_refuses_non_admin_and_mutates_nothing():
     after = {s.key for s in await repo.list_stats()}
 
     assert after == before  # non-admin caused no DB mutation
-    assert bot.get_command("newkey") is None  # and no live command registered
+    assert bot.tree.get_command("newkey") is None  # and no live command registered
+    assert bot.get_command("newkey") is None
     interaction.response.send_message.assert_awaited_once()  # a refusal was sent
     assert interaction.response.send_message.await_args.kwargs.get("ephemeral") is True
 
@@ -166,7 +167,14 @@ async def test_prefix_admin_group_is_not_registered():
 
 # ── admin stat helpers ────────────────────────────────────────────────────
 
-async def test_admin_create_stat_adds_row_and_registers_live_command():
+def _param_names(cmd):
+    """Option names of an app command (Phase 6: stats are app commands)."""
+    return [p.name for p in getattr(cmd, "parameters", [])]
+
+
+async def test_admin_create_stat_adds_row_and_registers_live_tree_command():
+    # Phase 6: the live counter command created on the fly is a SLASH app command
+    # on `bot.tree`, not a prefix command.
     repo = await _flatfile_repo()
     settings = _settings(admin_role_id=42)
     bot = build_bot(settings, repo)
@@ -175,7 +183,8 @@ async def test_admin_create_stat_adds_row_and_registers_live_command():
 
     assert stat.key == "boop"
     assert await repo.get_stat("boop") is not None
-    assert bot.get_command("boop") is not None  # live command, no restart
+    assert bot.tree.get_command("boop") is not None  # live app command, no restart
+    assert bot.get_command("boop") is None           # not on the prefix registry
 
     await repo.close()
 
@@ -188,9 +197,9 @@ async def test_admin_create_targeted_stat_command_takes_member_argument():
     await botmod.admin_create_stat(bot, repo, settings, "poke", "Poke",
                                    targeted=True)
 
-    cmd = bot.get_command("poke")
+    cmd = bot.tree.get_command("poke")
     assert cmd is not None
-    assert "member" in cmd.clean_params  # targeted -> takes a member arg
+    assert "member" in _param_names(cmd)  # targeted -> takes a member option
 
     await repo.close()
 
@@ -202,9 +211,9 @@ async def test_admin_create_non_targeted_stat_command_has_no_member_argument():
 
     await botmod.admin_create_stat(bot, repo, settings, "boop", "Boop")
 
-    cmd = bot.get_command("boop")
+    cmd = bot.tree.get_command("boop")
     assert cmd is not None
-    assert "member" not in cmd.clean_params
+    assert "member" not in _param_names(cmd)
 
     await repo.close()
 
@@ -232,6 +241,51 @@ async def test_admin_create_stat_duplicate_key_raises_value_error():
     # rather than silently appending a duplicate stat row.
     with pytest.raises(ValueError):
         await botmod.admin_create_stat(bot, repo, settings, "tit", "Dup")
+
+    await repo.close()
+
+
+@pytest.mark.parametrize("bad_key", ["Boop", "has space", "a" * 33, "bäd"])
+async def test_admin_create_stat_invalid_key_rejected_without_writing_row(bad_key):
+    # A stat key becomes a Discord app-command name, which must be lowercase
+    # [a-z0-9_-] and 1-32 chars. An invalid key must be refused BEFORE the DB
+    # row is written — otherwise repo.create_stat persists an orphan row and the
+    # later Command(name=key) build raises, leaving an unusable, unrecoverable
+    # stat with no command and no success message.
+    repo = await _flatfile_repo()
+    settings = _settings(admin_role_id=42)
+    bot = build_bot(settings, repo)
+
+    before = {s.key for s in await repo.list_stats()}
+
+    with pytest.raises(ValueError):
+        await botmod.admin_create_stat(bot, repo, settings, bad_key, "Bad")
+
+    after = {s.key for s in await repo.list_stats()}
+    assert after == before                       # no orphan row written
+    assert bot.tree.get_command(bad_key) is None  # no command registered
+
+    await repo.close()
+
+
+async def test_register_stat_commands_skips_invalid_key_without_aborting():
+    # A single invalid key already present in the repo (e.g. an orphan row from
+    # the v3 flatfile→SQLite migration) must not abort register_stat_commands
+    # (which runs inside on_ready) — the bad key is skipped and logged while all
+    # valid stats + the rank command still register.
+    repo = await _flatfile_repo()
+    settings = _settings(admin_role_id=42)
+    bot = build_bot(settings, repo)
+
+    # Inject a bad key at the repo layer, bypassing admin_create_stat's guard,
+    # to simulate a pre-existing invalid row.
+    await repo.create_stat("Bad Key", "X")
+
+    await botmod.register_stat_commands(bot, repo, settings)  # must not raise
+
+    assert bot.tree.get_command("Bad Key") is None   # bad key skipped
+    assert bot.tree.get_command("rank") is not None   # valid registration continued
+    assert bot.tree.get_command("tit") is not None    # a seeded stat still registered
 
     await repo.close()
 
@@ -265,30 +319,31 @@ async def test_admin_edit_stat_relinks_message():
     await repo.close()
 
 
-async def test_admin_archive_stat_unregisters_live_command():
+async def test_admin_archive_stat_unregisters_live_tree_command():
     repo = await _flatfile_repo()
     settings = _settings(admin_role_id=42)
     bot = build_bot(settings, repo)
     await botmod.admin_create_stat(bot, repo, settings, "boop", "Boop")
-    assert bot.get_command("boop") is not None
+    assert bot.tree.get_command("boop") is not None
 
     await botmod.admin_archive_stat(bot, repo, settings, "boop")
 
-    assert bot.get_command("boop") is None  # command removed
+    assert bot.tree.get_command("boop") is None  # app command removed from tree
     assert (await repo.get_stat("boop")).archived_at is not None  # archived, kept
 
     await repo.close()
 
 
-async def test_admin_delete_stat_unregisters_command_and_removes_row():
+async def test_admin_delete_stat_unregisters_tree_command_and_removes_row():
     repo = await _flatfile_repo()
     settings = _settings(admin_role_id=42)
     bot = build_bot(settings, repo)
     await botmod.admin_create_stat(bot, repo, settings, "boop", "Boop")
+    assert bot.tree.get_command("boop") is not None  # live app command exists first
 
     await botmod.admin_delete_stat(bot, repo, settings, "boop")
 
-    assert bot.get_command("boop") is None
+    assert bot.tree.get_command("boop") is None
     assert await repo.get_stat("boop") is None
 
     await repo.close()
@@ -462,14 +517,14 @@ async def test_admin_create_stat_reactivates_archived_key():
     await botmod.admin_create_stat(bot, repo, settings, "boop", "Boop")
     await botmod.admin_archive_stat(bot, repo, settings, "boop")
     assert (await repo.get_stat("boop")).archived_at is not None
-    assert bot.get_command("boop") is None
+    assert bot.tree.get_command("boop") is None
 
     stat = await botmod.admin_create_stat(bot, repo, settings, "boop", "Boop Reborn")
 
     assert stat.key == "boop"
     assert (await repo.get_stat("boop")).archived_at is None   # reactivated
     assert (await repo.get_stat("boop")).name == "Boop Reborn"  # new name applied
-    assert bot.get_command("boop") is not None                 # command re-registered
+    assert bot.tree.get_command("boop") is not None            # command re-registered
 
     await repo.close()
 
@@ -535,46 +590,56 @@ async def test_is_admin_false_for_member_without_roles_attribute():
 # ── dynamic stat CRUD driven through the SLASH callbacks ──────────────────
 #
 # Phase 4 removed the prefix `!admin` group; the `/admin stat ...` callbacks are
-# now the only way an admin mutates the stat registry. These pin that the slash
-# add/rm/archive still (un)register the live PREFIX counter command (stats stay
-# prefix commands until Phase 6) exactly as the old prefix path did.
+# the only way an admin mutates the stat registry. Phase 6 makes the per-stat
+# counters SLASH app commands on `bot.tree`, so the add/rm/archive callbacks now
+# (un)register the live app command AND trigger a guild re-sync (via the module
+# helper `n3x_bot.bot.resync_stat_commands`) so the picker reflects the change.
 
 def _admin_interaction(admin_role_id=42):
     return _fake_interaction(_member(member_id=1, role_ids=(admin_role_id,)))
 
 
-async def test_slash_admin_stat_add_registers_live_prefix_counter():
+async def test_slash_admin_stat_add_registers_live_tree_counter_and_resyncs(monkeypatch):
     repo = await _flatfile_repo()
     settings = _settings(admin_role_id=42)
     bot = build_bot(settings, repo)
     add_cmd = _slash_admin_sub(bot, "stat", "add")
 
+    resync = AsyncMock()
+    monkeypatch.setattr(botmod, "resync_stat_commands", resync, raising=False)
+
     await add_cmd.callback(_admin_interaction(), key="boop", name="Boop")
 
     assert await repo.get_stat("boop") is not None      # row written
-    assert bot.get_command("boop") is not None           # live prefix counter
+    assert bot.tree.get_command("boop") is not None      # live app command on tree
+    assert bot.get_command("boop") is None               # not on prefix
+    resync.assert_awaited()                              # guild re-sync triggered
 
     await repo.close()
 
 
-async def test_slash_admin_stat_rm_unregisters_command_and_removes_row():
+async def test_slash_admin_stat_rm_unregisters_command_and_removes_row(monkeypatch):
     repo = await _flatfile_repo()
     settings = _settings(admin_role_id=42)
     bot = build_bot(settings, repo)
     add_cmd = _slash_admin_sub(bot, "stat", "add")
     rm_cmd = _slash_admin_sub(bot, "stat", "rm")
     await add_cmd.callback(_admin_interaction(), key="boop", name="Boop")
-    assert bot.get_command("boop") is not None
+    assert bot.tree.get_command("boop") is not None
+
+    resync = AsyncMock()
+    monkeypatch.setattr(botmod, "resync_stat_commands", resync, raising=False)
 
     await rm_cmd.callback(_admin_interaction(), key="boop")
 
-    assert bot.get_command("boop") is None
+    assert bot.tree.get_command("boop") is None
     assert await repo.get_stat("boop") is None
+    resync.assert_awaited()  # re-sync triggered on removal
 
     await repo.close()
 
 
-async def test_slash_admin_stat_archive_unregisters_command_and_keeps_row():
+async def test_slash_admin_stat_archive_unregisters_command_and_keeps_row(monkeypatch):
     repo = await _flatfile_repo()
     settings = _settings(admin_role_id=42)
     bot = build_bot(settings, repo)
@@ -582,10 +647,67 @@ async def test_slash_admin_stat_archive_unregisters_command_and_keeps_row():
     archive_cmd = _slash_admin_sub(bot, "stat", "archive")
     await add_cmd.callback(_admin_interaction(), key="boop", name="Boop")
 
+    resync = AsyncMock()
+    monkeypatch.setattr(botmod, "resync_stat_commands", resync, raising=False)
+
     await archive_cmd.callback(_admin_interaction(), key="boop")
 
-    assert bot.get_command("boop") is None
+    assert bot.tree.get_command("boop") is None
     assert (await repo.get_stat("boop")).archived_at is not None
+    resync.assert_awaited()  # re-sync triggered on archive
+
+    await repo.close()
+
+
+# ── re-sync helper is invoked by the CRUD core helpers ────────────────────
+#
+# Phase 6 pins a module-level `n3x_bot.bot.resync_stat_commands(bot)` coroutine
+# that republishes the current tree to the guilds. The stat CRUD helpers must
+# invoke it so a newly added/removed slash command shows up without a restart.
+
+async def test_admin_create_stat_triggers_resync(monkeypatch):
+    repo = await _flatfile_repo()
+    settings = _settings(admin_role_id=42)
+    bot = build_bot(settings, repo)
+
+    resync = AsyncMock()
+    monkeypatch.setattr(botmod, "resync_stat_commands", resync, raising=False)
+
+    await botmod.admin_create_stat(bot, repo, settings, "boop", "Boop")
+
+    resync.assert_awaited()
+
+    await repo.close()
+
+
+async def test_admin_archive_stat_triggers_resync(monkeypatch):
+    repo = await _flatfile_repo()
+    settings = _settings(admin_role_id=42)
+    bot = build_bot(settings, repo)
+    await botmod.admin_create_stat(bot, repo, settings, "boop", "Boop")
+
+    resync = AsyncMock()
+    monkeypatch.setattr(botmod, "resync_stat_commands", resync, raising=False)
+
+    await botmod.admin_archive_stat(bot, repo, settings, "boop")
+
+    resync.assert_awaited()
+
+    await repo.close()
+
+
+async def test_admin_delete_stat_triggers_resync(monkeypatch):
+    repo = await _flatfile_repo()
+    settings = _settings(admin_role_id=42)
+    bot = build_bot(settings, repo)
+    await botmod.admin_create_stat(bot, repo, settings, "boop", "Boop")
+
+    resync = AsyncMock()
+    monkeypatch.setattr(botmod, "resync_stat_commands", resync, raising=False)
+
+    await botmod.admin_delete_stat(bot, repo, settings, "boop")
+
+    resync.assert_awaited()
 
     await repo.close()
 
