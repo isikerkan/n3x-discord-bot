@@ -50,7 +50,9 @@ from n3x_bot.models import render_output
 from n3x_bot.nicknames import enforce_nick
 from n3x_bot.runtime_config import RuntimeConfig
 from n3x_bot.storage.base import GATE_TYPES, StatsRepository
-from n3x_bot.timers import register_timer_commands, start_timer_overview_loop
+from n3x_bot.timers import (
+    register_timer_commands, start_timer_overview_loop, update_timer_overview,
+)
 from n3x_bot.welcome import register_welcome_commands, send_welcome_card
 
 log = logging.getLogger("N3X-Bot")
@@ -492,6 +494,11 @@ async def update_gate_stats_embed(bot, repo: StatsRepository, settings: Settings
     new_msg = await channel.send(embed=embed)
     bot._gate_embed_msg_id = new_msg.id
     await repo.set_channel_message(GATE_STATS_KEY, new_msg.id, channel.id)
+    # Seed the 🔄 reload control so users can force an immediate refresh.
+    try:
+        await new_msg.add_reaction("🔄")
+    except Exception:
+        pass
 
 
 async def update_gate_chart(bot, repo: StatsRepository, settings: Settings,
@@ -932,6 +939,45 @@ async def handle_verlauf_removal(bot, payload) -> None:
     bot._verlauf_msgs.pop(payload.message_id, None)
 
 
+RELOAD_EMOJI = "🔄"
+
+
+async def handle_reload_reaction(bot, repo: StatsRepository, settings: Settings,
+                                 payload) -> None:
+    """🔄 on the live gate-stats or base-timer overview → refresh it now.
+
+    Lets a user force an immediate re-render instead of waiting for the 30s
+    loop / next gate entry. The bot's own seed reaction is ignored; the user's
+    reaction is removed afterwards so it can be clicked again. Best-effort.
+    """
+    if str(payload.emoji) != RELOAD_EMOJI:
+        return
+    if bot.user is not None and payload.user_id == bot.user.id:
+        return
+    rc = bot.runtime_config
+    handled = False
+    if bot._gate_embed_msg_id is not None and \
+            payload.message_id == bot._gate_embed_msg_id:
+        await update_gate_stats_embed(bot, repo, settings)
+        handled = True
+    elif rc.timer_overview_message_id and \
+            payload.message_id == rc.timer_overview_message_id:
+        await update_timer_overview(bot, repo, rc, now_local(settings))
+        handled = True
+    if not handled:
+        return
+    try:
+        channel = bot.get_channel(payload.channel_id)
+        msg = await channel.fetch_message(payload.message_id)
+        member = getattr(payload, "member", None)
+        if member is None and channel is not None and channel.guild is not None:
+            member = channel.guild.get_member(payload.user_id)
+        if member is not None:
+            await msg.remove_reaction(payload.emoji, member)
+    except Exception:
+        pass
+
+
 async def _announce_records(bot, settings: Settings, gate_type: str,
                             changed: set[str], record: dict) -> None:
     if not changed or not bot.runtime_config.milestone_channel_id:
@@ -1160,6 +1206,10 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
             pass
         try:
             await handle_verlauf_removal(bot, payload)
+        except Exception:
+            pass
+        try:
+            await handle_reload_reaction(bot, repo, settings, payload)
         except Exception:
             pass
 

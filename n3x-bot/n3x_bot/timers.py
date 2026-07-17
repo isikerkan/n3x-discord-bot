@@ -63,6 +63,12 @@ async def update_timer_overview(bot, repo: StatsRepository, settings: Settings,
     try:
         msg = await channel.fetch_message(settings.timer_overview_message_id)
         await msg.edit(content=None, embed=embed)
+        # Seed the 🔄 reload control (idempotent — Discord dedups the bot's own
+        # reaction). A user clicking it forces an immediate refresh.
+        try:
+            await msg.add_reaction("🔄")
+        except Exception:
+            pass
     except Exception:
         pass
 
