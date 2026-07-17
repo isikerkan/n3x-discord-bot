@@ -110,9 +110,10 @@ def _fake_gate_message(content: str, *, guild, message_id: int = 7001,
 
 
 def _fake_reaction_payload(*, message_id: int, user_id: int, emoji,
-                           channel_id: int = 777):
+                           channel_id: int = 777, member=None):
     return SimpleNamespace(message_id=message_id, user_id=user_id,
-                           emoji=emoji, channel_id=channel_id, guild_id=1)
+                           emoji=emoji, channel_id=channel_id, guild_id=1,
+                           member=member)
 
 
 async def _seed_input(content, *, guild, message_id=7001, author_id=7,
@@ -139,10 +140,11 @@ async def _seed_input(content, *, guild, message_id=7001, author_id=7,
 
 
 async def _dispatch(bot, repo, settings, *, message_id, user_id, emoji,
-                    channel_id=777):
+                    channel_id=777, member=None):
     from n3x_bot.bot import handle_gate_drop_confirmation
     payload = _fake_reaction_payload(message_id=message_id, user_id=user_id,
-                                     emoji=emoji, channel_id=channel_id)
+                                     emoji=emoji, channel_id=channel_id,
+                                     member=member)
     await handle_gate_drop_confirmation(bot, repo, settings, payload)
 
 
@@ -814,4 +816,43 @@ async def test_dedup_rejected_drop_sends_no_confirmation():
     # ⏳ path: no German confirmation sent to the channel
     assert _confirm_text(getchan, message) is None
 
+    await repo.close()
+
+
+def _member_with_role(role_id):
+    return SimpleNamespace(roles=[SimpleNamespace(id=role_id)])
+
+
+async def test_override_role_can_confirm_another_users_drop():
+    guild = _fake_guild("prom")
+    bot, repo, settings, message, added = await _seed_input(
+        "d 75000", guild=guild, message_id=7401, author_id=7)
+    # reconfigure the override role live
+    await repo.set_runtime_config("stat_override_role_id", "555")
+    await bot.runtime_config.refresh(repo)
+    drop = added[0]  # the :prom: drop icon
+
+    # a DIFFERENT user (id 99) holding the override role clicks it
+    await _dispatch(bot, repo, settings, message_id=7401, user_id=99,
+                    emoji=drop, member=_member_with_role(555))
+
+    rows = await _delta_rows(repo)
+    assert len(rows) == 1
+    assert rows[0]["user_id"] == 7          # stored under the ORIGINAL author
+    assert rows[0]["laser_dropped"] is True
+    await repo.close()
+
+
+async def test_non_author_without_override_role_is_ignored():
+    guild = _fake_guild("prom")
+    bot, repo, settings, message, added = await _seed_input(
+        "d 75000", guild=guild, message_id=7402, author_id=7)
+    await repo.set_runtime_config("stat_override_role_id", "555")
+    await bot.runtime_config.refresh(repo)
+
+    # a different user WITHOUT the override role
+    await _dispatch(bot, repo, settings, message_id=7402, user_id=99,
+                    emoji=added[0], member=_member_with_role(111))
+
+    assert await _delta_rows(repo) == []
     await repo.close()
