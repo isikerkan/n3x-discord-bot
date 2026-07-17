@@ -860,6 +860,20 @@ async def backfill_gate_input(bot, repo: StatsRepository, settings: Settings,
     return processed
 
 
+def _has_stat_override(payload, runtime_config) -> bool:
+    """True if the reactor holds the configured stat-override role.
+
+    Lets a moderator confirm another member's gate-drop reaction. Reads roles
+    off `payload.member` (present on guild reaction events); returns False when
+    no override role is configured or the member/roles are unavailable.
+    """
+    rid = runtime_config.stat_override_role_id
+    if not rid:
+        return False
+    member = getattr(payload, "member", None)
+    return any(r.id == rid for r in getattr(member, "roles", None) or [])
+
+
 async def handle_gate_drop_confirmation(bot, repo: StatsRepository,
                                         settings: Settings, payload) -> None:
     """Store a pending d/e/z/k gate on the author's single drop-icon click.
@@ -889,7 +903,11 @@ async def handle_gate_drop_confirmation(bot, repo: StatsRepository,
     key = _emoji_key(payload.emoji)
     if key not in options:
         return
-    if payload.user_id != pending["user_id"]:
+    # The author may confirm their own gate; a member holding the configured
+    # override role may confirm ANYONE's (the entry is still stored under the
+    # original author from `pending`). The bot's own seed reactions are neither.
+    if payload.user_id != pending["user_id"] and \
+            not _has_stat_override(payload, bot.runtime_config):
         return
     # Claim the pending entry ATOMICALLY before any await: a redelivered event
     # or two quick clicks would otherwise both pass the guards above and each
