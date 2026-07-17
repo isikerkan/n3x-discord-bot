@@ -18,12 +18,16 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "pytest-cov>=5.0",
+    "pytest-xdist>=3.8.0",
 ]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-addopts = "-q"
+# -n auto parallelises across cores (pytest-xdist); combined with the
+# asyncio.sleep no-op in tests/conftest.py this takes the full suite from ~75s
+# to ~15s. Override with `-n0` for a serial run (e.g. debugging / pdb).
+addopts = "-q -n auto"
 
 [build-system]
 requires = ["hatchling"]

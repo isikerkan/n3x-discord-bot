@@ -92,8 +92,36 @@ BACKENDS.append(("sqlite", _make_sqlite))
 # and postgres is silently skipped (not failed).
 _PG = os.environ.get("TEST_POSTGRES_URL")
 if _PG:
+    # Per-xdist-worker database so parallel workers don't collide on one shared
+    # DB (each still drops/creates the schema per test). Requires the role to
+    # have CREATEDB. Falls back to a single "_main" DB when not run under xdist.
+    _worker = os.environ.get("PYTEST_XDIST_WORKER", "main")
+    _pg_base_url, _pg_base_db = _PG.rsplit("/", 1)
+    _pg_db = f"{_pg_base_db}_{_worker}"
+    _pg_url = f"{_pg_base_url}/{_pg_db}"
+    _pg_db_ready = False
+
+    async def _ensure_pg_db():
+        global _pg_db_ready
+        if _pg_db_ready:
+            return
+        from sqlalchemy import text
+        from sqlalchemy.ext.asyncio import create_async_engine
+        admin = create_async_engine(_PG, isolation_level="AUTOCOMMIT")
+        try:
+            async with admin.connect() as conn:
+                found = await conn.scalar(
+                    text("SELECT 1 FROM pg_database WHERE datname = :n"),
+                    {"n": _pg_db})
+                if not found:
+                    await conn.exec_driver_sql(f'CREATE DATABASE "{_pg_db}"')
+        finally:
+            await admin.dispose()
+        _pg_db_ready = True
+
     async def _make_postgres():
-        r = SqlRepository(_PG)
+        await _ensure_pg_db()
+        r = SqlRepository(_pg_url)
         await r.connect()
         # clean slate each test
         from n3x_bot.storage import schema as sc
