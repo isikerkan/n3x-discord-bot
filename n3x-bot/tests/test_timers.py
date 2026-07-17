@@ -104,6 +104,7 @@ def _fake_interaction(user, guild=None):
     it.response.defer = AsyncMock()
     it.followup = MagicMock()
     it.followup.send = AsyncMock()
+    it.delete_original_response = AsyncMock()
     return it
 
 
@@ -483,8 +484,9 @@ async def test_base_slash_stores_timer_and_refreshes_overview_for_role_holder():
     assert "4-1" in stored
     assert stored["4-1"].tzinfo is not None  # B6: tz-aware
     channel._msg.edit.assert_awaited()       # overview refreshed
-    # ephemeral confirmation to the caller
-    assert _sent_text(interaction)           # some confirm was sent
+    # No success message (overview is the feedback); the deferred ack is removed.
+    interaction.delete_original_response.assert_awaited()
+    assert not _sent_text(interaction)
     await repo.close()
 
 
@@ -568,7 +570,8 @@ async def test_basestop_slash_removes_timer_and_refreshes_overview():
 
     assert await repo.list_base_timers() == {}
     channel._msg.edit.assert_awaited()
-    assert _sent_text(interaction)  # ephemeral confirmation
+    interaction.delete_original_response.assert_awaited()
+    assert not _sent_text(interaction)
     await repo.close()
 
 
