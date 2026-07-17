@@ -306,6 +306,9 @@ async def announce_voice_change(bot, member, before, after) -> None:
     else:
         text = f"🔀 **{name}**: **{b.name}** → **{a.name}**"
     try:
-        await channel.send(text)
+        # `member.display_name` is user-controlled free text — a name like
+        # "@everyone"/"<@&role>" would otherwise make the bot ping with its own
+        # permissions. Suppress all mentions in the announcement.
+        await channel.send(text, allowed_mentions=discord.AllowedMentions.none())
     except Exception:
         pass

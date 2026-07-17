@@ -100,3 +100,18 @@ def test_voice_log_is_overridable_and_resolves():
     assert rc.voice_log_channel_id == 777
     rc2 = RuntimeConfig(s, {"voice_log_channel_id": "888"})
     assert rc2.voice_log_channel_id == 888
+
+
+async def test_announcement_suppresses_mentions_from_display_name():
+    import discord
+    ch = MagicMock()
+    ch.send = AsyncMock()
+    bot = _bot(channel=ch)
+    # Malicious display name that would ping @everyone if mentions resolved.
+    await announce_voice_change(bot, _member(name="@everyone"),
+                                _state(None), _state(_vc(1, "Lobby")))
+    am = ch.send.await_args.kwargs.get("allowed_mentions")
+    assert am is not None
+    # No mentions of any kind are allowed.
+    none = discord.AllowedMentions.none()
+    assert (am.everyone, am.users, am.roles) == (none.everyone, none.users, none.roles)
