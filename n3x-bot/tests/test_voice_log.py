@@ -115,3 +115,79 @@ async def test_announcement_suppresses_mentions_from_display_name():
     # No mentions of any kind are allowed.
     none = discord.AllowedMentions.none()
     assert (am.everyone, am.users, am.roles) == (none.everyone, none.users, none.roles)
+
+
+class _AuditLogs:
+    """Callable returning an async iterator over fake audit entries."""
+    def __init__(self, entries, raises=False):
+        self._entries = entries
+        self._raises = raises
+
+    def __call__(self, *, limit=5, action=None):
+        entries = self._entries
+
+        async def _gen():
+            if self._raises:
+                raise RuntimeError("no audit access")
+            for e in entries:
+                yield e
+        return _gen()
+
+
+def _audit_entry(*, channel_id, actor_id, actor_name="Mod"):
+    import discord
+    return SimpleNamespace(
+        created_at=discord.utils.utcnow(),
+        extra=SimpleNamespace(channel=SimpleNamespace(id=channel_id)),
+        user=SimpleNamespace(id=actor_id, display_name=actor_name))
+
+
+def _guild(audit):
+    g = SimpleNamespace()
+    g.audit_logs = audit
+    return g
+
+
+async def test_force_move_records_the_mover():
+    ch = MagicMock()
+    ch.send = AsyncMock()
+    bot = _bot(channel=ch)
+    guild = _guild(_AuditLogs([_audit_entry(channel_id=2, actor_id=42, actor_name="Mod")]))
+    member = SimpleNamespace(display_name="Erkan", bot=False, id=7, guild=guild)
+    await announce_voice_change(bot, member, _state(_vc(1, "Lobby")), _state(_vc(2, "Games")))
+    text = ch.send.await_args.args[0]
+    assert "wurde von" in text and "Mod" in text and "verschoben" in text and "Games" in text
+
+
+async def test_self_move_not_attributed_when_no_audit_entry():
+    ch = MagicMock()
+    ch.send = AsyncMock()
+    bot = _bot(channel=ch)
+    guild = _guild(_AuditLogs([]))  # no member_move entries
+    member = SimpleNamespace(display_name="Erkan", bot=False, id=7, guild=guild)
+    await announce_voice_change(bot, member, _state(_vc(1, "Lobby")), _state(_vc(2, "Games")))
+    text = ch.send.await_args.args[0]
+    assert "→" in text and "wurde von" not in text
+
+
+async def test_audit_failure_falls_back_to_plain_move():
+    ch = MagicMock()
+    ch.send = AsyncMock()
+    bot = _bot(channel=ch)
+    guild = _guild(_AuditLogs([], raises=True))
+    member = SimpleNamespace(display_name="Erkan", bot=False, id=7, guild=guild)
+    await announce_voice_change(bot, member, _state(_vc(1, "Lobby")), _state(_vc(2, "Games")))
+    text = ch.send.await_args.args[0]
+    assert "→" in text and "wurde von" not in text
+
+
+async def test_move_by_self_actor_id_equals_member_not_attributed():
+    ch = MagicMock()
+    ch.send = AsyncMock()
+    bot = _bot(channel=ch)
+    # audit entry exists but actor == the member (self) -> not a force move
+    guild = _guild(_AuditLogs([_audit_entry(channel_id=2, actor_id=7)]))
+    member = SimpleNamespace(display_name="Erkan", bot=False, id=7, guild=guild)
+    await announce_voice_change(bot, member, _state(_vc(1, "Lobby")), _state(_vc(2, "Games")))
+    text = ch.send.await_args.args[0]
+    assert "wurde von" not in text

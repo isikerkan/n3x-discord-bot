@@ -304,7 +304,12 @@ async def announce_voice_change(bot, member, before, after) -> None:
     elif b is not None and a is None:
         text = f"👋 **{name}** hat **{b.name}** verlassen."
     else:
-        text = f"🔀 **{name}**: **{b.name}** → **{a.name}**"
+        mover = await _find_voice_mover(getattr(member, "guild", None), member, a)
+        if mover is not None:
+            text = (f"🔀 **{name}** wurde von **{mover.display_name}** "
+                    f"nach **{a.name}** verschoben.")
+        else:
+            text = f"🔀 **{name}**: **{b.name}** → **{a.name}**"
     try:
         # `member.display_name` is user-controlled free text — a name like
         # "@everyone"/"<@&role>" would otherwise make the bot ping with its own
@@ -312,3 +317,35 @@ async def announce_voice_change(bot, member, before, after) -> None:
         await channel.send(text, allowed_mentions=discord.AllowedMentions.none())
     except Exception:
         pass
+
+
+async def _find_voice_mover(guild, member, after_channel):
+    """The member who force-moved `member` into `after_channel`, or None.
+
+    `on_voice_state_update` doesn't say who moved someone, so we consult the
+    guild audit log for a recent `member_move` action targeting the destination
+    channel. `member_move` entries are bulk (no per-member target), so we match
+    on destination channel + recency and require the actor ≠ the moved member
+    (a self-move produces no audit entry). Needs View-Audit-Log; best-effort.
+    """
+    if guild is None:
+        return None
+    try:
+        async for entry in guild.audit_logs(
+                limit=5, action=discord.AuditLogAction.member_move):
+            try:
+                age = (discord.utils.utcnow() - entry.created_at).total_seconds()
+            except Exception:
+                age = None
+            if age is not None and age > 15:
+                continue
+            extra_channel = getattr(entry.extra, "channel", None)
+            actor = getattr(entry, "user", None)
+            if (extra_channel is not None
+                    and getattr(extra_channel, "id", None) == after_channel.id
+                    and actor is not None
+                    and getattr(actor, "id", None) != member.id):
+                return actor
+    except Exception:
+        return None
+    return None
