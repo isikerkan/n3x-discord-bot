@@ -375,6 +375,68 @@ async def test_announce_skips_bot_member():
     await repo.close()
 
 
+# ── announce_achievements: strip the [N3X] clantag from card names ──────────
+#
+# Bug: announce_achievements passes member.display_name straight into
+# card_texts, so a member displaying as "[N3X] Erkan" gets the clantag baked
+# into the card image. Welcome cards already strip it
+# (welcome.strip_prefix(member.display_name, settings.prefix_str)); the
+# achievement card must mirror that. render_achievement_card is monkeypatched
+# to capture the exact text handed to the renderer.
+
+
+def _capturing_renderer(store: dict):
+    def _render(avatar_bytes, title, subtitle, footer, tier):
+        store["title"] = title
+        store["subtitle"] = subtitle
+        store["footer"] = footer
+        store["blob"] = " ".join((title, subtitle, footer))
+        return _png_bytes()
+    return _render
+
+
+async def test_announce_strips_clantag_prefix_from_card_name(monkeypatch):
+    announce = _announce()
+    captured: dict = {}
+    monkeypatch.setattr("n3x_bot.cards.render_achievement_card",
+                        _capturing_renderer(captured))
+
+    repo = await _flatfile_repo()
+    settings = _settings(milestone_channel_id=4242)
+    bot = build_bot(settings, repo)
+    channel, _ = _milestone_channel()
+    bot.get_channel = MagicMock(return_value=channel)
+
+    # A member whose display name carries the real configured clantag prefix.
+    member = _member(name=f"{settings.prefix_str} Erkan")
+    await announce(bot, settings, member, [_ach("a_5")])
+
+    assert "Erkan" in captured["blob"]
+    assert settings.prefix_str not in captured["blob"]
+    await repo.close()
+
+
+async def test_announce_keeps_name_without_prefix_unchanged(monkeypatch):
+    # A member without the clantag must be passed through verbatim — stripping
+    # only removes the leading prefix, it must not mangle ordinary names.
+    announce = _announce()
+    captured: dict = {}
+    monkeypatch.setattr("n3x_bot.cards.render_achievement_card",
+                        _capturing_renderer(captured))
+
+    repo = await _flatfile_repo()
+    settings = _settings(milestone_channel_id=4242)
+    bot = build_bot(settings, repo)
+    channel, _ = _milestone_channel()
+    bot.get_channel = MagicMock(return_value=channel)
+
+    await announce(bot, settings, _member(name="Erkan"), [_ach("a_5")])
+
+    assert "Erkan" in captured["blob"]
+    assert settings.prefix_str not in captured["blob"]
+    await repo.close()
+
+
 # ── wiring: unlocking through on_message posts a card ──────────────────────
 
 def _plain_message(author, content="hallo", channel_id=555):

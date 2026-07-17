@@ -2,6 +2,8 @@ import json
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import and_, func, select, insert, update, delete, text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from n3x_bot.models import User, Stat, Message
@@ -75,14 +77,12 @@ class SqlRepository(StatsRepository):
         else:
             await conn.execute(update(table).where(where).values(**values))
 
-    async def _insert_if_absent(self, conn, table, pk_values: dict,
-                                extra: dict | None = None) -> bool:
-        where = _pk_where(table, pk_values)
-        exists = (await conn.execute(select(table).where(where))).one_or_none()
-        if exists is not None:
-            return False
-        await conn.execute(insert(table).values(**pk_values, **(extra or {})))
-        return True
+    async def _insert_ignore(self, conn, table, values: dict) -> bool:
+        ins = (pg_insert if self.engine.dialect.name == "postgresql"
+               else sqlite_insert)
+        result = await conn.execute(
+            ins(table).values(**values).on_conflict_do_nothing())
+        return result.rowcount == 1
 
     # ── messages ───────────────────────────────────────────────────────────
     async def create_message(self, name, template) -> Message:
@@ -657,7 +657,7 @@ class SqlRepository(StatsRepository):
     # ── achievements ───────────────────────────────────────────────────────
     async def unlock_achievement(self, discord_id, achievement_id):
         async with self.engine.begin() as conn:
-            return await self._insert_if_absent(
+            return await self._insert_ignore(
                 conn, sc.achievements,
                 {"discord_id": discord_id, "achievement_id": achievement_id})
 
@@ -685,8 +685,8 @@ class SqlRepository(StatsRepository):
     # ── kodex ──────────────────────────────────────────────────────────────
     async def confirm_kodex(self, discord_id):
         async with self.engine.begin() as conn:
-            await self._insert_if_absent(conn, sc.kodex_confirmations,
-                                         {"discord_id": discord_id})
+            await self._insert_ignore(conn, sc.kodex_confirmations,
+                                      {"discord_id": discord_id})
 
     async def has_confirmed_kodex(self, discord_id):
         async with self.engine.connect() as conn:

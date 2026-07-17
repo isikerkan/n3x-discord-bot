@@ -187,6 +187,16 @@ def test_card_texts_includes_member_display_name():
     assert "Erkan" in blob
 
 
+def test_card_texts_does_not_strip_clantag_prefix():
+    # card_texts stays dumb: it renders whatever name it is handed. Clantag
+    # stripping is the caller's job (announce_achievements), NOT card_texts —
+    # this guards against the strip accidentally being pushed down here.
+    cards = _cards()
+    title, subtitle, footer = cards.card_texts(_ach("a_5"), "[N3X] Erkan")
+    blob = " ".join((title, subtitle, footer))
+    assert "[N3X] Erkan" in blob
+
+
 # ── Phase 2a: tier_color honours an explicit Achievement.color ──────────────
 
 def test_tier_color_explicit_valid_hex_color_wins():
