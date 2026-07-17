@@ -135,6 +135,24 @@ class StatsRepository(ABC):
         """All content overrides as `{key: value}`."""
         ...
 
+    # color config
+    @abstractmethod
+    async def set_color_config(self, key: str, value: str) -> None:
+        """Upsert the raw colour-override string stored under `key`."""
+        ...
+    @abstractmethod
+    async def get_color_config(self, key: str) -> str | None:
+        """The raw colour string for `key`, or None if unset."""
+        ...
+    @abstractmethod
+    async def delete_color_config(self, key: str) -> bool:
+        """Delete the override for `key`; True if a row existed."""
+        ...
+    @abstractmethod
+    async def all_color_config(self) -> dict[str, str]:
+        """All colour overrides as `{key: value}`."""
+        ...
+
     # achievement definitions
     @abstractmethod
     async def set_achievement_def(self, id: str, *, category: str, metric: str,

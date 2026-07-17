@@ -137,6 +137,12 @@ content_texts = Table(
     Column("value", Text, nullable=True),
 )
 
+color_config = Table(
+    "color_config", metadata,
+    Column("key", String(50), primary_key=True),
+    Column("value", Text, nullable=True),
+)
+
 achievement_defs = Table(
     "achievement_defs", metadata,
     Column("id", String(50), primary_key=True),
