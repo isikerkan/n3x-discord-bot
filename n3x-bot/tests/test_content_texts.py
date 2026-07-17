@@ -55,7 +55,6 @@ import tempfile
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
-import discord
 
 from n3x_bot.bot import build_bot
 from n3x_bot.config import Settings
@@ -273,7 +272,7 @@ async def test_get_unknown_key_raises_keyerror():
 async def test_init_ignores_override_for_non_content_key():
     # An override stored under a key that is NOT a content key must be dropped
     # by the resolver (it can never be resolved via get()).
-    from n3x_bot.content import CONTENT_DEFAULTS, ContentTexts
+    from n3x_bot.content import ContentTexts
     ct = ContentTexts({"bogus_key": "x", "kodex_text": "override"})
     assert ct.get("kodex_text") == "override"
     # the stray key is not resolvable

@@ -99,7 +99,7 @@ def main() -> None:
             to_backend=args.to_backend, to_location=args.to_location,
             overwrite=args.overwrite))
     except DestinationNotEmptyError as e:
-        raise SystemExit(f"error: {e}")
+        raise SystemExit(f"error: {e}") from e
 
 
 if __name__ == "__main__":

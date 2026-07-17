@@ -34,7 +34,7 @@ Pinned decisions (see report):
 
 import os
 import tempfile
-from datetime import date, datetime
+from datetime import datetime
 from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock

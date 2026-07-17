@@ -40,7 +40,6 @@ from zoneinfo import ZoneInfo
 import discord
 import pytest
 from discord import app_commands
-from discord.ext import commands
 
 from n3x_bot.bot import build_bot
 from n3x_bot.config import Settings

@@ -140,8 +140,8 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def _validate_timezone(self) -> "Settings":
         # A bad tz would otherwise only surface at runtime inside now_local()
-        # (called before process_commands in on_message), silently bricking all
-        # commands with a logged traceback. Fail fast at config load instead.
+        # (called on every message in on_message), silently bricking activity
+        # tracking with a logged traceback. Fail fast at config load instead.
         try:
             ZoneInfo(self.timezone)
         except (ZoneInfoNotFoundError, ValueError) as e:
