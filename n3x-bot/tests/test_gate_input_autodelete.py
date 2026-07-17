@@ -74,7 +74,8 @@ def _fake_gate_message(content: str, *, message_id: int = 8001,
     message = MagicMock()
     message.id = message_id
     message.content = content
-    message.author = SimpleNamespace(id=author_id, name=author_name)
+    message.author = SimpleNamespace(id=author_id, name=author_name,
+                                     mention=f"<@{author_id}>")
     message.guild = _fallback_guild()
     message.add_reaction = AsyncMock()
     message.delete = AsyncMock()
@@ -232,5 +233,98 @@ async def test_dezk_input_does_not_delete_message(content):
 
     # deletion for drop gates happens later, on the drop-icon click confirmation
     message.delete.assert_not_called()
+
+    await repo.close()
+
+
+# ── German in-channel confirmation for a/b/c registered stats ─────────────────
+#
+# After a SUCCESSFUL a/b/c store the bot posts a German confirmation into the
+# channel, addressed to the user (mention), naming the gate and the formatted
+# cost, and schedules it to delete with the SAME configured delay as the
+# original message. The confirmation is best-effort/guarded and never fires on a
+# dedup rejection.
+
+
+def _confirm_message():
+    """A stand-in for the sent confirmation message: awaitable ``.delete``."""
+    confirm = MagicMock()
+    confirm.delete = AsyncMock()
+    return confirm
+
+
+@pytest.mark.parametrize("delay", [60, 120])
+async def test_abc_success_sends_german_confirmation_deleted_with_delay(
+        monkeypatch, delay):
+    _quiet_postprocessing(monkeypatch)
+    repo = await _flatfile_repo()
+    settings = _settings(gate_input_channel_id=777)
+    bot = _with_delay(build_bot(settings, repo), delay)
+    message = _fake_gate_message("a 75000")
+    confirm = _confirm_message()
+    message.channel.send = AsyncMock(return_value=confirm)
+
+    await handle_gate_input_message(bot, repo, settings, message)
+
+    message.channel.send.assert_awaited_once()
+    text = message.channel.send.await_args.args[0]
+    assert message.author.mention in text        # addressed to the user
+    assert "registriert" in text                 # German confirmation wording
+    assert "75.000" in text                       # format_number(75000)
+    # deleted with the SAME configured delay as the original message
+    confirm.delete.assert_awaited_once_with(delay=delay)
+
+    await repo.close()
+
+
+async def test_abc_confirmation_names_the_gate(monkeypatch):
+    _quiet_postprocessing(monkeypatch)
+    repo = await _flatfile_repo()
+    settings = _settings(gate_input_channel_id=777)
+    bot = _with_delay(build_bot(settings, repo), 60)
+    message = _fake_gate_message("b 600")
+    confirm = _confirm_message()
+    message.channel.send = AsyncMock(return_value=confirm)
+
+    await handle_gate_input_message(bot, repo, settings, message)
+
+    text = message.channel.send.await_args.args[0]
+    assert "Beta Gate" in text  # GATE_NAMES["b"]
+
+    await repo.close()
+
+
+async def test_abc_dedup_reject_sends_no_confirmation(monkeypatch):
+    _quiet_postprocessing(monkeypatch)
+    repo = await _flatfile_repo()
+    settings = _settings(gate_input_channel_id=777)
+    bot = _with_delay(build_bot(settings, repo), 60)
+    # Pre-insert the identical entry so the second store is a dedup rejection.
+    await repo.add_gate_entry("a", 500, 7, "Erkan")
+    message = _fake_gate_message("a 500", author_id=7, author_name="Erkan")
+    message.channel.send = AsyncMock()
+
+    await handle_gate_input_message(bot, repo, settings, message)
+
+    message.channel.send.assert_not_awaited()  # ⏳ path: no confirmation
+
+    await repo.close()
+
+
+async def test_abc_confirmation_send_failure_swallowed_store_and_delete_intact(
+        monkeypatch):
+    # A failing channel.send must not crash the handler nor skip the store /
+    # original-message delete scheduling.
+    _quiet_postprocessing(monkeypatch)
+    repo = await _flatfile_repo()
+    settings = _settings(gate_input_channel_id=777)
+    bot = _with_delay(build_bot(settings, repo), 60)
+    message = _fake_gate_message("a 500")
+    message.channel.send = AsyncMock(side_effect=RuntimeError("no perms"))
+
+    await handle_gate_input_message(bot, repo, settings, message)  # no raise
+
+    assert await repo.list_gate_costs("a") == [500]        # store still happened
+    message.delete.assert_awaited_once_with(delay=60)      # original delete intact
 
     await repo.close()

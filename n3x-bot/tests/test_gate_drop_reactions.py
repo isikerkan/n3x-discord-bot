@@ -673,3 +673,145 @@ async def test_store_invokes_post_processing(monkeypatch):
     assert set(checked) == {"gate_d", "gate_total", "gate_cost_total"}
 
     await repo.close()
+
+
+# ── confirmation: German in-channel confirmation on a successful drop store ───
+#
+# After a successful d/e/z/k store the bot posts a German confirmation into the
+# channel, addressed to the user (``<@user_id>`` — payload.member may be None),
+# naming the gate and the drop outcome (the chosen item label, or "kein Drop"
+# for ❌), and schedules it to delete with the SAME configured delay. The
+# architect may send via ``bot.get_channel(payload.channel_id)`` or via the
+# fetched message's channel, so the capture below wires both.
+
+
+def _capture_confirm(bot, message, *, channel_id=777):
+    """Give both candidate channels an awaitable ``.send`` that returns the same
+    confirmation message (with an awaitable ``.delete``). Returns the confirm
+    message plus the ``bot.get_channel`` channel for inspection."""
+    confirm = MagicMock()
+    confirm.delete = AsyncMock()
+    getchan = bot.get_channel(channel_id)
+    getchan.send = AsyncMock(return_value=confirm)
+    message.channel.send = AsyncMock(return_value=confirm)
+    return confirm, getchan
+
+
+def _confirm_text(getchan, message):
+    for ch in (getchan, message.channel):
+        if ch.send.await_count:
+            return ch.send.await_args.args[0]
+    return None
+
+
+async def test_delta_drop_click_sends_confirmation_with_item_label():
+    guild = _fake_guild()
+    bot, repo, settings, message, added = await _seed_input(
+        "d 250.000", guild=guild, message_id=7901, author_id=7)
+    confirm, getchan = _capture_confirm(bot, message)
+
+    await _dispatch(bot, repo, settings, message_id=7901, user_id=7,
+                    emoji=added[0])  # the laser drop icon
+
+    text = _confirm_text(getchan, message)
+    assert text is not None                 # a confirmation was sent
+    assert "<@7>" in text                    # addressed to the user
+    assert "registriert" in text             # German confirmation wording
+    assert "Delta Gate" in text              # GATE_NAMES["d"]
+    assert "Laser" in text                   # chosen drop item label
+    confirm.delete.assert_awaited_once_with(delay=60)  # same configured delay
+
+    await repo.close()
+
+
+async def test_delta_nothing_click_confirmation_says_kein_drop():
+    guild = _fake_guild()
+    bot, repo, settings, message, added = await _seed_input(
+        "d 250.000", guild=guild, message_id=7902, author_id=7)
+    confirm, getchan = _capture_confirm(bot, message)
+
+    await _dispatch(bot, repo, settings, message_id=7902, user_id=7,
+                    emoji=NOTHING)
+
+    text = _confirm_text(getchan, message)
+    assert text is not None
+    assert "<@7>" in text
+    assert "registriert" in text
+    assert "kein Drop" in text               # ❌ outcome
+
+    await repo.close()
+
+
+async def test_kappa_hercules_click_confirmation_says_hercules():
+    guild = _fake_guild()
+    bot, repo, settings, message, added = await _seed_input(
+        "k 500", guild=guild, message_id=7903, author_id=7)
+    confirm, getchan = _capture_confirm(bot, message)
+
+    await _dispatch(bot, repo, settings, message_id=7903, user_id=7,
+                    emoji=added[0])  # hercules icon
+
+    text = _confirm_text(getchan, message)
+    assert text is not None
+    assert "Kappa Gate" in text              # GATE_NAMES["k"]
+    assert "Hercules" in text                # kappa hercu label
+
+    await repo.close()
+
+
+async def test_drop_confirmation_delete_delay_reflects_configured_seconds(
+        monkeypatch):
+    from n3x_bot import bot as botmod
+    monkeypatch.setattr(botmod, "update_gate_stats_embed", AsyncMock())
+    monkeypatch.setattr(botmod, "update_gate_chart", AsyncMock())
+    monkeypatch.setattr(botmod, "_announce_records", AsyncMock())
+    monkeypatch.setattr(botmod, "check_achievements", AsyncMock(return_value=[]))
+    monkeypatch.setattr(botmod, "announce_achievements", AsyncMock())
+
+    guild = _fake_guild()
+    bot, repo, settings, message, added = await _seed_input(
+        "d 250.000", guild=guild, message_id=7904, author_id=7)
+    bot.runtime_config = SimpleNamespace(gate_delete_delay_seconds=120)
+    confirm, getchan = _capture_confirm(bot, message)
+
+    await _dispatch(bot, repo, settings, message_id=7904, user_id=7,
+                    emoji=added[0])
+
+    confirm.delete.assert_awaited_once_with(delay=120)
+
+    await repo.close()
+
+
+async def test_drop_confirmation_send_failure_swallowed_store_intact():
+    guild = _fake_guild()
+    bot, repo, settings, message, added = await _seed_input(
+        "d 250.000", guild=guild, message_id=7905, author_id=7)
+    getchan = bot.get_channel(777)
+    getchan.send = AsyncMock(side_effect=RuntimeError("no perms"))
+    message.channel.send = AsyncMock(side_effect=RuntimeError("no perms"))
+
+    # must not raise despite the confirmation send blowing up
+    await _dispatch(bot, repo, settings, message_id=7905, user_id=7,
+                    emoji=added[0])
+
+    assert await repo.list_gate_costs("d") == [250000]  # store still happened
+
+    await repo.close()
+
+
+async def test_dedup_rejected_drop_sends_no_confirmation():
+    guild = _fake_guild()
+    bot, repo, settings, message, added = await _seed_input(
+        "d 250.000", guild=guild, message_id=7906, author_id=7,
+        author_name="Erkan")
+    # Pre-insert the identical delta so the confirmation hits a dedup rejection.
+    await repo.add_gate_entry("d", 250000, 7, "Erkan", laser_dropped=True)
+    confirm, getchan = _capture_confirm(bot, message)
+
+    await _dispatch(bot, repo, settings, message_id=7906, user_id=7,
+                    emoji=added[0])
+
+    # ⏳ path: no German confirmation sent to the channel
+    assert _confirm_text(getchan, message) is None
+
+    await repo.close()
