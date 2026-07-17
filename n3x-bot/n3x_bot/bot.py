@@ -369,7 +369,6 @@ _COMMAND_DESCRIPTIONS: dict[str, str] = {
     "kodex_check": "Prüft, wer den Kodex bestätigt hat.",
     "base": "Startet einen Basis-Timer.",
     "basestop": "Stoppt einen laufenden Basis-Timer.",
-    "admin": "Verwaltet Stats und Nachrichten (Admin).",
     "sync_achievements": "Synchronisiert alle Achievements (Admin).",
 }
 

@@ -23,7 +23,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from discord.ext import commands
+from discord import app_commands
 
 import n3x_bot.bot as botmod
 from n3x_bot.bot import build_bot
@@ -68,6 +68,44 @@ def _member(*, member_id=1, role_ids=(), is_bot=False):
     return SimpleNamespace(id=member_id, roles=roles, bot=is_bot)
 
 
+def _fake_interaction(user):
+    """A fake slash Interaction: `.user` + an ephemeral `response.send_message`.
+
+    Mirrors the interaction fakes in test_slash_migration / the /config slash
+    tests: `interaction.user` is the invoker (gated via `is_admin`), and
+    `interaction.response.send_message` is an AsyncMock so admin subcommands can
+    ack/refuse ephemerally without a live gateway.
+    """
+    it = MagicMock()
+    it.user = user
+    it.response = MagicMock()
+    it.response.send_message = AsyncMock()
+    it.response.defer = AsyncMock()
+    it.followup = MagicMock()
+    it.followup.send = AsyncMock()
+    return it
+
+
+def _slash_admin_sub(bot, group_name, sub_name):
+    """Reach a `/admin <group> <sub>` app-command callback via the tree.
+
+    discord.py nests app-command groups: `bot.tree.get_command("admin")` is the
+    top `app_commands.Group`, `.get_command("stat")` its `stat` subgroup, and
+    `.get_command("add")` the leaf `app_commands.Command`. The leaf's `.callback`
+    is the raw coroutine `(interaction, **params)` (defined module-level, so no
+    `self` binding).
+    """
+    admin_g = bot.tree.get_command("admin")
+    assert isinstance(admin_g, app_commands.Group), \
+        "`/admin` must be an app_commands.Group on the tree"
+    sub_g = admin_g.get_command(group_name)
+    assert isinstance(sub_g, app_commands.Group), \
+        f"`/admin {group_name}` must be an app-command subgroup"
+    leaf = sub_g.get_command(sub_name)
+    assert leaf is not None, f"`/admin {group_name} {sub_name}` must exist"
+    return leaf
+
+
 # ── permission gating: is_admin ───────────────────────────────────────────
 
 async def test_is_admin_true_for_member_holding_admin_role():
@@ -93,29 +131,35 @@ async def test_is_admin_false_when_admin_role_unset_even_if_member_has_role_zero
     assert botmod.is_admin(member, settings) is False
 
 
-async def test_admin_stat_add_command_refuses_non_admin_and_mutates_nothing():
+async def test_slash_admin_stat_add_refuses_non_admin_and_mutates_nothing():
+    # Phase 4: admin is slash-only. A non-admin invoking `/admin stat add` is
+    # refused ephemerally and causes no DB / command-registry mutation.
     repo = await _flatfile_repo()
     settings = _settings(admin_role_id=42)
     bot = build_bot(settings, repo)
 
-    group = bot.get_command("admin")
-    assert group is not None, "prefix `admin` group must be registered"
-    stat_group = group.get_command("stat")
-    assert stat_group is not None, "`admin stat` subgroup must be registered"
-    add_cmd = stat_group.get_command("add")
-    assert add_cmd is not None, "`admin stat add` subcommand must be registered"
-
-    ctx = MagicMock()
-    ctx.send = AsyncMock()
-    ctx.author = _member(member_id=5, role_ids=(999,))  # NOT the admin role
+    add_cmd = _slash_admin_sub(bot, "stat", "add")
+    interaction = _fake_interaction(_member(member_id=5, role_ids=(999,)))  # not admin
 
     before = {s.key for s in await repo.list_stats()}
-    await add_cmd.callback(ctx, "newkey", "New Stat")
+    await add_cmd.callback(interaction, key="newkey", name="New Stat")
     after = {s.key for s in await repo.list_stats()}
 
     assert after == before  # non-admin caused no DB mutation
     assert bot.get_command("newkey") is None  # and no live command registered
-    ctx.send.assert_awaited()  # a refusal was sent
+    interaction.response.send_message.assert_awaited_once()  # a refusal was sent
+    assert interaction.response.send_message.await_args.kwargs.get("ephemeral") is True
+
+    await repo.close()
+
+
+async def test_prefix_admin_group_is_not_registered():
+    # Phase 4: the redundant prefix `!admin` group is gone; only `/admin` remains.
+    repo = await _flatfile_repo()
+    settings = _settings(admin_role_id=42)
+    bot = build_bot(settings, repo)
+
+    assert bot.get_command("admin") is None
 
     await repo.close()
 
@@ -348,43 +392,42 @@ async def test_admin_list_messages_returns_non_archived():
 
 # ── both command surfaces exist (structure / registration) ────────────────
 
-async def test_build_bot_registers_admin_prefix_group_with_subgroups():
+async def test_build_bot_registers_admin_slash_group_with_subgroups():
+    # Phase 4: `/admin` is the sole admin surface — an app_commands.Group on the
+    # tree with `stat` and `msg` subgroups; no prefix `!admin` group exists.
     repo = await _flatfile_repo()
     settings = _settings(admin_role_id=42)
     bot = build_bot(settings, repo)
 
-    group = bot.get_command("admin")
-    assert isinstance(group, commands.Group)
-    assert group.get_command("stat") is not None
-    assert group.get_command("msg") is not None
+    assert bot.get_command("admin") is None  # prefix group removed
+    group = bot.tree.get_command("admin")
+    assert isinstance(group, app_commands.Group)
+    assert isinstance(group.get_command("stat"), app_commands.Group)
+    assert isinstance(group.get_command("msg"), app_commands.Group)
 
     await repo.close()
 
 
-async def test_admin_stat_subgroup_exposes_crud_subcommands():
+async def test_admin_stat_slash_subgroup_exposes_crud_subcommands():
     repo = await _flatfile_repo()
     settings = _settings(admin_role_id=42)
     bot = build_bot(settings, repo)
 
-    group = bot.get_command("admin")
-    assert group is not None, "prefix `admin` group must be registered"
-    stat_group = group.get_command("stat")
-    assert stat_group is not None, "`admin stat` subgroup must be registered"
+    stat_group = bot.tree.get_command("admin").get_command("stat")
+    assert isinstance(stat_group, app_commands.Group)
     names = {c.name for c in stat_group.commands}
     assert {"add", "edit", "archive", "rm", "list"} <= names
 
     await repo.close()
 
 
-async def test_admin_msg_subgroup_exposes_crud_subcommands():
+async def test_admin_msg_slash_subgroup_exposes_crud_subcommands():
     repo = await _flatfile_repo()
     settings = _settings(admin_role_id=42)
     bot = build_bot(settings, repo)
 
-    group = bot.get_command("admin")
-    assert group is not None, "prefix `admin` group must be registered"
-    msg_group = group.get_command("msg")
-    assert msg_group is not None, "`admin msg` subgroup must be registered"
+    msg_group = bot.tree.get_command("admin").get_command("msg")
+    assert isinstance(msg_group, app_commands.Group)
     names = {c.name for c in msg_group.commands}
     assert {"add", "edit", "archive", "rm", "list"} <= names
 
@@ -487,3 +530,169 @@ async def test_is_admin_false_for_member_without_roles_attribute():
     member = SimpleNamespace(id=5)  # no `.roles`
 
     assert botmod.is_admin(member, settings) is False
+
+
+# ── dynamic stat CRUD driven through the SLASH callbacks ──────────────────
+#
+# Phase 4 removed the prefix `!admin` group; the `/admin stat ...` callbacks are
+# now the only way an admin mutates the stat registry. These pin that the slash
+# add/rm/archive still (un)register the live PREFIX counter command (stats stay
+# prefix commands until Phase 6) exactly as the old prefix path did.
+
+def _admin_interaction(admin_role_id=42):
+    return _fake_interaction(_member(member_id=1, role_ids=(admin_role_id,)))
+
+
+async def test_slash_admin_stat_add_registers_live_prefix_counter():
+    repo = await _flatfile_repo()
+    settings = _settings(admin_role_id=42)
+    bot = build_bot(settings, repo)
+    add_cmd = _slash_admin_sub(bot, "stat", "add")
+
+    await add_cmd.callback(_admin_interaction(), key="boop", name="Boop")
+
+    assert await repo.get_stat("boop") is not None      # row written
+    assert bot.get_command("boop") is not None           # live prefix counter
+
+    await repo.close()
+
+
+async def test_slash_admin_stat_rm_unregisters_command_and_removes_row():
+    repo = await _flatfile_repo()
+    settings = _settings(admin_role_id=42)
+    bot = build_bot(settings, repo)
+    add_cmd = _slash_admin_sub(bot, "stat", "add")
+    rm_cmd = _slash_admin_sub(bot, "stat", "rm")
+    await add_cmd.callback(_admin_interaction(), key="boop", name="Boop")
+    assert bot.get_command("boop") is not None
+
+    await rm_cmd.callback(_admin_interaction(), key="boop")
+
+    assert bot.get_command("boop") is None
+    assert await repo.get_stat("boop") is None
+
+    await repo.close()
+
+
+async def test_slash_admin_stat_archive_unregisters_command_and_keeps_row():
+    repo = await _flatfile_repo()
+    settings = _settings(admin_role_id=42)
+    bot = build_bot(settings, repo)
+    add_cmd = _slash_admin_sub(bot, "stat", "add")
+    archive_cmd = _slash_admin_sub(bot, "stat", "archive")
+    await add_cmd.callback(_admin_interaction(), key="boop", name="Boop")
+
+    await archive_cmd.callback(_admin_interaction(), key="boop")
+
+    assert bot.get_command("boop") is None
+    assert (await repo.get_stat("boop")).archived_at is not None
+
+    await repo.close()
+
+
+async def test_slash_admin_stat_edit_renames_via_callback():
+    repo = await _flatfile_repo()
+    settings = _settings(admin_role_id=42)
+    bot = build_bot(settings, repo)
+    add_cmd = _slash_admin_sub(bot, "stat", "add")
+    edit_cmd = _slash_admin_sub(bot, "stat", "edit")
+    await add_cmd.callback(_admin_interaction(), key="boop", name="Boop")
+
+    await edit_cmd.callback(_admin_interaction(), key="boop", name="Boop2")
+
+    assert (await repo.get_stat("boop")).name == "Boop2"
+
+    await repo.close()
+
+
+# ── message CRUD driven through the SLASH callbacks ───────────────────────
+
+async def test_slash_admin_msg_add_creates_message_row():
+    repo = await _flatfile_repo()
+    settings = _settings(admin_role_id=42)
+    bot = build_bot(settings, repo)
+    add_cmd = _slash_admin_sub(bot, "msg", "add")
+
+    await add_cmd.callback(_admin_interaction(), name="greet", template="hi {count}")
+
+    assert "greet" in {m.name for m in await repo.list_messages()}
+
+    await repo.close()
+
+
+async def test_slash_admin_msg_edit_updates_template():
+    repo = await _flatfile_repo()
+    settings = _settings(admin_role_id=42)
+    bot = build_bot(settings, repo)
+    msg = await botmod.admin_create_message(repo, "greet", "hi {count}")
+    edit_cmd = _slash_admin_sub(bot, "msg", "edit")
+
+    await edit_cmd.callback(_admin_interaction(), message_id=msg.id,
+                            template="yo {count}")
+
+    assert (await repo.get_message(msg.id)).template == "yo {count}"
+
+    await repo.close()
+
+
+async def test_slash_admin_msg_archive_hides_from_default_list():
+    repo = await _flatfile_repo()
+    settings = _settings(admin_role_id=42)
+    bot = build_bot(settings, repo)
+    msg = await botmod.admin_create_message(repo, "greet", "hi {count}")
+    archive_cmd = _slash_admin_sub(bot, "msg", "archive")
+
+    await archive_cmd.callback(_admin_interaction(), message_id=msg.id)
+
+    assert msg.id not in {m.id for m in await repo.list_messages()}
+    assert msg.id in {m.id for m in await repo.list_messages(include_archived=True)}
+
+    await repo.close()
+
+
+async def test_slash_admin_msg_rm_removes_row():
+    repo = await _flatfile_repo()
+    settings = _settings(admin_role_id=42)
+    bot = build_bot(settings, repo)
+    msg = await botmod.admin_create_message(repo, "greet", "hi {count}")
+    rm_cmd = _slash_admin_sub(bot, "msg", "rm")
+
+    await rm_cmd.callback(_admin_interaction(), message_id=msg.id)
+
+    assert await repo.get_message(msg.id) is None
+
+    await repo.close()
+
+
+async def test_slash_admin_msg_list_reports_seeded_message():
+    repo = await _flatfile_repo()
+    settings = _settings(admin_role_id=42)
+    bot = build_bot(settings, repo)
+    list_cmd = _slash_admin_sub(bot, "msg", "list")
+
+    interaction = _admin_interaction()
+    await list_cmd.callback(interaction)
+
+    interaction.response.send_message.assert_awaited_once()
+    text = interaction.response.send_message.await_args.args[0]
+    assert "tit_msg" in text  # seeded message surfaced
+
+    await repo.close()
+
+
+async def test_slash_admin_msg_add_refuses_non_admin_and_mutates_nothing():
+    repo = await _flatfile_repo()
+    settings = _settings(admin_role_id=42)
+    bot = build_bot(settings, repo)
+    add_cmd = _slash_admin_sub(bot, "msg", "add")
+    interaction = _fake_interaction(_member(member_id=5, role_ids=(999,)))
+
+    before = {m.name for m in await repo.list_messages(include_archived=True)}
+    await add_cmd.callback(interaction, name="sneaky", template="x {count}")
+    after = {m.name for m in await repo.list_messages(include_archived=True)}
+
+    assert after == before  # non-admin wrote nothing
+    interaction.response.send_message.assert_awaited_once()
+    assert interaction.response.send_message.await_args.kwargs.get("ephemeral") is True
+
+    await repo.close()

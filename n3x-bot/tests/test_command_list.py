@@ -219,16 +219,22 @@ async def test_command_list_contains_prefixed_top_level_commands():
     await _cleanup(repo)
 
 
-async def test_command_list_contains_group_and_its_subcommands():
-    # Groups are walked -> their subcommands appear qualified (e.g. the `admin`
-    # group's `msg` sub). The `gate`/`config`/`content` groups migrated to slash
-    # app-command groups, so they no longer appear in the prefix list; `admin`
-    # remains a prefix group.
+async def test_command_list_has_no_prefix_groups_after_admin_migration():
+    # Phase 4 removed the last prefix command GROUP (`!admin`): `gate`/`config`/
+    # `content`/`admin` are all slash app-command groups now. So the prefix-derived
+    # command list contains no group subcommands — in particular no `!admin msg`
+    # line — and every remaining prefix command is flat (not a commands.Group).
+    from discord.ext import commands
     from n3x_bot.bot import build_command_list
     repo = await _flatfile_repo()
     bot = await _populated_bot(_settings(), repo)
+
+    assert bot.get_command("admin") is None  # prefix admin group gone
+    assert not any(isinstance(c, commands.Group) for c in bot.commands)
+
     text = _embed_text(build_command_list(bot))
-    assert "!admin msg" in text
+    assert "!admin msg" not in text  # no group subcommand lines remain
+
     await _cleanup(repo)
 
 
@@ -293,14 +299,14 @@ async def test_command_list_is_deterministic():
 
 
 async def test_command_list_top_level_commands_are_sorted():
-    # `admin` sorts before `base`; a sorted render places it earlier. (`activity`,
-    # `stat` and `gate` migrated to slash-only app commands and are no longer in
-    # the prefix-derived list.)
+    # `base` sorts before `kodex`; a sorted render places it earlier. (`admin`,
+    # `activity`, `stat` and `gate` migrated to slash-only app commands and are no
+    # longer in the prefix-derived list — `admin` as of Phase 4.)
     from n3x_bot.bot import build_command_list
     repo = await _flatfile_repo()
     bot = await _populated_bot(_settings(), repo)
     text = _embed_text(build_command_list(bot))
-    assert text.index("!admin") < text.index("!base")
+    assert text.index("!base") < text.index("!kodex")
     await _cleanup(repo)
 
 
