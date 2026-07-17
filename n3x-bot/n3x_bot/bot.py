@@ -20,6 +20,7 @@ from n3x_bot.activity import (
     register_activity,
     record_message_activity,
     handle_voice_state_update,
+    announce_voice_change,
     handle_activity_reaction,
     flush_voice_times,
     now_local,
@@ -1180,6 +1181,10 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
 
     @bot.event
     async def on_voice_state_update(member, before, after):
+        try:
+            await announce_voice_change(bot, member, before, after)
+        except Exception:
+            pass
         await handle_voice_state_update(bot, repo, settings, member, before, after,
                                         now_local(settings))
 

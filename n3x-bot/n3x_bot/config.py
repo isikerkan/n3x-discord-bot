@@ -102,6 +102,7 @@ class Settings(BaseSettings):
 
     base_timer_role_id: int = 0
     timer_overview_channel_id: int = 0
+    voice_log_channel_id: int = 0
     timer_overview_message_id: int = 0
     allowed_maps: str = "4-1,4-2,4-3,4-4,1-5,1-6,1-7,2-5,2-6,2-7,3-5,3-6,3-7"
 

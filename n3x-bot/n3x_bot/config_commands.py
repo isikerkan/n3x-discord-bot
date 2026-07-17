@@ -29,6 +29,7 @@ CHANNEL_PURPOSES: dict[str, str] = {
     "overview": "overview_channel_id",
     "kodex_check": "kodex_check_channel_id",
     "timer_overview": "timer_overview_channel_id",
+    "voice_log": "voice_log_channel_id",
 }
 ROLE_PURPOSES: dict[str, str] = {
     "target": "target_role_id",
