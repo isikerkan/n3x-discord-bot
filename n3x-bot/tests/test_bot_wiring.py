@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from discord.ext import commands
 
+import n3x_bot.bot as botmod
 from n3x_bot.bot import (
     build_bot, register_stat_commands, _send_or_update, _send_rank,
     handle_gate_input_message, update_gate_stats_embed,
@@ -59,7 +60,10 @@ async def test_build_bot_wires_prefix_repo_settings_and_intents():
 
 # ── register_stat_commands ───────────────────────────────────────────────
 
-async def test_register_stat_commands_adds_one_command_per_stat_plus_rank():
+async def test_register_stat_commands_adds_one_app_command_per_stat_plus_rank():
+    # Phase 6: the per-stat counters + `rank` are SLASH app commands registered
+    # dynamically on `bot.tree`, and are REMOVED from the prefix registry. Each
+    # DB stat has a same-named app command; `rank` is the one extra command.
     repo = await _flatfile_repo()
     settings = _settings()
     bot = build_bot(settings, repo)
@@ -67,38 +71,30 @@ async def test_register_stat_commands_adds_one_command_per_stat_plus_rank():
     await register_stat_commands(bot, repo, settings)
 
     stats = await repo.list_stats()
-    assert bot.get_command("tit") is not None
-    assert bot.get_command("rank") is not None
-    # Phase 4: `admin` is slash-only, so it is no longer a prefix command and is
-    # deliberately NOT in this exclusion list — a lingering prefix `!admin` group
-    # would inflate `wired` past `len(stats)+1` and fail this test.
-    # discord.py's commands.Bot ships a default "help" command; "stat"/"del"
-    # are wired by register_gate_commands (called from build_bot itself, not
-    # register_stat_commands) — only count what THIS function wires.
-    assert bot.get_command("admin") is None
-    # Phase 5: kodex/kodex_check/sync_welcome/base/basestop are slash-ONLY, so
-    # they are no longer prefix commands and are deliberately NOT in this
-    # exclusion list — a lingering prefix copy would inflate `wired`.
-    wired = [c for c in bot.commands if c.name not in ("help", "stat", "del", "gate", "config", "content", "activity", "erfolge", "overview", "sync_achievements")]
-    assert len(wired) == len(stats) + 1
+    for stat in stats:
+        assert bot.tree.get_command(stat.key) is not None, stat.key  # on the tree
+        assert bot.get_command(stat.key) is None, stat.key           # off prefix
+    assert bot.tree.get_command("rank") is not None
+    assert bot.get_command("rank") is None
 
     await repo.close()
 
 
 async def test_register_stat_commands_is_idempotent():
+    # Adding an app command that already exists raises CommandAlreadyRegistered,
+    # so a second registration pass must be guarded and not raise; every stat +
+    # rank stays present on the tree exactly once.
     repo = await _flatfile_repo()
     settings = _settings()
     bot = build_bot(settings, repo)
 
     await register_stat_commands(bot, repo, settings)
-    await register_stat_commands(bot, repo, settings)
+    await register_stat_commands(bot, repo, settings)  # must not raise
 
     stats = await repo.list_stats()
-    # Phase 4: `admin` is slash-only — omitted from the exclusion list on purpose.
-    # Phase 5: kodex/kodex_check/sync_welcome/base/basestop are slash-only too.
-    assert bot.get_command("admin") is None
-    wired = [c for c in bot.commands if c.name not in ("help", "stat", "del", "gate", "config", "content", "activity", "erfolge", "overview", "sync_achievements")]
-    assert len(wired) == len(stats) + 1
+    for stat in stats:
+        assert bot.tree.get_command(stat.key) is not None, stat.key
+    assert bot.tree.get_command("rank") is not None
 
     await repo.close()
 
@@ -147,6 +143,47 @@ def _fake_channel(send_return_id: int = 111, channel_id: int = 222):
     old_message.delete = AsyncMock()
     channel.fetch_message = AsyncMock(return_value=old_message)
     return channel, old_message
+
+
+# ── Phase 6 slash-surface helpers ─────────────────────────────────────────
+# The per-stat counter commands and `rank` are app commands on `bot.tree` now,
+# so they are exercised as slash interactions (like the /admin, /stat, /erfolge
+# tests) rather than prefix `ctx` callbacks.
+
+def _fake_interaction(user_id: int = 1, display_name: str = "User"):
+    it = MagicMock()
+    it.user = SimpleNamespace(id=user_id, display_name=display_name)
+    it.response = MagicMock()
+    it.response.send_message = AsyncMock()
+    it.response.defer = AsyncMock()
+    it.followup = MagicMock()
+    it.followup.send = AsyncMock()
+    return it
+
+
+def _sent_text(send_mock) -> str:
+    """Flatten an interaction.response.send_message call to its text payload."""
+    call = send_mock.await_args
+    if call is None:
+        return ""
+    if call.args:
+        return call.args[0]
+    return call.kwargs.get("content", "")
+
+
+def _has_app_cooldown(cmd) -> bool:
+    """True if an ``app_commands.checks.cooldown`` predicate is attached.
+
+    discord.py's cooldown decorator appends a closure whose qualname is
+    ``_create_cooldown_decorator.<locals>.predicate`` to ``cmd.checks``.
+    """
+    return any(
+        getattr(c, "__qualname__", "").startswith("_create_cooldown_decorator")
+        for c in getattr(cmd, "checks", []))
+
+
+def _param_names(cmd) -> list[str]:
+    return [p.name for p in getattr(cmd, "parameters", [])]
 
 
 async def test_send_or_update_first_post_sends_and_records():
@@ -237,50 +274,45 @@ async def test_send_or_update_swallows_fetch_or_delete_errors_then_still_posts()
 
 # ── rank / stat command bodies ────────────────────────────────────────────
 
-async def test_rank_command_reports_no_usage_when_user_has_none():
+async def test_rank_slash_reports_no_usage_when_user_has_none():
+    # Phase 6: `/rank` is a slash app command that responds via the interaction
+    # (no longer a prefix command posting to the reminder channel).
     repo = await _flatfile_repo()
     settings = _settings()
     bot = build_bot(settings, repo)
     await register_stat_commands(bot, repo, settings)
-    channel, _ = _fake_channel(send_return_id=111, channel_id=222)
-    bot.get_channel = MagicMock(return_value=channel)
 
-    cmd = bot.get_command("rank")
-    ctx = MagicMock()
-    ctx.author = SimpleNamespace(id=1, display_name="NewUser")
+    cmd = bot.tree.get_command("rank")
+    assert cmd is not None
+    assert bot.get_command("rank") is None  # off the prefix registry
+    interaction = _fake_interaction(user_id=1, display_name="NewUser")
 
-    # Real end-to-end call: no mocking of _send_or_update/set_last_post, so
-    # a regression to the old (buggy) rank_<id> stat_last_post path would
-    # surface as a real KeyError here.
-    await cmd.callback(ctx)
+    await cmd.callback(interaction)
 
-    channel.send.assert_awaited_once()
-    text = channel.send.await_args.args[0]
-    assert "noch keine Befehle genutzt" in text
+    interaction.response.send_message.assert_awaited_once()
+    assert "noch keine Befehle genutzt" in _sent_text(interaction.response.send_message)
 
     await repo.close()
 
 
-async def test_rank_command_reports_ordered_usage_when_user_has_data():
+async def test_rank_slash_reports_ordered_usage_when_user_has_data():
     repo = await _flatfile_repo()
     settings = _settings()
     bot = build_bot(settings, repo)
     await register_stat_commands(bot, repo, settings)
-    channel, _ = _fake_channel(send_return_id=111, channel_id=222)
-    bot.get_channel = MagicMock(return_value=channel)
 
     await repo.record_use(7, "Erkan", "tit")
     await repo.record_use(7, "Erkan", "tit")
     await repo.record_use(7, "Erkan", "cry")
 
-    cmd = bot.get_command("rank")
-    ctx = MagicMock()
-    ctx.author = SimpleNamespace(id=7, display_name="Erkan")
+    cmd = bot.tree.get_command("rank")
+    assert cmd is not None
+    interaction = _fake_interaction(user_id=7, display_name="Erkan")
 
-    await cmd.callback(ctx)
+    await cmd.callback(interaction)
 
-    channel.send.assert_awaited_once()
-    text = channel.send.await_args.args[0]
+    interaction.response.send_message.assert_awaited_once()
+    text = _sent_text(interaction.response.send_message)
     assert "tit" in text and "cry" in text
     assert text.index("tit") < text.index("cry")  # higher count ranks first
 
@@ -358,22 +390,65 @@ async def test_send_rank_no_channel_is_safe_no_op():
     await repo.close()
 
 
-async def test_stat_command_callback_records_use_and_posts():
+async def test_non_targeted_stat_slash_records_use_and_responds():
+    # Phase 6: `/tit` is a slash app command; invoking it still does the counter
+    # work (record_use) and responds via the interaction.
     repo = await _flatfile_repo()
     settings = _settings()
     bot = build_bot(settings, repo)
     await register_stat_commands(bot, repo, settings)
-    channel, _ = _fake_channel()
-    bot.get_channel = MagicMock(return_value=channel)
 
-    cmd = bot.get_command("tit")
-    ctx = MagicMock()
-    ctx.author = SimpleNamespace(id=99, display_name="Ali")
+    cmd = bot.tree.get_command("tit")
+    assert cmd is not None
+    assert bot.get_command("tit") is None  # off prefix
+    interaction = _fake_interaction(user_id=99, display_name="Ali")
 
-    await cmd.callback(ctx)
+    await cmd.callback(interaction)
 
-    channel.send.assert_awaited_once()
-    assert await repo.get_last_post("tit") is not None
+    interaction.response.send_message.assert_awaited_once()
+    assert await repo.get_user_stats(99) == {"tit": 1}  # counter incremented
+
+    await repo.close()
+
+
+async def test_non_targeted_stat_slash_has_cooldown_and_no_member_param():
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+    await register_stat_commands(bot, repo, settings)
+
+    cmd = bot.tree.get_command("tit")
+    assert cmd is not None
+    assert _has_app_cooldown(cmd)          # app-command cooldown present
+    assert "member" not in _param_names(cmd)
+
+    await repo.close()
+
+
+async def test_non_targeted_stat_slash_calls_build_output(monkeypatch):
+    # Pin that the slash callback delegates to the same `build_output` logic
+    # and sends its rendered text through the interaction.
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+    await register_stat_commands(bot, repo, settings)
+
+    seen = {}
+
+    async def _fake_build_output(r, key, uid, name):
+        seen["args"] = (key, uid, name)
+        return "RENDERED-OUTPUT"
+
+    monkeypatch.setattr(botmod, "build_output", _fake_build_output)
+
+    cmd = bot.tree.get_command("tit")
+    assert cmd is not None
+    interaction = _fake_interaction(user_id=5, display_name="Ali")
+
+    await cmd.callback(interaction)
+
+    assert seen["args"] == ("tit", 5, "Ali")
+    assert "RENDERED-OUTPUT" in _sent_text(interaction.response.send_message)
 
     await repo.close()
 
@@ -838,50 +913,60 @@ async def test_on_member_join_after_remove_unarchives_rejoining_member():
 
 # ── targeted stat commands (smart/crash/home) ────────────────────────────
 
-async def test_targeted_stat_command_increments_target_and_invoker():
+async def test_targeted_stat_slash_increments_target_and_invoker():
     repo = await _flatfile_repo()
     settings = _settings()
     bot = build_bot(settings, repo)
     await register_stat_commands(bot, repo, settings)
-    channel, _ = _fake_channel()
-    bot.get_channel = MagicMock(return_value=channel)
 
-    cmd = bot.get_command("smart")
-    ctx = MagicMock()
-    ctx.author = SimpleNamespace(id=1, display_name="Invoker")
+    cmd = bot.tree.get_command("smart")
+    assert cmd is not None
+    assert bot.get_command("smart") is None  # off prefix
+    interaction = _fake_interaction(user_id=1, display_name="Invoker")
     member = SimpleNamespace(id=42, display_name="Target", mention="<@42>")
 
-    await cmd.callback(ctx, member)
+    await cmd.callback(interaction, member)
 
     # target's per-target counter increments, not the invoker's user_stats
     # under the target's id
     assert await repo.get_target_total(42, "smart") == 1
     # the invoker's own user_stats is still updated via record_use
     assert await repo.get_user_stats(1) == {"smart": 1}
-    channel.send.assert_awaited_once()
-    text = channel.send.await_args.args[0]
-    assert "<@42>" in text
+    interaction.response.send_message.assert_awaited_once()
+    assert "<@42>" in _sent_text(interaction.response.send_message)
 
     await repo.close()
 
 
-async def test_targeted_stat_command_counts_per_target_separately():
+async def test_targeted_stat_slash_has_member_param_and_cooldown():
     repo = await _flatfile_repo()
     settings = _settings()
     bot = build_bot(settings, repo)
     await register_stat_commands(bot, repo, settings)
-    channel, _ = _fake_channel()
-    bot.get_channel = MagicMock(return_value=channel)
 
-    cmd = bot.get_command("crash")
-    ctx = MagicMock()
-    ctx.author = SimpleNamespace(id=1, display_name="Invoker")
+    cmd = bot.tree.get_command("smart")
+    assert cmd is not None
+    assert "member" in _param_names(cmd)   # /smart member:<user>
+    assert _has_app_cooldown(cmd)
+
+    await repo.close()
+
+
+async def test_targeted_stat_slash_counts_per_target_separately():
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+    await register_stat_commands(bot, repo, settings)
+
+    cmd = bot.tree.get_command("crash")
+    assert cmd is not None
+    interaction = _fake_interaction(user_id=1, display_name="Invoker")
     member_a = SimpleNamespace(id=10, display_name="A", mention="<@10>")
     member_b = SimpleNamespace(id=20, display_name="B", mention="<@20>")
 
-    await cmd.callback(ctx, member_a)
-    await cmd.callback(ctx, member_a)
-    await cmd.callback(ctx, member_b)
+    await cmd.callback(interaction, member_a)
+    await cmd.callback(interaction, member_a)
+    await cmd.callback(interaction, member_b)
 
     assert await repo.get_target_total(10, "crash") == 2
     assert await repo.get_target_total(20, "crash") == 1
@@ -895,56 +980,51 @@ async def test_non_targeted_stats_are_unaffected_by_targeted_wiring():
     settings = _settings()
     bot = build_bot(settings, repo)
     await register_stat_commands(bot, repo, settings)
-    channel, _ = _fake_channel()
-    bot.get_channel = MagicMock(return_value=channel)
 
-    cmd = bot.get_command("tit")
-    ctx = MagicMock()
-    ctx.author = SimpleNamespace(id=1, display_name="Invoker")
+    cmd = bot.tree.get_command("tit")
+    assert cmd is not None
+    interaction = _fake_interaction(user_id=1, display_name="Invoker")
 
-    await cmd.callback(ctx)
+    await cmd.callback(interaction)
 
-    channel.send.assert_awaited_once()
+    interaction.response.send_message.assert_awaited_once()
     assert await repo.get_user_stats(1) == {"tit": 1}
 
     await repo.close()
 
 
-async def test_home_command_targets_configured_julez_id_with_no_argument():
+async def test_home_slash_targets_configured_julez_id_with_no_argument():
     repo = await _flatfile_repo()
     settings = _settings(julez_id=999)
     bot = build_bot(settings, repo)
     await register_stat_commands(bot, repo, settings)
-    channel, _ = _fake_channel()
-    bot.get_channel = MagicMock(return_value=channel)
 
-    cmd = bot.get_command("home")
+    cmd = bot.tree.get_command("home")
     assert cmd is not None
-    ctx = MagicMock()
-    ctx.author = SimpleNamespace(id=1, display_name="Invoker")
+    assert "member" not in _param_names(cmd)  # fixed target, no member option
+    interaction = _fake_interaction(user_id=1, display_name="Invoker")
 
-    await cmd.callback(ctx)
+    await cmd.callback(interaction)
 
     assert await repo.get_target_total(999, "home") == 1
     assert await repo.get_user_stats(1) == {"home": 1}
-    channel.send.assert_awaited_once()
-    text = channel.send.await_args.args[0]
-    assert "<@999>" in text
+    interaction.response.send_message.assert_awaited_once()
+    assert "<@999>" in _sent_text(interaction.response.send_message)
 
     await repo.close()
 
 
-async def test_home_command_is_skipped_when_julez_id_unset():
+async def test_home_slash_is_skipped_when_julez_id_unset():
     repo = await _flatfile_repo()
     settings = _settings(julez_id=0)
     bot = build_bot(settings, repo)
 
     await register_stat_commands(bot, repo, settings)
 
-    assert bot.get_command("home") is None
-    # other targeted stats still register normally
-    assert bot.get_command("smart") is not None
-    assert bot.get_command("crash") is not None
+    assert bot.tree.get_command("home") is None
+    # other targeted stats still register normally on the tree
+    assert bot.tree.get_command("smart") is not None
+    assert bot.tree.get_command("crash") is not None
 
     await repo.close()
 
