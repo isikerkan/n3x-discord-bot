@@ -856,3 +856,33 @@ async def test_non_author_without_override_role_is_ignored():
 
     assert await _delta_rows(repo) == []
     await repo.close()
+
+
+async def test_override_confirm_announces_the_author_not_the_clicker(monkeypatch):
+    import n3x_bot.bot as botmod
+    guild = _fake_guild("prom")
+    # the author (id 7) is a guild member with a resolvable card identity
+    author_member = SimpleNamespace(id=7, display_name="Erkan")
+    guild.get_member = lambda uid: author_member if uid == 7 else None
+    clicker = SimpleNamespace(id=99, display_name="Mod",
+                              roles=[SimpleNamespace(id=555)], guild=guild)
+
+    bot, repo, settings, message, added = await _seed_input(
+        "d 75000", guild=guild, message_id=7501, author_id=7)
+    await repo.set_runtime_config("stat_override_role_id", "555")
+    await bot.runtime_config.refresh(repo)
+    # unlock is guaranteed: force an achievement so announce is called
+    monkeypatch.setattr(botmod, "check_achievements",
+                        AsyncMock(return_value=["ach"]))
+    seen = {}
+    async def _fake_announce(b, s, member, newly):
+        seen["member"] = member
+    monkeypatch.setattr(botmod, "announce_achievements", _fake_announce)
+    # payload.member is the clicker; the channel's guild resolves the author
+    message.channel.guild = guild
+
+    await _dispatch(bot, repo, settings, message_id=7501, user_id=99,
+                    emoji=added[0], member=clicker)
+
+    assert seen.get("member") is author_member  # NOT the clicker
+    await repo.close()

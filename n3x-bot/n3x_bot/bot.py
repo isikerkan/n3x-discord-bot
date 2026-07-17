@@ -860,6 +860,27 @@ async def backfill_gate_input(bot, repo: StatsRepository, settings: Settings,
     return processed
 
 
+async def _resolve_member(bot, payload, user_id: int):
+    """Resolve a guild Member for `user_id` from a reaction payload.
+
+    When the payload's reactor IS the target (self-confirm) this returns them;
+    with the stat-override role the clicker differs, so we look the target up in
+    the guild (cache, then fetch). Returns None if unresolvable.
+    """
+    guild = getattr(getattr(payload, "member", None), "guild", None)
+    if guild is None:
+        guild = getattr(bot.get_channel(payload.channel_id), "guild", None)
+    if guild is None:
+        return None
+    member = guild.get_member(user_id)
+    if member is None:
+        try:
+            member = await guild.fetch_member(user_id)
+        except Exception:
+            member = None
+    return member
+
+
 def _has_stat_override(payload, runtime_config) -> bool:
     """True if the reactor holds the configured stat-override role.
 
@@ -969,14 +990,17 @@ async def handle_gate_drop_confirmation(bot, repo: StatsRepository,
             await update_gate_chart(bot, repo, settings, gate_type)
         except Exception:
             pass
-        member = getattr(payload, "member", None)
+        # Resolve the ORIGINAL author's member — with the stat-override role a
+        # different member may have clicked, but the entry (and its achievement
+        # card) belong to the author, not the clicker.
+        member = await _resolve_member(bot, payload, user_id)
         newly = (await check_achievements(repo, user_id, f"gate_{gate_type}",
                                           defs=bot.achievement_defs.all())
                  + await check_achievements(repo, user_id, "gate_total",
                                             defs=bot.achievement_defs.all())
                  + await check_achievements(repo, user_id, "gate_cost_total",
                                             defs=bot.achievement_defs.all()))
-        if newly:
+        if newly and member is not None:
             try:
                 await announce_achievements(bot, settings, member, newly)
             except Exception:
