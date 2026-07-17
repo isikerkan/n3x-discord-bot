@@ -336,6 +336,14 @@ class JsonRepository(StatsRepository):
         return [{"id": k, **self._db["achievement_defs"][k]}
                 for k in sorted(self._db["achievement_defs"])]
 
+    async def replace_achievement_defs(self, defs):
+        self._db["achievement_defs"] = {
+            d["id"]: {"category": d["category"], "metric": d["metric"],
+                      "threshold": d["threshold"], "title": d["title"],
+                      "secret": d["secret"], "color": d.get("color")}
+            for d in defs}
+        self._flush()
+
     # ── target tracking ────────────────────────────────────────────────────
     async def record_target_use(self, target_discord_id, stat_key):
         stat = self._find("stats", key=stat_key)

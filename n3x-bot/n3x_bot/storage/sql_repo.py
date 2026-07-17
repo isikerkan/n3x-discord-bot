@@ -417,6 +417,15 @@ class SqlRepository(StatsRepository):
                      "secret": bool(r.secret), "color": r.color}
                     for r in rows]
 
+    async def replace_achievement_defs(self, defs):
+        async with self.engine.begin() as conn:
+            await conn.execute(delete(sc.achievement_defs))
+            for d in defs:
+                await conn.execute(insert(sc.achievement_defs).values(
+                    id=d["id"], category=d["category"], metric=d["metric"],
+                    threshold=d["threshold"], title=d["title"],
+                    secret=d["secret"], color=d.get("color")))
+
     # ── target tracking ───────────────────────────────────────────────────
     async def record_target_use(self, target_discord_id, stat_key):
         async with self.engine.begin() as conn:

@@ -154,6 +154,18 @@ class StatsRepository(ABC):
     async def all_achievement_defs(self) -> list[dict]:
         """All definitions as a list of 7-key dicts, ordered by id."""
         ...
+    @abstractmethod
+    async def replace_achievement_defs(self, defs: list[dict]) -> None:
+        """Atomically replace ALL definitions with `defs`.
+
+        A single all-or-nothing write: the existing rows are dropped and `defs`
+        inserted in one transaction, so a mid-write failure never leaves a
+        partial table (which the total-replacement resolver would surface as
+        silently missing achievements). Each dict carries the 7 keys
+        id/category/metric/threshold/title/secret/color (`color` optional,
+        defaults to None). Passing `[]` atomically wipes the table.
+        """
+        ...
 
     # target tracking
     @abstractmethod

@@ -148,6 +148,50 @@ async def test_all_achievement_defs_is_ordered_by_id(repo):
     assert ids == sorted(ids)
 
 
+# ── replace_achievement_defs: atomic bulk replace ──────────────────────────
+
+def _def(aid, **overrides):
+    d = dict(id=aid, category="voice", metric="voice_seconds", threshold=3600,
+             title="Rookie Talker", secret=False, color=None)
+    d.update(overrides)
+    return d
+
+
+async def test_replace_achievement_defs_sets_exactly_those_rows(repo):
+    await _seed_one(repo, "stale_1")
+    await _seed_one(repo, "stale_2")
+    await repo.replace_achievement_defs(
+        [_def("a_5", threshold=5), _def("msg_1000", category="message",
+                                        metric="messages", threshold=1000,
+                                        title="Tastatur-Krieger", secret=True)])
+    rows = await repo.all_achievement_defs()
+    assert {r["id"] for r in rows} == {"a_5", "msg_1000"}
+
+
+async def test_replace_achievement_defs_empty_wipes_the_table(repo):
+    await _seed_one(repo, "voice_3600")
+    await repo.replace_achievement_defs([])
+    assert await repo.all_achievement_defs() == []
+
+
+async def test_replace_achievement_defs_round_trips_all_fields(repo):
+    await repo.replace_achievement_defs(
+        [_def("voice_3600", threshold=3600, color="#1E90FF", secret=True)])
+    row = await repo.get_achievement_def("voice_3600")
+    assert row == {
+        "id": "voice_3600", "category": "voice", "metric": "voice_seconds",
+        "threshold": 3600, "title": "Rookie Talker", "secret": True,
+        "color": "#1E90FF",
+    }
+
+
+async def test_replace_achievement_defs_defaults_color_to_none(repo):
+    d = _def("voice_3600")
+    d.pop("color")
+    await repo.replace_achievement_defs([d])
+    assert (await repo.get_achievement_def("voice_3600"))["color"] is None
+
+
 # ── migration fidelity: export / import / clear ─────────────────────────────
 
 async def _seed_defs(repo):

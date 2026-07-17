@@ -481,7 +481,7 @@ async def test_kappa_store_processes_achievements_even_when_chart_fails(monkeypa
     checked = []
     real_check = achmod.check_achievements
 
-    async def _tracking_check(_repo, user_id, category):
+    async def _tracking_check(_repo, user_id, category, defs=None):
         checked.append(category)
         return await real_check(_repo, user_id, category)
 

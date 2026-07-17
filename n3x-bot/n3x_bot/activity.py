@@ -75,7 +75,8 @@ async def apply_voice_roles(bot, settings: Settings, member,
     role_map = settings.voice_role_map()
     if not role_map:
         return
-    grant_id, other_ids = voice_role_transition([a.id for a in newly], role_map)
+    grant_id, other_ids = voice_role_transition(
+        [a.id for a in newly], role_map, defs=bot.achievement_defs.all())
     if grant_id is None:
         return
     # Best-effort by contract: if remove_roles raises after add_roles succeeded
@@ -96,7 +97,7 @@ async def apply_voice_roles(bot, settings: Settings, member,
 
 # ── event helpers ──────────────────────────────────────────────────────────
 
-async def record_message_activity(repo: StatsRepository, settings: Settings,
+async def record_message_activity(bot, repo: StatsRepository, settings: Settings,
                                    member_id: int, now: datetime) -> list[Achievement]:
     # Intentionally fires on EVERY non-bot message (including command and
     # gate-input posts): the message counter + streak reflect all participation,
@@ -121,11 +122,14 @@ async def record_message_activity(repo: StatsRepository, settings: Settings,
     # streak/night change at most once per day: only (re)check when the
     # underlying value actually moved — a same-day repeat message can never
     # unlock a new streak/night tier, so skipping it is behaviour-preserving.
-    newly = await check_achievements(repo, member_id, "messages")
+    newly = await check_achievements(repo, member_id, "messages",
+                                     defs=bot.achievement_defs.all())
     if streak_changed:
-        newly += await check_achievements(repo, member_id, "streak")
+        newly += await check_achievements(repo, member_id, "streak",
+                                          defs=bot.achievement_defs.all())
     if night_changed:
-        newly += await check_achievements(repo, member_id, "night")
+        newly += await check_achievements(repo, member_id, "night",
+                                          defs=bot.achievement_defs.all())
     return newly
 
 
@@ -162,7 +166,8 @@ async def handle_voice_state_update(bot, repo: StatsRepository, settings: Settin
                     credited = True
             times[member.id] = now
     if credited:
-        newly = await check_achievements(repo, member.id, "voice_seconds")
+        newly = await check_achievements(repo, member.id, "voice_seconds",
+                                         defs=bot.achievement_defs.all())
         if newly:
             try:
                 await announce_achievements(bot, settings, member, newly)
@@ -201,7 +206,8 @@ async def flush_voice_times(bot, repo: StatsRepository, now: datetime) -> None:
     # loop but the achievement stays locked until they leave/move.
     settings = bot.n3x_settings
     for member_id in credited:
-        newly = await check_achievements(repo, member_id, "voice_seconds")
+        newly = await check_achievements(repo, member_id, "voice_seconds",
+                                         defs=bot.achievement_defs.all())
         if newly:
             member = None
             for g in bot.guilds:
@@ -228,7 +234,8 @@ async def handle_activity_reaction(bot, repo: StatsRepository, settings: Setting
     # Reactions on bot-UI messages (reminder/welcome) still count — a design
     # choice: any reaction is treated as engagement, not filtered by target.
     await repo.add_activity(payload.user_id, "reactions", 1)
-    newly = await check_achievements(repo, payload.user_id, "reactions")
+    newly = await check_achievements(repo, payload.user_id, "reactions",
+                                     defs=bot.achievement_defs.all())
     if newly:
         try:
             await announce_achievements(bot, settings, member, newly)

@@ -178,7 +178,8 @@ async def check_achievements(repo: StatsRepository, discord_id: int,
 # ── overview embed ─────────────────────────────────────────────────────────
 
 def build_overview_embed(holders: dict[int, set[str]], user_ids: list[int],
-                         page: int, total: int | None = None) -> discord.Embed:
+                         page: int, total: int | None = None,
+                         defs: list[Achievement] | None = None) -> discord.Embed:
     if not user_ids:
         return discord.Embed(
             title="🏆 Achievement-Übersicht",
@@ -202,18 +203,20 @@ def build_overview_embed(holders: dict[int, set[str]], user_ids: list[int],
         f"<@{uid}>\n"
         f"**{count}/{denom}** Achievements freigeschaltet\n"
         f"{bar}\n"
-        f"{_overview_breakdown(owned)}\n"
+        f"{_overview_breakdown(owned, defs)}\n"
         f"Seite {idx + 1}/{len(user_ids)} · Platz {rank}")
     return embed
 
 
-def _overview_breakdown(owned: set[str]) -> str:
+def _overview_breakdown(owned: set[str], defs: list[Achievement] | None = None) -> str:
+    source = defs if defs is not None else ACHIEVEMENTS
+
     def owned_count(*categories: str) -> int:
-        return sum(1 for a in ACHIEVEMENTS
+        return sum(1 for a in source
                    if a.category in categories and a.id in owned)
 
     def total_count(*categories: str) -> int:
-        return sum(1 for a in ACHIEVEMENTS if a.category in categories)
+        return sum(1 for a in source if a.category in categories)
 
     return (f"🚀 {owned_count('gate')}/{total_count('gate')}  "
             f"🎙️ {owned_count('voice')}/{total_count('voice')}  "
@@ -234,7 +237,9 @@ async def post_overview(bot, repo: StatsRepository, settings: Settings) -> None:
     channel = bot.get_channel(bot.runtime_config.overview_channel_id)
     if channel is None:
         return
-    embed = build_overview_embed(holders, user_ids, page)
+    embed = build_overview_embed(holders, user_ids, page,
+                                 total=bot.achievement_defs.total,
+                                 defs=bot.achievement_defs.all())
     # Re-use the tracked overview message if one still exists: EDIT it back to
     # page 0 instead of spamming a fresh message (which would orphan the nav
     # reactions on the old, now-dead message). Only post anew when nothing is
@@ -273,7 +278,9 @@ async def handle_overview_reaction(bot, repo: StatsRepository, settings: Setting
     user_ids = state["user_ids"]
     new_page = (state["page"] + delta) % len(user_ids)
     holders = await repo.list_achievement_holders()
-    embed = build_overview_embed(holders, user_ids, new_page)
+    embed = build_overview_embed(holders, user_ids, new_page,
+                                 total=bot.achievement_defs.total,
+                                 defs=bot.achievement_defs.all())
     channel = bot.get_channel(bot.runtime_config.overview_channel_id)
     if channel is None:
         return
@@ -299,7 +306,8 @@ async def recompute_user_achievements(repo: StatsRepository, discord_id: int,
     return newly
 
 
-async def sync_all_achievements(repo: StatsRepository) -> dict:
+async def sync_all_achievements(repo: StatsRepository,
+                                defs: list[Achievement] | None = None) -> dict:
     snap = await repo.export_all()
     user_ids: set[int] = set()
     for key in ("achievements", "activity_counters", "streak_stats", "night_stats"):
@@ -309,7 +317,7 @@ async def sync_all_achievements(repo: StatsRepository) -> dict:
     users_processed = 0
     achievements_added = 0
     for uid in sorted(user_ids):
-        newly = await recompute_user_achievements(repo, uid)
+        newly = await recompute_user_achievements(repo, uid, defs=defs)
         users_processed += 1
         achievements_added += len(newly)
     return {"users_processed": users_processed,
@@ -326,24 +334,28 @@ def _milestone_progress(metric: str, live: int, threshold: int) -> str:
 
 
 async def _build_erfolge_embed(repo: StatsRepository, owned: set[str], uid: int,
-                               display_name: str) -> discord.Embed:
+                               display_name: str,
+                               defs: list[Achievement] | None = None,
+                               total: int | None = None) -> discord.Embed:
+    source = defs if defs is not None else ACHIEVEMENTS
+    denom = total if total is not None else TOTAL_ACHIEVEMENTS
     count = len(owned)
-    percent = round(count / TOTAL_ACHIEVEMENTS * 100)
+    percent = round(count / denom * 100)
     embed = discord.Embed(
         title=f"🏆 Achievements - {display_name}",
         color=discord.Color.gold())
     embed.description = (
-        f"**{count}/{TOTAL_ACHIEVEMENTS}** Achievements freigeschaltet\n"
-        f"{_bar(count, TOTAL_ACHIEVEMENTS)} {percent} %")
+        f"**{count}/{denom}** Achievements freigeschaltet\n"
+        f"{_bar(count, denom)} {percent} %")
 
     category_labels = {"gate": "🚀 Gates", "voice": "🎙️ Voice",
                        "streak": "🔥 Streak", "night": "🌙 Nachtaktiv"}
     for category, label in category_labels.items():
-        defs = sorted((a for a in ACHIEVEMENTS if a.category == category),
-                      key=lambda a: a.threshold)
-        unlocked = [a for a in defs if a.id in owned]
-        bar = _bar(len(unlocked), len(defs))
-        nxt = next((a for a in defs if a.id not in owned), None)
+        cat_defs = sorted((a for a in source if a.category == category),
+                          key=lambda a: a.threshold)
+        unlocked = [a for a in cat_defs if a.id in owned]
+        bar = _bar(len(unlocked), len(cat_defs))
+        nxt = next((a for a in cat_defs if a.id not in owned), None)
         if nxt is None:
             nxt_text = "Alle freigeschaltet"
         else:
@@ -352,11 +364,11 @@ async def _build_erfolge_embed(repo: StatsRepository, owned: set[str], uid: int,
                         f"{_milestone_progress(nxt.metric, live, nxt.threshold)}")
         embed.add_field(
             name=label,
-            value=f"{len(unlocked)}/{len(defs)}  {bar}\n{nxt_text}",
+            value=f"{len(unlocked)}/{len(cat_defs)}  {bar}\n{nxt_text}",
             inline=False)
 
-    secret_total = sum(1 for a in ACHIEVEMENTS if a.secret)
-    secret_unlocked = len(owned & {a.id for a in ACHIEVEMENTS if a.secret})
+    secret_total = sum(1 for a in source if a.secret)
+    secret_unlocked = len(owned & {a.id for a in source if a.secret})
     embed.add_field(name="🔒 Secret",
                     value=f"{secret_unlocked}/{secret_total}  ???", inline=False)
 
@@ -373,5 +385,6 @@ def register_achievement_commands(bot, repo: StatsRepository,
     async def erfolge(interaction):
         owned = await repo.get_user_achievements(interaction.user.id)
         embed = await _build_erfolge_embed(
-            repo, owned, interaction.user.id, interaction.user.display_name)
+            repo, owned, interaction.user.id, interaction.user.display_name,
+            defs=bot.achievement_defs.all(), total=bot.achievement_defs.total)
         await interaction.response.send_message(embed=embed)
