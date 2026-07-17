@@ -72,14 +72,21 @@ def register_kodex_commands(bot, repo: StatsRepository, settings: Settings) -> N
                     "❌ Keine Berechtigung.", ephemeral=True)
                 return
             await interaction.response.defer(ephemeral=True)
+            # Only DM members who have NOT yet confirmed the Kodex.
+            confirmed = set(await repo.list_kodex_confirmed())
             count = 0
+            skipped = 0
             for member in interaction.guild.members:
                 if getattr(member, "bot", False):
+                    continue
+                if member.id in confirmed:
+                    skipped += 1
                     continue
                 await send_kodex_dm(bot, repo, member)
                 count += 1
             await interaction.followup.send(
-                f"✅ Kodex an {count} Mitglieder verschickt.", ephemeral=True)
+                f"✅ Kodex an {count} Mitglieder verschickt "
+                f"({skipped} bereits bestätigt, übersprungen).", ephemeral=True)
 
     if bot.tree.get_command("kodex_check") is None:
         @bot.tree.command(name="kodex_check",

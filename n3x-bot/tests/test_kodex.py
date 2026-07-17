@@ -367,6 +367,28 @@ async def test_kodex_slash_admin_defers_then_dms_each_non_bot_member_then_summar
     await repo.close()
 
 
+async def test_kodex_slash_skips_members_who_already_confirmed():
+    from n3x_bot import kodex
+    repo = await _flatfile_repo()
+    settings = _settings(admin_role_id=42)
+    bot = build_bot(settings, repo)
+    kodex.register_kodex_commands(bot, repo, settings)
+    await repo.confirm_kodex(1)  # member 1 already confirmed
+
+    m1, m2 = _dm_member(member_id=1, msg_id=101), _dm_member(member_id=2, msg_id=102)
+    interaction = _fake_interaction(
+        user=_member(member_id=9, role_ids=(42,)),
+        guild=SimpleNamespace(members=[m1, m2]))
+    m1.send = AsyncMock(return_value=m1._sent_msg)
+    m2.send = AsyncMock(return_value=m2._sent_msg)
+
+    await bot.tree.get_command("kodex").callback(interaction)
+
+    m1.send.assert_not_awaited()      # already confirmed -> skipped
+    m2.send.assert_awaited_once()     # unconfirmed -> DMed
+    await repo.close()
+
+
 async def test_kodex_slash_continues_bulk_loop_when_one_members_reaction_fails():
     # A rate-limit / HTTPException on one member's add_reaction (or a storage
     # error on save) must NOT abort the whole /kodex loop — remaining members
