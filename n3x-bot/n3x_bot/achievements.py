@@ -226,6 +226,47 @@ def _overview_breakdown(owned: set[str], defs: list[Achievement] | None = None) 
             f"{total_count('message', 'reaction')}")
 
 
+class OverviewView(discord.ui.View):
+    """Persistent (``timeout=None``) nav for the achievement overview.
+
+    Anyone may page; each ◀/▶ click recomputes holders live, advances
+    ``bot._overview_state["page"]`` by ±1 (mod holder count), rebuilds the page
+    embed and edits the message in place. ``bot.add_view(OverviewView(...))`` in
+    ``on_ready`` re-attaches the callbacks after a restart.
+    """
+
+    def __init__(self, bot, repo: StatsRepository, settings: Settings):
+        super().__init__(timeout=None)
+        self.bot = bot
+        self.repo = repo
+        self.settings = settings
+
+    async def _page(self, interaction, delta: int) -> None:
+        holders = await self.repo.list_achievement_holders()
+        user_ids = sorted(holders)
+        if not user_ids:
+            return
+        state = getattr(self.bot, "_overview_state", None) or {}
+        page = state.get("page", 0)
+        new_page = (page + delta) % len(user_ids)
+        embed = build_overview_embed(holders, user_ids, new_page,
+                                     total=self.bot.achievement_defs.total,
+                                     defs=self.bot.achievement_defs.all())
+        await interaction.response.edit_message(embed=embed, view=self)
+        self.bot._overview_state = {"message_id": state.get("message_id"),
+                                    "page": new_page, "user_ids": user_ids}
+
+    @discord.ui.button(label="◀", style=discord.ButtonStyle.secondary,
+                       custom_id="n3x:overview:prev")
+    async def prev(self, interaction, button):
+        await self._page(interaction, -1)
+
+    @discord.ui.button(label="▶", style=discord.ButtonStyle.secondary,
+                       custom_id="n3x:overview:next")
+    async def next(self, interaction, button):
+        await self._page(interaction, 1)
+
+
 async def post_overview(bot, repo: StatsRepository, settings: Settings) -> None:
     if bot.runtime_config.overview_channel_id == 0:
         return
@@ -241,8 +282,8 @@ async def post_overview(bot, repo: StatsRepository, settings: Settings) -> None:
                                  total=bot.achievement_defs.total,
                                  defs=bot.achievement_defs.all())
     # Re-use the tracked overview message if one still exists: EDIT it back to
-    # page 0 instead of spamming a fresh message (which would orphan the nav
-    # reactions on the old, now-dead message). Only post anew when nothing is
+    # page 0 instead of spamming a fresh message. The persistent view stays
+    # attached across the edit (no re-send). Only post anew when nothing is
     # tracked or the old message is gone (fetch_message raises).
     state = getattr(bot, "_overview_state", None)
     if state:
@@ -254,9 +295,8 @@ async def post_overview(bot, repo: StatsRepository, settings: Settings) -> None:
             return
         except Exception:
             pass
-    msg = await channel.send(embed=embed)
-    await msg.add_reaction("⬅️")
-    await msg.add_reaction("➡️")
+    msg = await channel.send(embed=embed,
+                             view=OverviewView(bot, repo, settings))
     bot._overview_state = {"message_id": msg.id, "page": page, "user_ids": user_ids}
 
 

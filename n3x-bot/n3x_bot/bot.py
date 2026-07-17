@@ -27,7 +27,7 @@ from n3x_bot.activity import (
 )
 from n3x_bot.achievements import (
     register_achievement_commands, check_achievements,
-    post_overview, handle_overview_reaction, sync_all_achievements,
+    post_overview, OverviewView, sync_all_achievements,
 )
 from n3x_bot.cards import announce_achievements
 from n3x_bot.config import Settings
@@ -1185,6 +1185,10 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
         except Exception:
             log.exception("achievement_defs refresh failed; using defaults")
         try:
+            bot.add_view(OverviewView(bot, repo, settings))
+        except Exception:
+            log.exception("overview view registration failed")
+        try:
             await load_pending_gate(bot, repo)
         except Exception:
             log.exception("gate_pending load failed; in-flight confirms may be lost")
@@ -1299,10 +1303,6 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
         # overview nav), and vice versa.
         try:
             await handle_activity_reaction(bot, repo, settings, payload)
-        except Exception:
-            pass
-        try:
-            await handle_overview_reaction(bot, repo, settings, payload)
         except Exception:
             pass
         try:
