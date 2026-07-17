@@ -12,6 +12,7 @@ Channel/role targets use native channel/role options; the callback reads only
 import discord
 from discord import app_commands
 
+from n3x_bot import cards
 from n3x_bot.admin import app_is_admin
 from n3x_bot.config import Settings, parse_duration
 from n3x_bot.runtime_config import OVERRIDABLE_KEYS
@@ -166,5 +167,48 @@ def register_config_commands(bot, repo: StatsRepository, settings: Settings) -> 
         await bot.runtime_config.refresh(repo)
         await interaction.response.send_message(
             f"✅ Override `{key}` entfernt.", ephemeral=True)
+
+    @config_group.command(name="tier-color",
+                          description="Setzt die Farbe einer Gate-Tier-Stufe.")
+    @app_commands.describe(name="Tier-Name (Substring, z.B. gold)",
+                           hex="Farbe als #RRGGBB")
+    async def tier_color(interaction, name: str, hex: str):
+        if not await _require_admin(interaction):
+            return
+        if cards._parse_hex_color(hex) is None:
+            await interaction.response.send_message(
+                f"❌ Ungültige Farbe `{hex}`. Format: #RRGGBB", ephemeral=True)
+            return
+        await repo.set_color_config(f"tier:{name.lower()}", hex)
+        await bot.colors.refresh(repo)
+        await interaction.response.send_message(
+            f"✅ Tier-Farbe `{name.lower()}` gesetzt.", ephemeral=True)
+
+    @config_group.command(name="category-color",
+                          description="Setzt die Farbe einer Achievement-Kategorie.")
+    @app_commands.describe(name="Kategorie-Name (z.B. voice)",
+                           hex="Farbe als #RRGGBB")
+    async def category_color(interaction, name: str, hex: str):
+        if not await _require_admin(interaction):
+            return
+        if cards._parse_hex_color(hex) is None:
+            await interaction.response.send_message(
+                f"❌ Ungültige Farbe `{hex}`. Format: #RRGGBB", ephemeral=True)
+            return
+        await repo.set_color_config(f"category:{name.lower()}", hex)
+        await bot.colors.refresh(repo)
+        await interaction.response.send_message(
+            f"✅ Kategorie-Farbe `{name.lower()}` gesetzt.", ephemeral=True)
+
+    @config_group.command(name="color-reset",
+                          description="Setzt eine Farb-Override zurück.")
+    @app_commands.describe(key="Voller Schlüssel, z.B. tier:gold")
+    async def color_reset(interaction, key: str):
+        if not await _require_admin(interaction):
+            return
+        await repo.delete_color_config(key)
+        await bot.colors.refresh(repo)
+        await interaction.response.send_message(
+            f"✅ Farb-Override `{key}` entfernt.", ephemeral=True)
 
     bot.tree.add_command(config_group)

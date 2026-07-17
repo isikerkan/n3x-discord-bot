@@ -68,10 +68,14 @@ def _parse_hex_color(value: str | None) -> tuple[int, int, int] | None:
     return (int(body[0:2], 16), int(body[2:4], 16), int(body[4:6], 16))
 
 
-def tier_color(achievement: Achievement) -> tuple[int, int, int]:
+def tier_color(achievement: Achievement, colors=None) -> tuple[int, int, int]:
     parsed = _parse_hex_color(achievement.color)
     if parsed is not None:
         return parsed
+    if colors is not None:
+        if achievement.category == "gate":
+            return colors.tier_color(achievement.title)
+        return colors.category_color(achievement.category)
     if achievement.category == "gate":
         return _gate_tier_color(achievement.title)
     return ACTIVITY_CATEGORY_COLORS.get(achievement.category, (255, 255, 255))
@@ -227,7 +231,7 @@ async def announce_achievements(bot, settings: Settings, member,
         title, subtitle, footer = card_texts(
             ach, strip_prefix(member.display_name, settings.prefix_str))
         png = render_achievement_card(avatar_bytes, title, subtitle, footer,
-                                      tier_color(ach))
+                                      tier_color(ach, colors=getattr(bot, "colors", None)))
 
         key = (member.id, ach.metric)
         old_id = store.get(key)

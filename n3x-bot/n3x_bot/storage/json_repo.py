@@ -49,6 +49,7 @@ class JsonRepository(StatsRepository):
             "base_timers": {}, "channel_messages": {},
             "runtime_config": {},
             "content_texts": {},
+            "color_config": {},
             "achievement_defs": {},
         }
 
@@ -313,6 +314,23 @@ class JsonRepository(StatsRepository):
 
     async def all_content_texts(self):
         return dict(self._db["content_texts"])
+
+    # ── color config ───────────────────────────────────────────────────────
+    async def set_color_config(self, key, value):
+        self._db["color_config"][key] = value
+        self._flush()
+
+    async def get_color_config(self, key):
+        return self._db["color_config"].get(key)
+
+    async def delete_color_config(self, key):
+        existed = key in self._db["color_config"]
+        self._db["color_config"].pop(key, None)
+        self._flush()
+        return existed
+
+    async def all_color_config(self):
+        return dict(self._db["color_config"])
 
     # ── achievement definitions ────────────────────────────────────────────
     async def set_achievement_def(self, id, *, category, metric, threshold,
@@ -603,6 +621,7 @@ class JsonRepository(StatsRepository):
             "channel_messages": copy.deepcopy(self._db["channel_messages"]),
             "runtime_config": copy.deepcopy(self._db["runtime_config"]),
             "content_texts": copy.deepcopy(self._db["content_texts"]),
+            "color_config": copy.deepcopy(self._db["color_config"]),
             "achievement_defs": copy.deepcopy(self._db["achievement_defs"]),
             "seq": {
                 "user": self._max_id(users),
@@ -636,6 +655,8 @@ class JsonRepository(StatsRepository):
             snapshot.get("runtime_config", {}))
         self._db["content_texts"] = copy.deepcopy(
             snapshot.get("content_texts", {}))
+        self._db["color_config"] = copy.deepcopy(
+            snapshot.get("color_config", {}))
         self._db["achievement_defs"] = copy.deepcopy(
             snapshot.get("achievement_defs", {}))
         self._db["seq"] = dict(snapshot["seq"])

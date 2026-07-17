@@ -381,6 +381,31 @@ class SqlRepository(StatsRepository):
             return {r.key: r.value
                     for r in await conn.execute(select(sc.content_texts))}
 
+    # ── color config ──────────────────────────────────────────────────────
+    async def set_color_config(self, key, value):
+        async with self.engine.begin() as conn:
+            await self._upsert(conn, sc.color_config, {"key": key},
+                               {"value": value})
+
+    async def get_color_config(self, key):
+        async with self.engine.connect() as conn:
+            r = (await conn.execute(select(sc.color_config.c.value)
+                 .where(sc.color_config.c.key == key))).one_or_none()
+            return r.value if r else None
+
+    async def delete_color_config(self, key):
+        async with self.engine.begin() as conn:
+            exists = (await conn.execute(select(sc.color_config.c.key)
+                      .where(sc.color_config.c.key == key))).one_or_none()
+            await conn.execute(delete(sc.color_config)
+                               .where(sc.color_config.c.key == key))
+            return exists is not None
+
+    async def all_color_config(self):
+        async with self.engine.connect() as conn:
+            return {r.key: r.value
+                    for r in await conn.execute(select(sc.color_config))}
+
     # ── achievement definitions ────────────────────────────────────────────
     async def set_achievement_def(self, id, *, category, metric, threshold,
                                   title, secret, color=None):
@@ -852,6 +877,10 @@ class SqlRepository(StatsRepository):
                 r.key: r.value
                 for r in await conn.execute(select(sc.content_texts))
             }
+            color_config = {
+                r.key: r.value
+                for r in await conn.execute(select(sc.color_config))
+            }
             achievement_defs = {
                 r.id: {"category": r.category, "metric": r.metric,
                        "threshold": int(r.threshold), "title": r.title,
@@ -875,6 +904,7 @@ class SqlRepository(StatsRepository):
             "channel_messages": channel_messages,
             "runtime_config": runtime_config,
             "content_texts": content_texts,
+            "color_config": color_config,
             "achievement_defs": achievement_defs,
             "seq": seq,
         }
@@ -955,6 +985,9 @@ class SqlRepository(StatsRepository):
             for key, value in snapshot.get("content_texts", {}).items():
                 await conn.execute(insert(sc.content_texts).values(
                     key=key, value=value))
+            for key, value in snapshot.get("color_config", {}).items():
+                await conn.execute(insert(sc.color_config).values(
+                    key=key, value=value))
             for aid, v in snapshot.get("achievement_defs", {}).items():
                 await conn.execute(insert(sc.achievement_defs).values(
                     id=aid, category=v["category"], metric=v["metric"],
@@ -978,5 +1011,6 @@ class SqlRepository(StatsRepository):
                           sc.kodex_confirmations, sc.kodex_messages,
                           sc.base_timers, sc.channel_messages,
                           sc.runtime_config, sc.content_texts,
+                          sc.color_config,
                           sc.achievement_defs):
                 await conn.execute(delete(table))
