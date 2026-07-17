@@ -8,7 +8,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
-from n3x_bot.admin import (
+from n3x_bot.admin import (  # noqa: F401  (admin_* re-exported for tests)
     is_admin,
     admin_create_stat, admin_edit_stat, admin_archive_stat,
     admin_delete_stat, admin_list_stats,

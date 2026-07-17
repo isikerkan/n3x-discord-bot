@@ -28,7 +28,6 @@ import os
 import sqlite3
 import types
 
-import pytest
 
 from n3x_bot.config import Settings
 from n3x_bot.storage.json_repo import JsonRepository

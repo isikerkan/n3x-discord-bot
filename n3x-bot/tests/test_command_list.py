@@ -50,7 +50,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
 
 # Phase 7 reworks build_command_list to enumerate the app tree (`bot.tree`)
 # instead of the prefix `bot.commands`, rendering `/name` (and `/group sub`).

@@ -8,7 +8,6 @@ helpers, wired via `register_admin_commands`.
 import re
 
 from discord import app_commands
-from discord.ext import commands
 
 from n3x_bot.config import Settings
 from n3x_bot.models import Message, Stat

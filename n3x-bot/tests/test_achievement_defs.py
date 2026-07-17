@@ -29,7 +29,6 @@ AttributeError / AssertionError.
 import os
 import tempfile
 
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 from n3x_bot.achievements import ACHIEVEMENTS, TOTAL_ACHIEVEMENTS

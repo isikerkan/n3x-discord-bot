@@ -3,7 +3,6 @@ import tempfile
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
-from discord.ext import commands
 
 import n3x_bot.bot as botmod
 from n3x_bot.bot import (

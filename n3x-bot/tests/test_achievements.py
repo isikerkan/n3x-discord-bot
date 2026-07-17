@@ -38,7 +38,6 @@ import importlib
 import os
 import tempfile
 
-import pytest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 

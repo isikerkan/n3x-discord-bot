@@ -244,7 +244,8 @@ async def test_start_base_timer_rejects_map_outside_allowed_list():
     settings = _settings()
 
     # PIN: an invalid map raises ValueError (mirrors the admin CRUD helpers,
-    # surfaced to the user via on_command_error) and stores nothing.
+    # surfaced to the user by the /base callback's ephemeral error) and stores
+    # nothing.
     with pytest.raises(ValueError):
         await timers.start_base_timer(repo, settings, "9-9", 30, _now())
     assert await repo.list_base_timers() == {}
