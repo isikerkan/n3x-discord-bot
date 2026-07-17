@@ -34,7 +34,7 @@ async def enforce_nick(member, settings: Settings) -> bool:
         return False
     if member.guild.me.top_role <= member.top_role:
         return False
-    has_role = any(r.id == settings.target_role_id for r in member.roles)
+    has_role = any(r.id in settings.target_role_ids for r in member.roles)
     target = desired_nick(member.display_name, has_role, settings.prefix_str)
     if target is None:
         return False

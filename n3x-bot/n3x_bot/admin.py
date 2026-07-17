@@ -34,14 +34,13 @@ def _validate_stat_key(key: str) -> None:
 
 
 def is_admin(member, settings: Settings) -> bool:
-    return bool(settings.admin_role_id) and any(
-        r.id == settings.admin_role_id for r in getattr(member, "roles", []))
+    return any(r.id in settings.admin_role_ids
+               for r in getattr(member, "roles", None) or [])
 
 
 def app_is_admin(interaction, settings: Settings) -> bool:
-    return bool(settings.admin_role_id) and any(
-        r.id == settings.admin_role_id
-        for r in getattr(interaction.user, "roles", []))
+    return any(r.id in settings.admin_role_ids
+               for r in getattr(interaction.user, "roles", None) or [])
 
 
 async def _resolve_message_id(repo: StatsRepository, name: str) -> int:

@@ -634,7 +634,7 @@ def register_gate_commands(bot, repo: StatsRepository, settings: Settings):
         async def gate_del(interaction, gate: str, index: int):
             await interaction.response.defer(ephemeral=True)
             roles = getattr(interaction.user, "roles", [])
-            has_role = any(r.id == bot.runtime_config.gate_delete_role_id
+            has_role = any(r.id in bot.runtime_config.gate_delete_role_ids
                            for r in roles)
             if not has_role:
                 await interaction.followup.send(
@@ -889,11 +889,11 @@ def _has_stat_override(payload, runtime_config) -> bool:
     off `payload.member` (present on guild reaction events); returns False when
     no override role is configured or the member/roles are unavailable.
     """
-    rid = runtime_config.stat_override_role_id
-    if not rid:
+    ids = runtime_config.stat_override_role_ids
+    if not ids:
         return False
     member = getattr(payload, "member", None)
-    return any(r.id == rid for r in getattr(member, "roles", None) or [])
+    return any(r.id in ids for r in getattr(member, "roles", None) or [])
 
 
 async def handle_gate_drop_confirmation(bot, repo: StatsRepository,

@@ -341,7 +341,9 @@ async def test_config_role_non_admin_refused_no_write():
 
     assert "Berechtigung" in _sent_text(interaction)
     assert await repo.all_runtime_config() == {}
-    assert bot.runtime_config.target_role_id == settings.target_role_id
+    # MIGRATED for multi-role: the field is now a str; compare the list accessors
+    # (with no override, the resolver mirrors the .env base).
+    assert bot.runtime_config.target_role_ids == settings.target_role_ids
 
     await _cleanup(repo)
 

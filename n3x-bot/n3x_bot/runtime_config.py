@@ -6,6 +6,7 @@ from n3x_bot.config import (
     parse_duration,
     parse_gate_rewards,
     parse_reminder_hm,
+    parse_role_ids,
     parse_voice_roles,
 )
 
@@ -54,6 +55,17 @@ class RuntimeConfig:
                 log.warning("runtime_config: malformed override %s=%r; "
                             "falling back to .env value", key, override)
         return getattr(self._settings, key)
+
+    def _role_ids(self, key: str) -> list[int]:
+        """Resolve a multi-role setting to a list of ids. A DB override wins only
+        when it parses to a non-empty list; otherwise fall back to the Settings
+        string (a junk override must not silently disable enforcement)."""
+        override = self._overrides.get(key)
+        if override is not None:
+            ids = parse_role_ids(override)
+            if ids:
+                return ids
+        return parse_role_ids(str(getattr(self._settings, key)))
 
     def _derived(self, key: str, parse, fallback):
         """Resolve a derived getter: parse the override if set, else delegate to
@@ -119,21 +131,42 @@ class RuntimeConfig:
     def voice_log_channel_id(self) -> int:
         return self._int("voice_log_channel_id")
 
+    # ── overridable multi-role fields: `_ids` list + first-or-0 single ───────
+    @property
+    def target_role_ids(self) -> list[int]:
+        return self._role_ids("target_role_id")
+
+    @property
+    def gate_delete_role_ids(self) -> list[int]:
+        return self._role_ids("gate_delete_role_id")
+
+    @property
+    def stat_override_role_ids(self) -> list[int]:
+        return self._role_ids("stat_override_role_id")
+
+    @property
+    def base_timer_role_ids(self) -> list[int]:
+        return self._role_ids("base_timer_role_id")
+
     @property
     def target_role_id(self) -> int:
-        return self._int("target_role_id")
+        ids = self.target_role_ids
+        return ids[0] if ids else 0
 
     @property
     def gate_delete_role_id(self) -> int:
-        return self._int("gate_delete_role_id")
+        ids = self.gate_delete_role_ids
+        return ids[0] if ids else 0
 
     @property
     def stat_override_role_id(self) -> int:
-        return self._int("stat_override_role_id")
+        ids = self.stat_override_role_ids
+        return ids[0] if ids else 0
 
     @property
     def base_timer_role_id(self) -> int:
-        return self._int("base_timer_role_id")
+        ids = self.base_timer_role_ids
+        return ids[0] if ids else 0
 
     # ── overridable derived getters (parse override, else delegate) ──────────
     def gate_rewards_map(self) -> dict[str, int]:
@@ -168,8 +201,13 @@ class RuntimeConfig:
 
     # ── non-overridable pass-through (never consults the cache) ──────────────
     @property
+    def admin_role_ids(self) -> list[int]:
+        return parse_role_ids(str(self._settings.admin_role_id))
+
+    @property
     def admin_role_id(self) -> int:
-        return self._settings.admin_role_id
+        ids = self.admin_role_ids
+        return ids[0] if ids else 0
 
     @property
     def command_prefix(self) -> str:

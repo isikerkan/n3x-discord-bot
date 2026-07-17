@@ -858,6 +858,43 @@ async def test_non_author_without_override_role_is_ignored():
     await repo.close()
 
 
+# ── _has_stat_override honors MULTIPLE configured roles (ANY-match) ───────────
+# _has_stat_override must iterate `stat_override_role_ids`. A config fake exposing
+# only the list accessor keeps BOTH the positive and negative pre-impl RED a
+# clean AttributeError (the check still reading the single-int
+# `stat_override_role_id`). The existing single-id override tests above already
+# cover the full gate-drop confirmation flow.
+
+def _override_config(*role_ids):
+    return SimpleNamespace(stat_override_role_ids=list(role_ids))
+
+
+def _override_payload(*member_role_ids):
+    member = SimpleNamespace(roles=[SimpleNamespace(id=r) for r in member_role_ids])
+    return SimpleNamespace(member=member)
+
+
+def test_has_stat_override_true_for_member_holding_any_of_multiple_roles():
+    from n3x_bot.bot import _has_stat_override
+    cfg = _override_config(111, 222)
+    payload = _override_payload(333, 222)  # holds 222
+    assert _has_stat_override(payload, cfg) is True
+
+
+def test_has_stat_override_false_for_member_holding_none_of_multiple_roles():
+    from n3x_bot.bot import _has_stat_override
+    cfg = _override_config(111, 222)
+    payload = _override_payload(333, 444)
+    assert _has_stat_override(payload, cfg) is False
+
+
+def test_has_stat_override_false_when_no_override_roles_configured():
+    from n3x_bot.bot import _has_stat_override
+    cfg = _override_config()  # stat_override_role_ids == []
+    payload = _override_payload(0)
+    assert _has_stat_override(payload, cfg) is False
+
+
 async def test_override_confirm_announces_the_author_not_the_clicker(monkeypatch):
     import n3x_bot.bot as botmod
     guild = _fake_guild("prom")

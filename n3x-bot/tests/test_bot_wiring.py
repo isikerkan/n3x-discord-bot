@@ -597,7 +597,9 @@ async def test_on_member_update_adds_prefix_when_target_role_granted():
     bot_member = _FakeMember(top_role=10)
     owner = _FakeMember()
     guild = _FakeGuild(owner=owner, me=bot_member)
-    target_role = _FakeRole(settings.target_role_id)
+    # MIGRATED for multi-role: target_role_id is now a str; build the matching
+    # role from the first parsed id via the list accessor.
+    target_role = _FakeRole(settings.target_role_ids[0])
 
     before = _FakeMember(display_name="Player", roles=[], top_role=1, guild=guild)
     after = _FakeMember(display_name="Player", roles=[target_role], top_role=1, guild=guild)
@@ -640,7 +642,8 @@ async def test_on_member_update_skips_bot_and_owner_and_unprivileged_cases():
     bot_member = _FakeMember(top_role=10)
     owner = _FakeMember()
     guild = _FakeGuild(owner=owner, me=bot_member)
-    target_role = _FakeRole(settings.target_role_id)
+    # MIGRATED for multi-role: first parsed id via the list accessor.
+    target_role = _FakeRole(settings.target_role_ids[0])
 
     # a bot member should never be renamed
     before = _FakeMember(bot=True, display_name="Bot1", roles=[], guild=guild)

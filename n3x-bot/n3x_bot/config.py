@@ -24,6 +24,24 @@ def parse_allowed_maps(raw: str) -> list[str]:
     return [m.strip() for m in raw.split(",") if m.strip()]
 
 
+def parse_role_ids(raw: str) -> list[int]:
+    out: list[int] = []
+    seen: set[int] = set()
+    for token in raw.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        try:
+            value = int(token)
+        except ValueError:
+            continue
+        if value == 0 or value in seen:
+            continue
+        seen.add(value)
+        out.append(value)
+    return out
+
+
 def parse_voice_roles(raw: str) -> dict[str, int]:
     out = {}
     for pair in raw.split(","):
@@ -76,11 +94,11 @@ class Settings(BaseSettings):
     data_file: str = "stats.json"
     migration_dir: str = "migration"
 
-    target_role_id: int
+    target_role_id: int | str = 0
     welcome_channel_id: int
     reminder_channel_id: int
     julez_id: int = 0
-    admin_role_id: int = 0
+    admin_role_id: int | str = 0
     timezone: str = "Europe/Berlin"
 
     prefix_str: str = "[N3X]"
@@ -91,8 +109,8 @@ class Settings(BaseSettings):
     gate_stats_channel_id: int = 0
     gate_chart_channel_id: int = 0
     command_list_channel_id: int = 0
-    gate_delete_role_id: int = 0
-    stat_override_role_id: int = 0
+    gate_delete_role_id: int | str = 0
+    stat_override_role_id: int | str = 0
     gate_rewards: str = "a:46892,b:93820,c:139522,d:75361,e:46719,z:66661,k:62955"
     gate_message_delete_delay: str = "1m"
 
@@ -101,7 +119,7 @@ class Settings(BaseSettings):
     kodex_check_channel_id: int = 0
     voice_achievement_roles: str = ""
 
-    base_timer_role_id: int = 0
+    base_timer_role_id: int | str = 0
     timer_overview_channel_id: int = 0
     voice_log_channel_id: int = 0
     timer_overview_message_id: int = 0
@@ -162,3 +180,23 @@ class Settings(BaseSettings):
 
     def voice_role_map(self) -> dict[str, int]:
         return parse_voice_roles(self.voice_achievement_roles)
+
+    @property
+    def admin_role_ids(self) -> list[int]:
+        return parse_role_ids(str(self.admin_role_id))
+
+    @property
+    def target_role_ids(self) -> list[int]:
+        return parse_role_ids(str(self.target_role_id))
+
+    @property
+    def gate_delete_role_ids(self) -> list[int]:
+        return parse_role_ids(str(self.gate_delete_role_id))
+
+    @property
+    def base_timer_role_ids(self) -> list[int]:
+        return parse_role_ids(str(self.base_timer_role_id))
+
+    @property
+    def stat_override_role_ids(self) -> list[int]:
+        return parse_role_ids(str(self.stat_override_role_id))

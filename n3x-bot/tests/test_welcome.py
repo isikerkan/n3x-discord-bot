@@ -582,7 +582,7 @@ async def test_on_member_join_still_runs_enforce_prefix(monkeypatch):
     guild = SimpleNamespace(owner=object(), me=guild_me)
     member = SimpleNamespace(
         id=6161, display_name="Rookie", bot=False, mention="<@6161>",
-        guild=guild, roles=[SimpleNamespace(id=settings.target_role_id)],
+        guild=guild, roles=[SimpleNamespace(id=settings.target_role_ids[0])],
         top_role=1, send=AsyncMock(), edit=AsyncMock())
 
     await bot.on_member_join(member)

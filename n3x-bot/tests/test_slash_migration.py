@@ -125,6 +125,37 @@ async def test_app_is_admin_false_for_user_without_roles_attribute():
     assert adminmod.app_is_admin(interaction, settings) is False
 
 
+# ── app_is_admin honors MULTIPLE configured admin roles (ANY-match) ───────────
+# admin_role_id accepts comma-separated ids; app_is_admin reads
+# `settings.admin_role_ids`. A settings fake exposing only the list accessor
+# keeps the pre-impl RED a clean AttributeError (gate still reading the old
+# single-int `admin_role_id`).
+
+def _multi_admin_settings(*role_ids):
+    return SimpleNamespace(admin_role_ids=list(role_ids))
+
+
+async def test_app_is_admin_true_for_member_holding_any_of_multiple_admin_roles():
+    settings = _multi_admin_settings(111, 222)
+    interaction = _fake_interaction(user=_member(member_id=5, role_ids=(333, 222)))
+
+    assert adminmod.app_is_admin(interaction, settings) is True
+
+
+async def test_app_is_admin_false_for_member_holding_none_of_multiple_admin_roles():
+    settings = _multi_admin_settings(111, 222)
+    interaction = _fake_interaction(user=_member(member_id=5, role_ids=(333, 444)))
+
+    assert adminmod.app_is_admin(interaction, settings) is False
+
+
+async def test_app_is_admin_false_when_no_admin_roles_configured():
+    settings = _multi_admin_settings()  # admin_role_ids == []
+    interaction = _fake_interaction(user=_member(member_id=5, role_ids=(0,)))
+
+    assert adminmod.app_is_admin(interaction, settings) is False
+
+
 # ── Part C: erfolge migrated to slash-only ───────────────────────────────────
 
 async def test_erfolge_is_app_command_not_prefix_command():
@@ -429,5 +460,31 @@ async def test_del_app_command_reports_index_not_found():
     interaction.followup.send.assert_awaited_once()
     text = interaction.followup.send.await_args.args[0]
     assert "nicht gefunden" in text
+
+    await repo.close()
+
+
+# ── /del gate honors MULTIPLE configured delete roles (ANY-match) ─────────────
+# gate_delete_role_id is overridable, so the multi value is injected as a DB
+# override STRING ("111,222") — no Settings int-coercion needed. The /del gate
+# must iterate `bot.runtime_config.gate_delete_role_ids`; pre-impl it reads the
+# single-int `gate_delete_role_id` (a "111,222" override is malformed there and
+# falls back to 0), so a holder of one of the ids is wrongly refused = RED.
+
+async def test_del_app_command_with_one_of_multiple_delete_roles_deletes():
+    repo = await _flatfile_repo()
+    bot = build_bot(_settings(gate_stats_channel_id=555), repo)
+    channel = _fake_channel(channel_id=555)
+    bot.get_channel = MagicMock(return_value=channel)
+    await repo.set_runtime_config("gate_delete_role_id", "111,222")
+    await bot.runtime_config.refresh(repo)
+    await repo.add_gate_entry("a", 46892, 1, "u1")
+
+    # invoker holds role 222 (one of the configured 111,222)
+    interaction = _fake_interaction(user=_member(member_id=5, role_ids=(333, 222)))
+    await _app_cmd(bot, "del").callback(interaction, gate="a", index=1)
+
+    assert await repo.list_gate_costs("a") == []   # entry removed -> permitted
+    channel.send.assert_awaited()                   # embed refreshed
 
     await repo.close()

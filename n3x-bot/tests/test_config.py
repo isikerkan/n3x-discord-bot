@@ -50,11 +50,15 @@ def test_reminder_hm_parses():
 
 
 def test_admin_role_id_defaults_to_zero():
+    # MIGRATED for multi-role: the field is now a str ("0") and the canonical
+    # accessor is `admin_role_ids`. An unset (default "0") admin role parses to
+    # an empty list — nobody is admin.
     s = Settings(**BASE)
-    assert s.admin_role_id == 0
+    assert s.admin_role_ids == []
 
 
 def test_admin_role_id_read_from_env(monkeypatch):
+    # MIGRATED for multi-role: read the list accessor, not the raw str field.
     monkeypatch.setenv("ADMIN_ROLE_ID", "778899")
     s = Settings(
         discord_token="tok",
@@ -63,7 +67,7 @@ def test_admin_role_id_read_from_env(monkeypatch):
         reminder_channel_id=3,
         _env_file=None,
     )
-    assert s.admin_role_id == 778899
+    assert s.admin_role_ids == [778899]
 
 
 def test_timezone_defaults_to_europe_berlin():
@@ -160,11 +164,14 @@ DEFAULT_ALLOWED_MAPS = [
 
 
 def test_base_timer_role_id_defaults_to_zero():
+    # MIGRATED for multi-role: the field is a str ("0") default; the list
+    # accessor parses it to an empty list.
     s = Settings(**BASE)
-    assert s.base_timer_role_id == 0
+    assert s.base_timer_role_ids == []
 
 
 def test_base_timer_role_id_read_from_env(monkeypatch):
+    # MIGRATED for multi-role: read the list accessor, not the raw str field.
     monkeypatch.setenv("BASE_TIMER_ROLE_ID", "1525938679581900930")
     s = Settings(
         discord_token="tok",
@@ -173,7 +180,7 @@ def test_base_timer_role_id_read_from_env(monkeypatch):
         reminder_channel_id=3,
         _env_file=None,
     )
-    assert s.base_timer_role_id == 1525938679581900930
+    assert s.base_timer_role_ids == [1525938679581900930]
 
 
 def test_timer_overview_channel_id_defaults_to_zero():
@@ -362,3 +369,107 @@ def test_env_example_documents_gate_message_delete_delay():
     root = Path(__file__).resolve().parent.parent
     text = (root / ".env.example").read_text()
     assert "GATE_MESSAGE_DELETE_DELAY" in text
+
+
+# ── parse_role_ids: comma-separated role-id parser (mirrors parse_voice_roles) ─
+# Splits on comma, int()s each trimmed token, SKIPS blanks / "0" / non-numeric,
+# preserves first-seen order, dedups. Never raises. Imported lazily so the RED
+# state is a per-test ImportError on the missing symbol, not a collection error.
+
+
+def test_parse_role_ids_multiple_comma_separated_with_spaces():
+    from n3x_bot.config import parse_role_ids
+    assert parse_role_ids("111, 222") == [111, 222]
+
+
+def test_parse_role_ids_single_id():
+    from n3x_bot.config import parse_role_ids
+    assert parse_role_ids("333") == [333]
+
+
+def test_parse_role_ids_zero_is_dropped():
+    # "0" is the "unset" sentinel (feature disabled) and must yield no ids so a
+    # member whose role id happens to be 0 is never matched.
+    from n3x_bot.config import parse_role_ids
+    assert parse_role_ids("0") == []
+
+
+def test_parse_role_ids_empty_string():
+    from n3x_bot.config import parse_role_ids
+    assert parse_role_ids("") == []
+
+
+def test_parse_role_ids_skips_blanks_and_non_numeric_and_dedups():
+    from n3x_bot.config import parse_role_ids
+    assert parse_role_ids("12,,x,12") == [12]
+
+
+def test_parse_role_ids_preserves_order_and_dedups_repeats():
+    from n3x_bot.config import parse_role_ids
+    assert parse_role_ids("5,3,5,3") == [5, 3]
+
+
+def test_parse_role_ids_never_raises_on_pure_junk():
+    from n3x_bot.config import parse_role_ids
+    assert parse_role_ids("abc, , ,x") == []
+
+
+# ── Settings <field>_ids list accessors (the five role-gating settings) ───────
+# The five role fields become `str` (default "0"). Pydantic coerces an int env
+# value to str. Each field gains a `<field>_ids` property returning
+# parse_role_ids(self.<field>); the raw `<field>` holds the string as given.
+
+
+def test_admin_role_ids_parses_multiple():
+    s = Settings(**{**BASE, "admin_role_id": "111,222"})
+    assert s.admin_role_ids == [111, 222]
+
+
+def test_admin_role_id_field_holds_the_raw_string():
+    s = Settings(**{**BASE, "admin_role_id": "111,222"})
+    assert s.admin_role_id == "111,222"
+
+
+def test_admin_role_ids_single_int_is_coerced_to_str_then_parsed():
+    s = Settings(**{**BASE, "admin_role_id": 42})
+    assert s.admin_role_ids == [42]
+
+
+def test_admin_role_ids_unset_is_empty():
+    s = Settings(**BASE)  # default "0"
+    assert s.admin_role_ids == []
+
+
+def test_target_role_ids_parses_multiple():
+    s = Settings(**{**BASE, "target_role_id": "111,222"})
+    assert s.target_role_ids == [111, 222]
+
+
+def test_target_role_ids_single():
+    s = Settings(**{**BASE, "target_role_id": 7})
+    assert s.target_role_ids == [7]
+
+
+def test_gate_delete_role_ids_parses_multiple():
+    s = Settings(**{**BASE, "gate_delete_role_id": "111,222"})
+    assert s.gate_delete_role_ids == [111, 222]
+
+
+def test_gate_delete_role_ids_unset_is_empty():
+    s = Settings(**BASE)  # default "0"
+    assert s.gate_delete_role_ids == []
+
+
+def test_base_timer_role_ids_parses_multiple():
+    s = Settings(**{**BASE, "base_timer_role_id": "111,222"})
+    assert s.base_timer_role_ids == [111, 222]
+
+
+def test_stat_override_role_ids_parses_multiple():
+    s = Settings(**{**BASE, "stat_override_role_id": "111,222"})
+    assert s.stat_override_role_ids == [111, 222]
+
+
+def test_stat_override_role_ids_unset_is_empty():
+    s = Settings(**BASE)  # default "0"
+    assert s.stat_override_role_ids == []

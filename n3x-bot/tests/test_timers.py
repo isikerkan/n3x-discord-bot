@@ -248,6 +248,38 @@ async def test_has_base_timer_role_false_when_unconfigured():
     assert timers.has_base_timer_role(member, settings) is False
 
 
+# ── has_base_timer_role honors MULTIPLE configured roles (ANY-match) ──────────
+# The check must iterate `base_timer_role_ids`. A settings/config fake exposing
+# only the list accessor keeps BOTH the positive and negative pre-impl RED a
+# clean AttributeError (the check still reading the single-int
+# `base_timer_role_id`). The real RuntimeConfig `_ids` resolution is covered
+# separately in test_runtime_config.py.
+
+def _multi_timer_config(*role_ids):
+    return SimpleNamespace(base_timer_role_ids=list(role_ids))
+
+
+async def test_has_base_timer_role_true_when_member_holds_any_of_multiple():
+    from n3x_bot import timers
+    cfg = _multi_timer_config(111, 222)
+    member = _member(role_ids=(333, 222))  # holds 222
+    assert timers.has_base_timer_role(member, cfg) is True
+
+
+async def test_has_base_timer_role_false_when_member_holds_none_of_multiple():
+    from n3x_bot import timers
+    cfg = _multi_timer_config(111, 222)
+    member = _member(role_ids=(333, 444))
+    assert timers.has_base_timer_role(member, cfg) is False
+
+
+async def test_has_base_timer_role_false_when_no_roles_configured():
+    from n3x_bot import timers
+    cfg = _multi_timer_config()  # base_timer_role_ids == []
+    member = _member(role_ids=(0,))
+    assert timers.has_base_timer_role(member, cfg) is False
+
+
 # ── start_base_timer ────────────────────────────────────────────────────────
 
 async def test_start_base_timer_stores_end_time_now_plus_minutes():
