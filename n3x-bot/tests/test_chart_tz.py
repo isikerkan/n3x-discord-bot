@@ -31,3 +31,34 @@ def test_render_with_utc_entries_still_valid_png():
                 "drops": {}}]
     png = render_gate_history_chart("a", entries, now)
     assert Image.open(BytesIO(png)).format == "PNG"
+
+
+def test_aggregate_by_day_means_per_local_day():
+    from n3x_bot.charts import aggregate_by_day
+    e = [
+        {"cost": 100, "created_at": datetime(2026, 7, 1, 8, 0, tzinfo=timezone.utc), "drops": {}},
+        {"cost": 200, "created_at": datetime(2026, 7, 1, 20, 0, tzinfo=timezone.utc), "drops": {}},
+        {"cost": 400, "created_at": datetime(2026, 7, 2, 9, 0, tzinfo=timezone.utc), "drops": {}},
+    ]
+    from datetime import date
+    days, means, dmap = aggregate_by_day(e, BERLIN)
+    assert days == [date(2026, 7, 1), date(2026, 7, 2)]
+    assert means == [150.0, 400.0]        # day-1 mean of 100/200
+    assert dmap[date(2026, 7, 1)] == 150.0
+
+
+def test_aggregate_by_day_empty():
+    from n3x_bot.charts import aggregate_by_day
+    assert aggregate_by_day([], BERLIN) == ([], [], {})
+
+
+def test_render_daily_chart_valid_png_multiple_days():
+    from io import BytesIO
+    from PIL import Image
+    now = datetime(2026, 7, 15, tzinfo=BERLIN)
+    e = [
+        {"cost": 100, "created_at": datetime(2026, 7, 1, 8, 0, tzinfo=timezone.utc), "drops": {"laser": True}},
+        {"cost": 200, "created_at": datetime(2026, 7, 2, 8, 0, tzinfo=timezone.utc), "drops": {}},
+    ]
+    png = render_gate_history_chart("d", e, now)
+    assert Image.open(BytesIO(png)).format == "PNG"
