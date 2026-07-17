@@ -154,37 +154,74 @@ async def test_overview_embed_populated_is_blue():
     assert embed.color == discord.Color.blue()
 
 
+async def test_overview_embed_line_embeds_relative_discord_timestamp():
+    # Liveticker: each line carries a Discord relative timestamp <t:UNIX:R> so
+    # the countdown ticks client-side without the bot re-editing the message.
+    from n3x_bot import timers
+    now = _now()
+    end = now + timedelta(minutes=24)
+    embed = timers.build_timer_overview_embed({"2-6": end}, now)
+    assert f"<t:{int(end.timestamp())}:R>" in embed.description
+
+
+async def test_overview_embed_relative_timestamp_correct_for_aware_datetime():
+    # PIN aware-correctness: 2026-07-14 12:24 Europe/Berlin (CEST, +02:00) is
+    # 10:24 UTC. The embedded unix must be the true epoch of the aware datetime,
+    # not the wall-clock treated as naive/UTC (which would give a +2h-wrong unix).
+    from n3x_bot import timers
+    now = datetime(2026, 7, 14, 12, 0, 0, tzinfo=TZ)
+    end = datetime(2026, 7, 14, 12, 24, 0, tzinfo=TZ)
+    expected_unix = int(
+        datetime(2026, 7, 14, 10, 24, 0, tzinfo=ZoneInfo("UTC")).timestamp())
+    embed = timers.build_timer_overview_embed({"2-6": end}, now)
+    assert f"<t:{expected_unix}:R>" in embed.description
+
+
+async def test_overview_embed_line_keeps_map_marker_and_name():
+    from n3x_bot import timers
+    now = _now()
+    embed = timers.build_timer_overview_embed(
+        {"2-6": now + timedelta(minutes=30)}, now)
+    assert "📍 **2-6**" in embed.description
+
+
+async def test_overview_embed_line_drops_static_minute_remainder():
+    # The old "— {n} Min" static text is GONE (the client-rendered relative
+    # timestamp replaces it); pin its absence so it can't creep back.
+    from n3x_bot import timers
+    now = _now()
+    embed = timers.build_timer_overview_embed(
+        {"2-6": now + timedelta(minutes=30)}, now)
+    assert " Min" not in embed.description
+
+
 async def test_overview_embed_lines_are_sorted_by_end_time_ascending():
     from n3x_bot import timers
     now = _now()
-    timers_map = {
-        "1-5": now + timedelta(minutes=90),
-        "4-1": now + timedelta(minutes=30),
-    }
+    early = now + timedelta(minutes=30)
+    late = now + timedelta(minutes=90)
+    timers_map = {"1-5": late, "4-1": early}
     embed = timers.build_timer_overview_embed(timers_map, now)
-    assert embed.description == (
-        "📍 **4-1** — 30 Min\n"
-        "📍 **1-5** — 90 Min"
-    )
+    lines = embed.description.split("\n")
+    assert len(lines) == 2
+    # first line = earliest end_time, second = latest (sorted ascending)
+    assert "**4-1**" in lines[0]
+    assert f"<t:{int(early.timestamp())}:R>" in lines[0]
+    assert "**1-5**" in lines[1]
+    assert f"<t:{int(late.timestamp())}:R>" in lines[1]
+    assert int(early.timestamp()) < int(late.timestamp())
 
 
-async def test_overview_embed_floors_remaining_minutes():
+async def test_overview_embed_renders_past_timer_line_without_dropping_it():
     from n3x_bot import timers
     now = _now()
-    # 95 seconds -> 1 whole minute (floor via //60).
-    embed = timers.build_timer_overview_embed(
-        {"2-6": now + timedelta(seconds=95)}, now)
-    assert embed.description == "📍 **2-6** — 1 Min"
-
-
-async def test_overview_embed_past_timer_clamps_to_zero_minutes():
-    from n3x_bot import timers
-    now = _now()
-    # PIN: the builder renders every timer handed to it and clamps remaining to
-    # max(0, ...); the CALLER (update_timer_overview) is what drops expired rows.
-    embed = timers.build_timer_overview_embed(
-        {"3-7": now - timedelta(minutes=5)}, now)
-    assert embed.description == "📍 **3-7** — 0 Min"
+    # PIN: the builder renders every timer handed to it (a past end_time yields a
+    # "vor N Minuten" relative stamp client-side); the CALLER
+    # (update_timer_overview) is what drops expired rows, not the builder.
+    end = now - timedelta(minutes=5)
+    embed = timers.build_timer_overview_embed({"3-7": end}, now)
+    assert "📍 **3-7**" in embed.description
+    assert f"<t:{int(end.timestamp())}:R>" in embed.description
 
 
 # ── has_base_timer_role ─────────────────────────────────────────────────────
