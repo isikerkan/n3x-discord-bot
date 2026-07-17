@@ -61,8 +61,10 @@ async def _flatfile_repo() -> JsonRepository:
 
 def _member(*, member_id=5, role_ids=(), display_name="Erkan", is_bot=False):
     roles = [SimpleNamespace(id=r) for r in role_ids]
+    # `.send` is the DM channel entry point discord exposes on a User/Member;
+    # /erfolge now DMs its embed, so the fake caller needs an awaitable one.
     return SimpleNamespace(id=member_id, roles=roles, display_name=display_name,
-                           bot=is_bot)
+                           bot=is_bot, send=AsyncMock())
 
 
 def _fake_interaction(user=None, guild=None):
@@ -136,7 +138,25 @@ async def test_erfolge_is_app_command_not_prefix_command():
     await repo.close()
 
 
-async def test_erfolge_app_command_responds_with_embed_for_caller():
+async def test_erfolge_app_command_dms_the_embed_to_the_caller():
+    # /erfolge now delivers the achievements embed to the caller's DMs
+    # (interaction.user.send) rather than posting it in-channel.
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+
+    interaction = _fake_interaction(user=_member(member_id=7, display_name="Erkan"))
+    await _app_cmd(bot, "erfolge").callback(interaction)
+
+    interaction.user.send.assert_awaited_once()
+    assert _embed_of(interaction.user.send) is not None
+
+    await repo.close()
+
+
+async def test_erfolge_app_command_acks_interaction_ephemerally():
+    # The in-channel interaction reply is now an ephemeral acknowledgement (the
+    # embed itself went via DM), reversing the previous public behaviour.
     repo = await _flatfile_repo()
     settings = _settings()
     bot = build_bot(settings, repo)
@@ -145,23 +165,8 @@ async def test_erfolge_app_command_responds_with_embed_for_caller():
     await _app_cmd(bot, "erfolge").callback(interaction)
 
     interaction.response.send_message.assert_awaited_once()
-    assert _embed_of(interaction.response.send_message) is not None
-
-    await repo.close()
-
-
-async def test_erfolge_app_command_response_is_not_ephemeral():
-    # Current prefix behavior is a public post; the slash version should stay
-    # public (not ephemeral) to preserve that.
-    repo = await _flatfile_repo()
-    settings = _settings()
-    bot = build_bot(settings, repo)
-
-    interaction = _fake_interaction(user=_member(member_id=7, display_name="Erkan"))
-    await _app_cmd(bot, "erfolge").callback(interaction)
-
     kwargs = interaction.response.send_message.await_args.kwargs
-    assert kwargs.get("ephemeral") is not True
+    assert kwargs.get("ephemeral") is True
 
     await repo.close()
 

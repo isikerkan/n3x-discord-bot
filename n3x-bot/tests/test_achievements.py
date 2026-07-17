@@ -42,6 +42,8 @@ import tempfile
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import discord
+
 from n3x_bot.bot import build_bot
 from n3x_bot.config import Settings
 from n3x_bot.seed import seed_defaults
@@ -423,7 +425,8 @@ async def test_erfolge_reports_unlocked_count_and_total():
     cmd = bot.tree.get_command("erfolge")
     await cmd.callback(interaction)
 
-    text = _collect_text(interaction.response.send_message,
+    text = _collect_text(interaction.user.send,
+                         interaction.response.send_message,
                          interaction.followup.send)
     assert "2/83" in text  # total grew 59 -> 83 with the E/Z/K gates
     await repo.close()
@@ -638,7 +641,11 @@ async def _erfolge_embed(uid: int = 7, display_name: str = "Erkan"):
         interaction.followup.send = AsyncMock()
         cmd = bot.tree.get_command("erfolge")
         await cmd.callback(interaction)
-        for mock in (interaction.response.send_message, interaction.followup.send):
+        # The embed now travels via the user's DM (interaction.user.send); the
+        # ephemeral in-channel reply is the fallback path. Look everywhere so
+        # this behaviour-level helper stays agnostic to which path fired.
+        for mock in (interaction.user.send, interaction.response.send_message,
+                     interaction.followup.send):
             for call in mock.await_args_list:
                 embed = call.kwargs.get("embed")
                 if embed is not None:
@@ -759,3 +766,131 @@ def _collect_text_of_embed(embed) -> str:
         parts.append(str(getattr(f, "name", "") or ""))
         parts.append(str(getattr(f, "value", "") or ""))
     return "\n".join(parts)
+
+
+# ── /erfolge is now DM-delivered + lists the caller's unlocked titles ────────
+#
+# New behaviour (see task):
+#   1. The embed is DM'd to the caller (interaction.user.send) and the
+#      interaction is acknowledged EPHEMERALLY (no embed on the ack). If the DM
+#      is blocked (discord.Forbidden) the handler falls back to replying with
+#      the embed ephemerally in-channel — no crash. The Forbidden catch is
+#      pinned as ``discord.Forbidden`` SPECIFICALLY (not a broad HTTPException).
+#   2. Each visible category field now LISTS the titles of the caller's unlocked
+#      achievements (not just the count/bar). Secret titles stay hidden.
+
+
+def _erfolge_interaction(uid: int = 7, display_name: str = "Erkan"):
+    """A fake slash interaction whose ``user`` has an awaitable ``.send`` (DM)."""
+    interaction = MagicMock()
+    interaction.user = SimpleNamespace(id=uid, display_name=display_name,
+                                       send=AsyncMock(), mention=f"<@{uid}>")
+    interaction.response = MagicMock()
+    interaction.response.send_message = AsyncMock()
+    interaction.followup = MagicMock()
+    interaction.followup.send = AsyncMock()
+    return interaction
+
+
+def _make_forbidden() -> discord.Forbidden:
+    """A real ``discord.Forbidden`` built the way discord.py raises one when a
+    user has DMs disabled (403 Cannot send messages to this user)."""
+    resp = SimpleNamespace(status=403, reason="Forbidden")
+    return discord.Forbidden(resp, "Cannot send messages to this user")
+
+
+async def test_erfolge_dms_the_embed_to_the_caller():
+    # The achievements embed is sent to the caller's DMs, not posted publicly.
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+    _ach().register_achievement_commands(bot, repo, settings)
+
+    interaction = _erfolge_interaction()
+    await bot.tree.get_command("erfolge").callback(interaction)
+
+    interaction.user.send.assert_awaited_once()
+    assert interaction.user.send.await_args.kwargs.get("embed") is not None
+    await repo.close()
+
+
+async def test_erfolge_acks_interaction_ephemerally_without_embed():
+    # The in-channel reply is only an ephemeral acknowledgement (the embed went
+    # via DM), so it carries no embed and is ephemeral.
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+    _ach().register_achievement_commands(bot, repo, settings)
+
+    interaction = _erfolge_interaction()
+    await bot.tree.get_command("erfolge").callback(interaction)
+
+    interaction.response.send_message.assert_awaited_once()
+    kwargs = interaction.response.send_message.await_args.kwargs
+    assert kwargs.get("ephemeral") is True
+    assert kwargs.get("embed") is None
+    await repo.close()
+
+
+async def test_erfolge_falls_back_to_ephemeral_embed_when_dms_blocked():
+    # If the DM raises discord.Forbidden (DMs off), the handler must NOT crash
+    # and instead reply with the embed ephemerally in-channel.
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+    _ach().register_achievement_commands(bot, repo, settings)
+
+    interaction = _erfolge_interaction()
+    interaction.user.send = AsyncMock(side_effect=_make_forbidden())
+
+    await bot.tree.get_command("erfolge").callback(interaction)  # must not raise
+
+    interaction.response.send_message.assert_awaited_once()
+    kwargs = interaction.response.send_message.await_args.kwargs
+    assert kwargs.get("ephemeral") is True
+    assert kwargs.get("embed") is not None
+    await repo.close()
+
+
+async def test_erfolge_lists_unlocked_titles_per_category():
+    # The visible category fields now LIST the titles the caller owns.
+    # Own gate a_5 ("Alpha Bronze Pilot") + streak streak_7 ("Treuer Soldat").
+    # Neither is the "Nächstes:" milestone (gate next is total_1 "Einsteiger
+    # Pilot"; streak next is streak_14 "Zuverlässig"), so the titles can only
+    # appear as part of the new unlocked-list.
+    repo, invoke = await _erfolge_embed()
+    await repo.unlock_achievement(7, "a_5")
+    await repo.unlock_achievement(7, "streak_7")
+    embed = await invoke()
+
+    gate = _field_by_emoji(embed, "🚀")
+    streak = _field_by_emoji(embed, "🔥")
+    assert "Alpha Bronze Pilot" in gate    # owned gate title listed
+    assert "Treuer Soldat" in streak       # owned streak title listed
+    await repo.close()
+
+
+async def test_erfolge_does_not_list_an_unowned_title():
+    # A NOT-owned achievement's title must be absent. Own a_5 only; a_10
+    # ("Alpha Silber Pilot") is unowned and is not the next milestone (total_1
+    # is), so it must not appear anywhere in the embed.
+    repo, invoke = await _erfolge_embed()
+    await repo.unlock_achievement(7, "a_5")
+    embed = await invoke()
+
+    flat = _collect_text_of_embed(embed)
+    assert "Alpha Silber Pilot" not in flat
+    await repo.close()
+
+
+async def test_erfolge_lists_titles_but_never_reveals_secret_titles():
+    # Owning a secret achievement bumps the secret count but must never leak its
+    # title into the embed (security invariant).
+    repo, invoke = await _erfolge_embed()
+    await repo.unlock_achievement(7, "msg_1000")     # secret: "Tastatur-Krieger"
+    embed = await invoke()
+
+    flat = _collect_text_of_embed(embed)
+    assert "1/8" in _field_by_emoji(embed, "🔒")   # count changed
+    assert "Tastatur-Krieger" not in flat            # secret title hidden
+    await repo.close()
