@@ -37,9 +37,8 @@ def build_timer_overview_embed(timers: dict[str, datetime],
 
 
 def has_base_timer_role(member, settings: Settings) -> bool:
-    return bool(settings.base_timer_role_id) and any(
-        r.id == settings.base_timer_role_id
-        for r in getattr(member, "roles", []))
+    return any(r.id in settings.base_timer_role_ids
+               for r in getattr(member, "roles", None) or [])
 
 
 async def start_base_timer(repo: StatsRepository, settings: Settings,

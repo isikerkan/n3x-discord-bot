@@ -68,7 +68,17 @@ class _FakeMember:
 
 
 def _settings():
-    return SimpleNamespace(prefix_str=PREFIX, target_role_id=1)
+    # MIGRATED for multi-role: enforce_nick now reads the list accessor
+    # `target_role_ids`, so the fake exposes it alongside the legacy
+    # `target_role_id` (which the tests still use to build a matching role).
+    return SimpleNamespace(prefix_str=PREFIX, target_role_id=1, target_role_ids=[1])
+
+
+def _multi_settings(*role_ids):
+    """Settings fake with several configured target roles. `target_role_id` (the
+    single-int accessor) is the FIRST id; `target_role_ids` is the full list."""
+    return SimpleNamespace(prefix_str=PREFIX, target_role_id=role_ids[0],
+                           target_role_ids=list(role_ids))
 
 
 def _member(*, display_name="Player", roles=None, top_role=1,
@@ -223,6 +233,24 @@ async def test_enforce_nick_skips_when_member_outranks_bot():
 
     member.edit.assert_not_called()
     assert result is False
+
+
+# ── enforce_nick honors MULTIPLE configured target roles (ANY-match) ──────────
+# The "has the target role" test passes when the member holds ANY of the
+# configured target roles. enforce_nick computes this over `target_role_ids`;
+# pre-impl it reads only the single-int `target_role_id` (the first id), so a
+# member holding a LATER id is treated as a non-holder = RED (no prefix added).
+
+async def test_enforce_nick_adds_prefix_for_member_holding_a_later_target_role():
+    from n3x_bot.nicknames import enforce_nick
+    settings = _multi_settings(111, 222)  # single-int accessor == 111
+    member = _member(display_name="Player", roles=[_FakeRole(222)])  # holds 222
+
+    result = await enforce_nick(member, settings)
+
+    member.edit.assert_awaited_once()
+    assert member.edit.await_args.kwargs["nick"] == "[N3X]Player"
+    assert result is True
 
 
 async def test_enforce_nick_swallows_edit_failure_and_returns_false():

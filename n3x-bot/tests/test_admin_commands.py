@@ -131,6 +131,38 @@ async def test_is_admin_false_when_admin_role_unset_even_if_member_has_role_zero
     assert botmod.is_admin(member, settings) is False
 
 
+# ── is_admin honors MULTIPLE configured admin roles (ANY-match) ───────────────
+# The five role-gating settings accept comma-separated ids; a member holding ANY
+# listed role passes. is_admin reads `settings.admin_role_ids` (the list
+# accessor). These use a lightweight settings fake exposing only `admin_role_ids`
+# so the pre-impl RED is a clean AttributeError (is_admin still reading the old
+# single-int `admin_role_id`), not a Settings int-coercion ValidationError.
+
+def _multi_admin_settings(*role_ids):
+    return SimpleNamespace(admin_role_ids=list(role_ids))
+
+
+async def test_is_admin_true_for_member_holding_any_of_multiple_admin_roles():
+    settings = _multi_admin_settings(111, 222)
+    member = _member(member_id=5, role_ids=(333, 222))  # holds 222
+
+    assert botmod.is_admin(member, settings) is True
+
+
+async def test_is_admin_false_for_member_holding_none_of_multiple_admin_roles():
+    settings = _multi_admin_settings(111, 222)
+    member = _member(member_id=5, role_ids=(333, 444))
+
+    assert botmod.is_admin(member, settings) is False
+
+
+async def test_is_admin_false_when_no_admin_roles_configured():
+    settings = _multi_admin_settings()  # admin_role_ids == []
+    member = _member(member_id=5, role_ids=(0,))
+
+    assert botmod.is_admin(member, settings) is False
+
+
 async def test_slash_admin_stat_add_refuses_non_admin_and_mutates_nothing():
     # Phase 4: admin is slash-only. A non-admin invoking `/admin stat add` is
     # refused ephemerally and causes no DB / command-registry mutation.

@@ -422,6 +422,94 @@ async def test_gate_rewards_override_reaches_update_gate_stats_embed():
         os.remove(repo._test_path)
 
 
+# ── multi-role list accessors: <field>_ids (override wins, else settings) ─────
+# The four overridable role fields (target / gate_delete / base_timer /
+# stat_override) plus the non-overridable admin gain a `<field>_ids` list
+# accessor returning parse_role_ids of the DB override (if set & non-empty) else
+# the Settings string. The single-int `<field>_id` property is reworked to
+# return the FIRST resolved id or 0, so legacy int readers / `/config show` /
+# RoleSelect defaults keep working. Imports are lazy so a missing accessor is a
+# per-test AttributeError RED, not a collection error.
+
+
+async def test_target_role_ids_no_override_uses_settings_string():
+    from n3x_bot.runtime_config import RuntimeConfig
+    settings = _settings(target_role_id=1)  # BASE single id
+    rc = RuntimeConfig(settings)
+    assert rc.target_role_ids == [1]
+
+
+async def test_target_role_ids_override_multiple_wins():
+    from n3x_bot.runtime_config import RuntimeConfig
+    settings = _settings(target_role_id=1)
+    rc = RuntimeConfig(settings, {"target_role_id": "5,6"})
+    assert rc.target_role_ids == [5, 6]
+
+
+async def test_target_role_ids_override_single_wins():
+    from n3x_bot.runtime_config import RuntimeConfig
+    settings = _settings(target_role_id=1)
+    rc = RuntimeConfig(settings, {"target_role_id": "9"})
+    assert rc.target_role_ids == [9]
+
+
+async def test_target_role_ids_malformed_override_falls_back_to_settings():
+    # An override that parses to no valid ids (e.g. junk) must fall back to the
+    # .env base rather than resolving to "no roles" (which would silently
+    # disable enforcement server-wide).
+    from n3x_bot.runtime_config import RuntimeConfig
+    settings = _settings(target_role_id=1)
+    rc = RuntimeConfig(settings, {"target_role_id": "abc"})
+    assert rc.target_role_ids == [1]
+
+
+async def test_gate_delete_role_ids_override_multiple_wins():
+    from n3x_bot.runtime_config import RuntimeConfig
+    settings = _settings()
+    rc = RuntimeConfig(settings, {"gate_delete_role_id": "5,6"})
+    assert rc.gate_delete_role_ids == [5, 6]
+
+
+async def test_gate_delete_role_ids_unset_is_empty():
+    # gate_delete_role_id is not set in BASE -> default "0" -> no ids.
+    from n3x_bot.runtime_config import RuntimeConfig
+    settings = _settings()
+    rc = RuntimeConfig(settings)
+    assert rc.gate_delete_role_ids == []
+
+
+async def test_base_timer_role_ids_override_multiple_wins():
+    from n3x_bot.runtime_config import RuntimeConfig
+    settings = _settings()
+    rc = RuntimeConfig(settings, {"base_timer_role_id": "111,222"})
+    assert rc.base_timer_role_ids == [111, 222]
+
+
+async def test_stat_override_role_ids_override_multiple_wins():
+    from n3x_bot.runtime_config import RuntimeConfig
+    settings = _settings()
+    rc = RuntimeConfig(settings, {"stat_override_role_id": "111,222"})
+    assert rc.stat_override_role_ids == [111, 222]
+
+
+async def test_admin_role_ids_is_non_overridable_passthrough():
+    # admin stays env-authoritative: a DB override under admin_role_id is ignored.
+    from n3x_bot.runtime_config import RuntimeConfig
+    settings = _settings(admin_role_id=7)
+    rc = RuntimeConfig(settings, {"admin_role_id": "5,6"})
+    assert rc.admin_role_ids == [7]
+
+
+# ── single-int <field>_id property: FIRST resolved id, or 0 ───────────────────
+
+
+async def test_target_role_id_returns_first_of_multiple_override_ids():
+    from n3x_bot.runtime_config import RuntimeConfig
+    settings = _settings(target_role_id=1)
+    rc = RuntimeConfig(settings, {"target_role_id": "5,6"})
+    assert rc.target_role_id == 5
+
+
 async def test_gate_rewards_no_override_uses_settings_default_at_read_site():
     # Behavior-preserving counterpart: with NO override, the SAME read-site
     # renders the Settings default reward.

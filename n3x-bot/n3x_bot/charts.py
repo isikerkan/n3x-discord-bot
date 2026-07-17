@@ -8,8 +8,9 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 
-from datetime import datetime, time
+from datetime import datetime
 from io import BytesIO
 
 from n3x_bot.gates import GATE_NAMES, _DROP_LABELS
@@ -35,6 +36,23 @@ def _to_local_naive(dt, tz):
     return dt.replace(tzinfo=None)
 
 
+def aggregate_by_day(entries: list[dict], tz):
+    """Bucket gate entries by LOCAL day → (days, daily_mean, per-day mean map).
+
+    Returns sorted `date` list, the mean cost per day (parallel list), and a
+    `{date: mean}` lookup. Empty entries → ([], [], {}). The chart plots one
+    point per day (the day's average cost) instead of one per entry.
+    """
+    from collections import defaultdict
+    buckets: dict = defaultdict(list)
+    for e in entries:
+        d = _to_local_naive(e["created_at"], tz).date()
+        buckets[d].append(e["cost"])
+    days = sorted(buckets)
+    means = [sum(buckets[d]) / len(buckets[d]) for d in days]
+    return days, means, dict(zip(days, means, strict=True))
+
+
 def render_gate_history_chart(gate_type: str, entries: list[dict],
                               now: datetime, von=None, bis=None) -> bytes:
     tz = getattr(now, "tzinfo", None)
@@ -42,34 +60,35 @@ def render_gate_history_chart(gate_type: str, entries: list[dict],
     try:
         ax.set_title(f"Gate-Verlauf: {GATE_NAMES[gate_type]}")
         ax.set_xlabel("Datum")
-        ax.set_ylabel("Kosten")
+        ax.set_ylabel("Ø Kosten pro Tag")
 
         if not entries:
             ax.text(0.5, 0.5, "keine Daten", ha="center", va="center",
                     transform=ax.transAxes)
         else:
-            dates = [_to_local_naive(e["created_at"], tz) for e in entries]
-            costs = [e["cost"] for e in entries]
-            ax.plot(dates, costs, marker="o", label="Kosten")
-            ax.axhline(sum(costs) / len(costs), color="gray",
-                       linestyle="--", label="Ø Kosten")
+            days, means, day_mean = aggregate_by_day(entries, tz)
+            ax.plot(days, means, marker="o", label="Ø Kosten/Tag")
+            overall = sum(means) / len(means)
+            ax.axhline(overall, color="gray", linestyle="--", label="Ø gesamt")
             if gate_type in _CHART_DROP_ITEMS:
                 for item in _CHART_DROP_ITEMS[gate_type]:
-                    hit_dates = [_to_local_naive(e["created_at"], tz)
-                                 for e in entries if e["drops"].get(item)]
-                    hit_costs = [e["cost"] for e in entries
-                                 if e["drops"].get(item)]
-                    ax.scatter(hit_dates, hit_costs, label=_DROP_LABELS[item])
+                    # Days on which the item dropped at least once, plotted at
+                    # that day's mean cost.
+                    hit_days = sorted({_to_local_naive(e["created_at"], tz).date()
+                                       for e in entries if e["drops"].get(item)})
+                    ax.scatter(hit_days, [day_mean[d] for d in hit_days],
+                               label=_DROP_LABELS[item], zorder=3)
             ax.legend()
+            ax.xaxis.set_major_formatter(mdates.DateFormatter("%d.%m"))
 
         # Clamp the x-axis to the requested date window so a date-range query
-        # shows that window, not just the extent of the returned data. Naive
-        # (local) bounds to match the naive-local plotted timestamps. When
-        # von/bis are None we leave matplotlib's auto-fit alone.
+        # shows that window, not just the extent of the returned data. Day-level
+        # `date` bounds match the day-aggregated points. When von/bis are None
+        # we leave matplotlib's auto-fit alone.
         if von is not None:
-            ax.set_xlim(left=datetime.combine(von, time.min))
+            ax.set_xlim(left=von)
         if bis is not None:
-            ax.set_xlim(right=datetime.combine(bis, time.max))
+            ax.set_xlim(right=bis)
 
         fig.subplots_adjust(bottom=0.18)
         fig.text(0.5, 0.01, _CHART_CAPTION, ha="center", fontsize=8,
