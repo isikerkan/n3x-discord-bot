@@ -99,6 +99,36 @@ class StatsRepository(ABC):
         """`(message_id, channel_id)` for `key`, or None if unset. Both ints."""
         ...
 
+    # gate pending
+    @abstractmethod
+    async def set_gate_pending(self, message_id: int, *, channel_id: int,
+                               gate_type: str, cost: int, user_id: int,
+                               username: str, options: dict) -> None:
+        """Upsert the in-flight drop-confirm pending state for `message_id`.
+
+        Persists the d/e/z/k pending entry that otherwise lives only in the
+        in-memory `bot._pending_gate` dict, so a restart doesn't drop an
+        in-flight confirmation. `options` is the emoji_key -> item map (values
+        `str`, or `None` for the ❌ "nothing" choice).
+        """
+        ...
+    @abstractmethod
+    async def get_gate_pending(self, message_id: int) -> dict | None:
+        """The 7-key pending dict for `message_id`, or None if absent.
+
+        Keys: message_id/channel_id/cost/user_id (ints), gate_type/username
+        (str), options (dict with str keys and `str | None` values).
+        """
+        ...
+    @abstractmethod
+    async def delete_gate_pending(self, message_id: int) -> bool:
+        """Delete the pending row for `message_id`; True if a row existed."""
+        ...
+    @abstractmethod
+    async def all_gate_pending(self) -> list[dict]:
+        """All pending rows as a list of 7-key dicts."""
+        ...
+
     # runtime config
     @abstractmethod
     async def set_runtime_config(self, key: str, value: str) -> None:

@@ -331,6 +331,43 @@ class SqlRepository(StatsRepository):
                 .where(sc.channel_messages.c.key == key))).one_or_none()
             return (int(r.message_id), int(r.channel_id)) if r else None
 
+    # ── gate pending ──────────────────────────────────────────────────────
+    @staticmethod
+    def _gate_pending_row(r) -> dict:
+        return {"message_id": int(r.message_id), "channel_id": int(r.channel_id),
+                "gate_type": r.gate_type, "cost": int(r.cost),
+                "user_id": int(r.user_id), "username": r.username,
+                "options": json.loads(r.options) if r.options else {}}
+
+    async def set_gate_pending(self, message_id, *, channel_id, gate_type, cost,
+                               user_id, username, options):
+        async with self.engine.begin() as conn:
+            await self._upsert(conn, sc.gate_pending, {"message_id": message_id},
+                               {"channel_id": channel_id, "gate_type": gate_type,
+                                "cost": cost, "user_id": user_id,
+                                "username": username,
+                                "options": json.dumps(options)})
+
+    async def get_gate_pending(self, message_id):
+        async with self.engine.connect() as conn:
+            r = (await conn.execute(select(sc.gate_pending)
+                 .where(sc.gate_pending.c.message_id == message_id))).one_or_none()
+            return self._gate_pending_row(r) if r else None
+
+    async def delete_gate_pending(self, message_id):
+        async with self.engine.begin() as conn:
+            exists = (await conn.execute(select(sc.gate_pending.c.message_id)
+                      .where(sc.gate_pending.c.message_id == message_id))).one_or_none()
+            await conn.execute(delete(sc.gate_pending)
+                               .where(sc.gate_pending.c.message_id == message_id))
+            return exists is not None
+
+    async def all_gate_pending(self):
+        async with self.engine.connect() as conn:
+            rows = await conn.execute(select(sc.gate_pending)
+                                      .order_by(sc.gate_pending.c.message_id.asc()))
+            return [self._gate_pending_row(r) for r in rows]
+
     # ── runtime config ────────────────────────────────────────────────────
     async def set_runtime_config(self, key, value):
         async with self.engine.begin() as conn:
@@ -869,6 +906,14 @@ class SqlRepository(StatsRepository):
                 r.key: [int(r.message_id), int(r.channel_id)]
                 for r in await conn.execute(select(sc.channel_messages))
             }
+            gate_pending = {
+                str(r.message_id): {
+                    "channel_id": int(r.channel_id), "gate_type": r.gate_type,
+                    "cost": int(r.cost), "user_id": int(r.user_id),
+                    "username": r.username,
+                    "options": json.loads(r.options) if r.options else {}}
+                for r in await conn.execute(select(sc.gate_pending))
+            }
             runtime_config = {
                 r.key: r.value
                 for r in await conn.execute(select(sc.runtime_config))
@@ -902,6 +947,7 @@ class SqlRepository(StatsRepository):
             "kodex_confirmations": kodex_confirmations,
             "kodex_messages": kodex_messages, "base_timers": base_timers,
             "channel_messages": channel_messages,
+            "gate_pending": gate_pending,
             "runtime_config": runtime_config,
             "content_texts": content_texts,
             "color_config": color_config,
@@ -979,6 +1025,12 @@ class SqlRepository(StatsRepository):
             for key, v in snapshot.get("channel_messages", {}).items():
                 await conn.execute(insert(sc.channel_messages).values(
                     key=key, message_id=v[0], channel_id=v[1]))
+            for mid, v in snapshot.get("gate_pending", {}).items():
+                await conn.execute(insert(sc.gate_pending).values(
+                    message_id=int(mid), channel_id=v["channel_id"],
+                    gate_type=v["gate_type"], cost=v["cost"],
+                    user_id=v["user_id"], username=v["username"],
+                    options=json.dumps(v["options"])))
             for key, value in snapshot.get("runtime_config", {}).items():
                 await conn.execute(insert(sc.runtime_config).values(
                     key=key, value=value))
@@ -1010,6 +1062,7 @@ class SqlRepository(StatsRepository):
                           sc.activity_counters, sc.streak_stats, sc.night_stats,
                           sc.kodex_confirmations, sc.kodex_messages,
                           sc.base_timers, sc.channel_messages,
+                          sc.gate_pending,
                           sc.runtime_config, sc.content_texts,
                           sc.color_config,
                           sc.achievement_defs):

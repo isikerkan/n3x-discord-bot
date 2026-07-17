@@ -153,3 +153,14 @@ achievement_defs = Table(
     Column("secret", Boolean, nullable=False),
     Column("color", String(50), nullable=True),
 )
+
+gate_pending = Table(
+    "gate_pending", metadata,
+    Column("message_id", BigInteger, primary_key=True),
+    Column("channel_id", BigInteger, nullable=False),
+    Column("gate_type", String(10), nullable=False),
+    Column("cost", BigInteger, nullable=False),
+    Column("user_id", BigInteger, nullable=False),
+    Column("username", String(100), nullable=False),
+    Column("options", Text, nullable=True),
+)

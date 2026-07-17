@@ -724,6 +724,16 @@ async def handle_gate_input_message(bot, repo: StatsRepository, settings: Settin
             "cost": cost, "user_id": message.author.id,
             "username": message.author.name, "gate_type": gate_type,
             "options": options}
+        # Persist the pending entry so a restart/deploy doesn't drop an
+        # in-flight confirmation. Guarded: a persist failure must not abort the
+        # in-memory seeding (which still works for a live click this session).
+        try:
+            await repo.set_gate_pending(
+                message.id, channel_id=message.channel.id, gate_type=gate_type,
+                cost=cost, user_id=message.author.id,
+                username=message.author.name, options=options)
+        except Exception:
+            pass
         try:
             for emoji in reactions:
                 await message.add_reaction(emoji)
@@ -769,6 +779,21 @@ async def handle_gate_input_message(bot, repo: StatsRepository, settings: Settin
             pass
 
 
+async def load_pending_gate(bot, repo: StatsRepository) -> None:
+    """Repopulate ``bot._pending_gate`` from the persisted gate_pending rows.
+
+    Called on startup so a drop click after a restart/deploy uses the fast
+    in-memory confirmation path again (the DB fallback in
+    ``handle_gate_drop_confirmation`` covers any click that races the load).
+    """
+    rows = await repo.all_gate_pending()
+    bot._pending_gate = {
+        r["message_id"]: {"cost": r["cost"], "user_id": r["user_id"],
+                          "username": r["username"], "gate_type": r["gate_type"],
+                          "options": r["options"]}
+        for r in rows}
+
+
 async def handle_gate_drop_confirmation(bot, repo: StatsRepository,
                                         settings: Settings, payload) -> None:
     """Store a pending d/e/z/k gate on the author's single drop-icon click.
@@ -780,8 +805,20 @@ async def handle_gate_drop_confirmation(bot, repo: StatsRepository,
     post-processing runs.
     """
     pending = bot._pending_gate.get(payload.message_id)
+    from_db = False
     if pending is None:
-        return
+        # Restart/deploy wiped the in-memory dict: fall back to the persisted
+        # gate_pending row so a post-restart click still records the gate.
+        try:
+            row = await repo.get_gate_pending(payload.message_id)
+        except Exception:
+            row = None
+        if row is None:
+            return
+        pending = {"cost": row["cost"], "user_id": row["user_id"],
+                   "username": row["username"], "gate_type": row["gate_type"],
+                   "options": row["options"]}
+        from_db = True
     options = pending["options"]
     key = _emoji_key(payload.emoji)
     if key not in options:
@@ -792,9 +829,12 @@ async def handle_gate_drop_confirmation(bot, repo: StatsRepository,
     # or two quick clicks would otherwise both pass the guards above and each
     # store the gate (double gate_entries row on a suspending SQL backend).
     # pop() has no await, so only one dispatch wins; the rest are clean no-ops.
-    pending = bot._pending_gate.pop(payload.message_id, None)
-    if pending is None:
-        return
+    # On the DB-fallback (restart) path there is no concurrent in-memory entry;
+    # the delete_gate_pending below is the single-store gate for that case.
+    if not from_db:
+        pending = bot._pending_gate.pop(payload.message_id, None)
+        if pending is None:
+            return
     chosen = pending["options"][key]
     gate_type = pending["gate_type"]
     cost = pending["cost"]
@@ -815,6 +855,13 @@ async def handle_gate_drop_confirmation(bot, repo: StatsRepository,
             "k", cost, user_id, username,
             drops={"hercules": chosen == "hercules",
                    "lf4u": chosen == "lf4u"})
+    # The pending confirmation is resolved (stored or dedup-rejected): drop its
+    # persisted row so it isn't re-loaded on a later restart. Guarded so a
+    # delete failure never breaks the store/announce flow.
+    try:
+        await repo.delete_gate_pending(payload.message_id)
+    except Exception:
+        pass
     if inserted:
         try:
             channel = bot.get_channel(payload.channel_id)
@@ -990,6 +1037,10 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
             await bot.achievement_defs.refresh(repo)
         except Exception:
             log.exception("achievement_defs refresh failed; using defaults")
+        try:
+            await load_pending_gate(bot, repo)
+        except Exception:
+            log.exception("gate_pending load failed; in-flight confirms may be lost")
         await register_stat_commands(bot, repo, settings)
         for guild in bot.guilds:
             try:

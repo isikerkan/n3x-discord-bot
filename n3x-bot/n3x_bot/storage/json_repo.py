@@ -47,6 +47,7 @@ class JsonRepository(StatsRepository):
             "achievements": {},
             "kodex_confirmations": [], "kodex_messages": {},
             "base_timers": {}, "channel_messages": {},
+            "gate_pending": {},
             "runtime_config": {},
             "content_texts": {},
             "color_config": {},
@@ -280,6 +281,35 @@ class JsonRepository(StatsRepository):
     async def get_channel_message(self, key):
         v = self._db["channel_messages"].get(key)
         return (v[0], v[1]) if v else None
+
+    # ── gate pending ───────────────────────────────────────────────────────
+    async def set_gate_pending(self, message_id, *, channel_id, gate_type, cost,
+                               user_id, username, options):
+        self._db["gate_pending"][str(message_id)] = {
+            "channel_id": channel_id, "gate_type": gate_type, "cost": cost,
+            "user_id": user_id, "username": username, "options": dict(options)}
+        self._flush()
+
+    def _gate_pending_row(self, message_id, row) -> dict:
+        return {"message_id": int(message_id),
+                "channel_id": int(row["channel_id"]),
+                "gate_type": row["gate_type"], "cost": int(row["cost"]),
+                "user_id": int(row["user_id"]), "username": row["username"],
+                "options": dict(row["options"])}
+
+    async def get_gate_pending(self, message_id):
+        row = self._db["gate_pending"].get(str(message_id))
+        return None if row is None else self._gate_pending_row(message_id, row)
+
+    async def delete_gate_pending(self, message_id):
+        existed = str(message_id) in self._db["gate_pending"]
+        self._db["gate_pending"].pop(str(message_id), None)
+        self._flush()
+        return existed
+
+    async def all_gate_pending(self):
+        return [self._gate_pending_row(k, v)
+                for k, v in self._db["gate_pending"].items()]
 
     # ── runtime config ─────────────────────────────────────────────────────
     async def set_runtime_config(self, key, value):
@@ -619,6 +649,7 @@ class JsonRepository(StatsRepository):
             "kodex_messages": copy.deepcopy(self._db["kodex_messages"]),
             "base_timers": copy.deepcopy(self._db["base_timers"]),
             "channel_messages": copy.deepcopy(self._db["channel_messages"]),
+            "gate_pending": copy.deepcopy(self._db["gate_pending"]),
             "runtime_config": copy.deepcopy(self._db["runtime_config"]),
             "content_texts": copy.deepcopy(self._db["content_texts"]),
             "color_config": copy.deepcopy(self._db["color_config"]),
@@ -651,6 +682,8 @@ class JsonRepository(StatsRepository):
         self._db["base_timers"] = copy.deepcopy(snapshot.get("base_timers", {}))
         self._db["channel_messages"] = copy.deepcopy(
             snapshot.get("channel_messages", {}))
+        self._db["gate_pending"] = copy.deepcopy(
+            snapshot.get("gate_pending", {}))
         self._db["runtime_config"] = copy.deepcopy(
             snapshot.get("runtime_config", {}))
         self._db["content_texts"] = copy.deepcopy(
