@@ -487,6 +487,12 @@ async def update_gate_stats_embed(bot, repo: StatsRepository, settings: Settings
         try:
             msg = await channel.fetch_message(target_id)
             await msg.edit(embed=embed)
+            # Seed/ensure the 🔄 reload control on the EXISTING message too
+            # (idempotent — Discord dedups the bot's own reaction).
+            try:
+                await msg.add_reaction("🔄")
+            except Exception:
+                pass
             bot._gate_embed_msg_id = target_id
             return
         except Exception:
@@ -802,6 +808,44 @@ async def load_pending_gate(bot, repo: StatsRepository) -> None:
         for r in rows}
 
 
+async def backfill_gate_input(bot, repo: StatsRepository, settings: Settings,
+                              limit: int = 200) -> int:
+    """Process gate-input messages the bot missed while offline.
+
+    Scans the recent gate-input channel history and routes any parseable,
+    not-yet-handled message through the normal `handle_gate_input_message`
+    workflow (store a/b/c, re-seed the drop-picker for d/e/z/k). A message the
+    bot has ALREADY reacted to (`reaction.me`) — ✅/⏳ for a/b/c, drop-icons for
+    d/e/z/k — is treated as handled and skipped, so nothing is double-stored.
+    Returns the number of messages (re)processed. Best-effort; never raises.
+    """
+    channel_id = bot.runtime_config.gate_input_channel_id
+    if not channel_id:
+        return 0
+    channel = bot.get_channel(channel_id)
+    if channel is None:
+        return 0
+    processed = 0
+    try:
+        async for message in channel.history(limit=limit):
+            if getattr(message.author, "bot", False):
+                continue
+            if parse_gate_message(message.content) is None:
+                continue
+            if any(getattr(r, "me", False) for r in message.reactions):
+                continue  # the bot already reacted → already handled/seeded
+            try:
+                await handle_gate_input_message(bot, repo, settings, message)
+                processed += 1
+            except Exception:
+                log.exception("backfill: failed on message %s", message.id)
+    except Exception:
+        log.exception("gate-input backfill scan failed")
+    if processed:
+        log.info("gate-input backfill: processed %d missed message(s)", processed)
+    return processed
+
+
 async def handle_gate_drop_confirmation(bot, repo: StatsRepository,
                                         settings: Settings, payload) -> None:
     """Store a pending d/e/z/k gate on the author's single drop-icon click.
@@ -1088,6 +1132,10 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
             await load_pending_gate(bot, repo)
         except Exception:
             log.exception("gate_pending load failed; in-flight confirms may be lost")
+        try:
+            await backfill_gate_input(bot, repo, settings)
+        except Exception:
+            log.exception("gate-input backfill failed")
         await register_stat_commands(bot, repo, settings)
         for guild in bot.guilds:
             try:
