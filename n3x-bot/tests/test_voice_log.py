@@ -21,8 +21,8 @@ def _state(channel):
     return SimpleNamespace(channel=channel)
 
 
-def _member(name="Erkan", is_bot=False):
-    return SimpleNamespace(display_name=name, bot=is_bot)
+def _member(name="Erkan", is_bot=False, id=7):
+    return SimpleNamespace(display_name=name, bot=is_bot, id=id)
 
 
 async def _sent(bot):
@@ -36,7 +36,7 @@ async def test_join_announced():
     bot = _bot(channel=ch)
     await announce_voice_change(bot, _member(), _state(None), _state(_vc(1, "Lobby")))
     text = await _sent(bot)
-    assert "Erkan" in text and "Lobby" in text and "beigetreten" in text
+    assert "<@7>" in text and "Lobby" in text and "beigetreten" in text
 
 
 async def test_leave_announced():
@@ -156,7 +156,9 @@ async def test_force_move_records_the_mover():
     member = SimpleNamespace(display_name="Erkan", bot=False, id=7, guild=guild)
     await announce_voice_change(bot, member, _state(_vc(1, "Lobby")), _state(_vc(2, "Games")))
     text = ch.send.await_args.args[0]
-    assert "wurde von" in text and "Mod" in text and "verschoben" in text and "Games" in text
+    # mover rendered as an `<@id>` mention pill, not a plain name
+    assert ("wurde von" in text and "<@7>" in text and "<@42>" in text
+            and "verschoben" in text and "Games" in text)
 
 
 async def test_self_move_not_attributed_when_no_audit_entry():
