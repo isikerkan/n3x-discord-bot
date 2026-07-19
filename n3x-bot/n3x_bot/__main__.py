@@ -8,6 +8,7 @@ from n3x_bot.storage.factory import create_repository
 from n3x_bot.seed import seed_defaults, migrate_legacy_json
 from n3x_bot.legacy_migrate import run_migration_folder
 from n3x_bot.bot import build_bot
+from n3x_bot.singleton import kill_stale_instances
 
 logging.basicConfig(
     level=logging.INFO,
@@ -62,6 +63,9 @@ async def _prepare(settings: Settings):
 
 
 async def amain() -> None:
+    # Kill any leftover instance from a botched Stop/Restart BEFORE connecting,
+    # so exactly one bot holds the Discord gateway (no duplicated events).
+    kill_stale_instances()
     settings = Settings()
     repo = await _prepare(settings)
     bot = build_bot(settings, repo)
