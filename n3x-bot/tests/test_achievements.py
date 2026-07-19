@@ -759,6 +759,39 @@ async def test_erfolge_secret_row_shows_count_teaser_and_hides_titles():
     await repo.close()
 
 
+# ── v3-style DETAIL checklist embeds ─────────────────────────────────────────
+
+async def test_erfolge_detail_embeds_render_full_checklist_with_icons():
+    # The detail embeds list EVERY non-secret achievement with a ✅/⬛ marker,
+    # grouped (Gate Achievements + Weitere), v3-style.
+    repo = await _flatfile_repo()
+    await repo.unlock_achievement(7, "a_5")           # Alpha Bronze Pilot ✅
+    await repo.unlock_achievement(7, "voice_3600")    # Rookie Talker ✅
+    owned = await repo.get_user_achievements(7)
+    embeds = await _ach().build_erfolge_detail_embeds(repo, owned, 7)
+
+    flat = "\n".join(_collect_text_of_embed(e) for e in embeds)
+    assert "✅" in flat and "⬛" in flat                # both markers present
+    assert "Alpha Bronze Pilot" in flat               # unlocked gate tier listed
+    assert "Rookie Talker" in flat                    # unlocked voice tier listed
+    assert "Night Shadow Legende" in flat             # LOCKED tier still listed
+    # the unlocked ones carry ✅
+    assert "✅ 5 Läufe — Alpha Bronze Pilot" in flat
+    await repo.close()
+
+
+async def test_erfolge_detail_embeds_never_reveal_secret_titles():
+    repo = await _flatfile_repo()
+    await repo.unlock_achievement(7, "msg_1000")      # a secret, unlocked
+    owned = await repo.get_user_achievements(7)
+    embeds = await _ach().build_erfolge_detail_embeds(repo, owned, 7)
+    flat = "\n".join(_collect_text_of_embed(e) for e in embeds)
+    assert "Tastatur-Krieger" not in flat and "Emoji-Fan" not in flat
+    # secret still summarised as a count (1 of 8)
+    assert "1/8" in flat
+    await repo.close()
+
+
 def _collect_text_of_embed(embed) -> str:
     parts = [str(getattr(embed, "title", "") or ""),
              str(getattr(embed, "description", "") or "")]
@@ -809,8 +842,10 @@ async def test_erfolge_dms_the_embed_to_the_caller():
     interaction = _erfolge_interaction()
     await bot.tree.get_command("erfolge").callback(interaction)
 
-    interaction.user.send.assert_awaited_once()
-    assert interaction.user.send.await_args.kwargs.get("embed") is not None
+    # Summary + detail embeds are DM'd (one embed per send call).
+    assert interaction.user.send.await_count >= 1
+    assert all(c.kwargs.get("embed") is not None
+               for c in interaction.user.send.await_args_list)
     await repo.close()
 
 
@@ -848,7 +883,8 @@ async def test_erfolge_falls_back_to_ephemeral_embed_when_dms_blocked():
     interaction.response.send_message.assert_awaited_once()
     kwargs = interaction.response.send_message.await_args.kwargs
     assert kwargs.get("ephemeral") is True
-    assert kwargs.get("embed") is not None
+    # DM blocked -> all embeds delivered ephemerally in-channel.
+    assert kwargs.get("embeds") and len(kwargs["embeds"]) >= 1
     await repo.close()
 
 

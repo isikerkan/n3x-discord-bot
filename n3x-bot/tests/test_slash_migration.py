@@ -179,7 +179,8 @@ async def test_erfolge_app_command_dms_the_embed_to_the_caller():
     interaction = _fake_interaction(user=_member(member_id=7, display_name="Erkan"))
     await _app_cmd(bot, "erfolge").callback(interaction)
 
-    interaction.user.send.assert_awaited_once()
+    # summary + detail embeds, one per send call
+    assert interaction.user.send.await_count >= 1
     assert _embed_of(interaction.user.send) is not None
 
     await repo.close()

@@ -225,8 +225,9 @@ async def test_erfolge_embed_uses_resolver_total():
 
     await cmd.callback(interaction)
 
-    # /erfolge now DMs the embed; the interaction reply is just the ephemeral ack.
-    embed = interaction.user.send.await_args.kwargs.get("embed")
+    # /erfolge now DMs a summary + detail embeds; the summary (first send) shows
+    # the resolver total. The interaction reply is just the ephemeral ack.
+    embed = interaction.user.send.await_args_list[0].kwargs.get("embed")
     assert embed is not None
     assert "/84" in _embed_text(embed)
 
