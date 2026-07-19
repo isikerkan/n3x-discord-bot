@@ -9,7 +9,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from n3x_bot.admin import (  # noqa: F401  (admin_* re-exported for tests)
-    is_admin,
+    is_admin, app_is_admin,
     admin_create_stat, admin_edit_stat, admin_archive_stat,
     admin_delete_stat, admin_list_stats,
     admin_create_message, admin_edit_message, admin_archive_message,
@@ -432,21 +432,22 @@ _COMMAND_EMOJI: dict[str, str] = {
     "kodex": "📜", "kodex_check": "✅", "sync_welcome": "👋", "rank": "🥇",
     "admin": "🛠️", "config": "⚙️", "content": "📝",
 }
+# Categories that are admin-only. These are hidden from the public command-list
+# message and revealed only via the ephemeral "Admin-Befehle" button (gated on
+# an admin role). Everything else is public.
+_ADMIN_CATEGORY_KEYS: set[str] = {"admin"}
+# Fixed custom_id for the persistent admin-reveal button (survives restarts).
+COMMAND_LIST_ADMIN_BUTTON_ID = "n3x:cmdlist:admin"
 
 
-def build_command_list(bot) -> discord.Embed:
-    """Build the deterministic German command-list embed, GROUPED by category.
+def _bucket_commands(bot) -> dict[str, list[tuple[str, str]]]:
+    """Tree-walk the live registry into ``category key -> [(qname, line)]``.
 
-    Tree-driven: enumerates `bot.tree.get_commands()`, recursing into every
-    `app_commands.Group` so `admin > stat > add` renders `/admin stat add`.
-    Each top-level command is bucketed by `_TOP_LEVEL_CATEGORY` (dynamic
-    per-stat counters fall into 🎮 Fun). Each category becomes an embed field
-    (emoji + German label) whose lines carry a per-command emoji and the curated
-    `_COMMAND_DESCRIPTIONS` blurb. Deterministic (sorted); chunked to respect
-    the 1024-char field limit.
+    Recurses every ``app_commands.Group`` so `admin > stat > add` renders
+    `/admin stat add`; dynamic per-stat counters fall into 🎮 Fun. Each line
+    carries a per-command emoji and the curated `_COMMAND_DESCRIPTIONS` blurb.
     """
     cat_emoji_by_key = {key: emoji for key, emoji, _ in _COMMAND_CATEGORIES}
-    # category key -> list of (qualified_name, rendered_line)
     buckets: dict[str, list[tuple[str, str]]] = {c[0]: [] for c in _COMMAND_CATEGORIES}
 
     def _emit(cmd, cat, emoji):
@@ -463,10 +464,21 @@ def build_command_list(bot) -> discord.Embed:
         cat = _TOP_LEVEL_CATEGORY.get(top.name, "fun")
         emoji = _COMMAND_EMOJI.get(top.name, cat_emoji_by_key[cat])
         _emit(top, cat, emoji)
+    return buckets
 
-    embed = discord.Embed(title="📋 Befehlsübersicht",
-                          color=discord.Color.blurple())
+
+def _render_command_embed(bot, title: str, category_keys, color, footer=None
+                          ) -> discord.Embed:
+    """Deterministic grouped embed for the given category keys (in display order).
+
+    One embed field per non-empty category (emoji + German label), sorted lines,
+    chunked to the 1024-char field limit.
+    """
+    buckets = _bucket_commands(bot)
+    embed = discord.Embed(title=title, color=color)
     for key, cat_emoji, label in _COMMAND_CATEGORIES:
+        if key not in category_keys:
+            continue
         entries = sorted(buckets.get(key, []))
         if not entries:
             continue
@@ -475,7 +487,54 @@ def build_command_list(bot) -> discord.Embed:
         for i, chunk in enumerate(chunks):
             name = f"{cat_emoji} {label}" if i == 0 else "​"
             embed.add_field(name=name, value=chunk, inline=False)
+    if footer:
+        embed.set_footer(text=footer)
     return embed
+
+
+def build_command_list(bot) -> discord.Embed:
+    """PUBLIC command-list embed — every category EXCEPT the admin block.
+
+    Admin/config/content are hidden here; a footer points to the ephemeral
+    "Admin-Befehle" button, which only admins can use.
+    """
+    public_keys = [k for k, _, _ in _COMMAND_CATEGORIES
+                   if k not in _ADMIN_CATEGORY_KEYS]
+    return _render_command_embed(
+        bot, "📋 Befehlsübersicht", public_keys, discord.Color.blurple(),
+        footer="🔧 Admin-Befehle: Button unten (nur für Admins sichtbar).")
+
+
+def build_admin_command_list(bot) -> discord.Embed:
+    """ADMIN-only command-list embed — solely the admin categories."""
+    return _render_command_embed(
+        bot, "⚙️ Admin-Befehle", _ADMIN_CATEGORY_KEYS, discord.Color.dark_grey())
+
+
+class CommandListView(discord.ui.View):
+    """Persistent view on the public command-list message.
+
+    A single "Admin-Befehle" button reveals the hidden admin block, but only to
+    users holding an admin role (`app_is_admin`). The reveal is ephemeral, so a
+    non-admin never sees the admin commands even in a shared channel.
+    ``bot.add_view(CommandListView(bot, settings))`` in `on_ready` re-attaches
+    the callback after a restart.
+    """
+
+    def __init__(self, bot, settings: Settings):
+        super().__init__(timeout=None)
+        self.bot = bot
+        self.settings = settings
+
+    @discord.ui.button(label="🔧 Admin-Befehle", style=discord.ButtonStyle.secondary,
+                       custom_id=COMMAND_LIST_ADMIN_BUTTON_ID)
+    async def admin(self, interaction, button):
+        if not app_is_admin(interaction, self.settings):
+            await interaction.response.send_message(
+                "❌ Diese Befehle sind nur für Admins sichtbar.", ephemeral=True)
+            return
+        await interaction.response.send_message(
+            embed=build_admin_command_list(self.bot), ephemeral=True)
 
 
 async def update_command_list(bot, repo: StatsRepository, settings: Settings):
@@ -491,17 +550,18 @@ async def update_command_list(bot, repo: StatsRepository, settings: Settings):
     if channel is None:
         return
     embed = build_command_list(bot)
+    view = CommandListView(bot, settings)
 
     stored = await repo.get_channel_message(COMMAND_LIST_KEY)
     if stored is not None:
         try:
             msg = await channel.fetch_message(stored[0])
-            await msg.edit(embed=embed)
+            await msg.edit(embed=embed, view=view)
             return
         except Exception:
             pass
 
-    new_msg = await channel.send(embed=embed)
+    new_msg = await channel.send(embed=embed, view=view)
     await repo.set_channel_message(COMMAND_LIST_KEY, new_msg.id, channel.id)
 
 
@@ -1242,6 +1302,10 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
             bot.add_view(OverviewView(bot, repo, settings))
         except Exception:
             log.exception("overview view registration failed")
+        try:
+            bot.add_view(CommandListView(bot, settings))
+        except Exception:
+            log.exception("command-list view registration failed")
         try:
             await load_pending_gate(bot, repo)
         except Exception:
