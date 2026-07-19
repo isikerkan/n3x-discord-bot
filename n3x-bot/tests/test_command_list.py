@@ -227,17 +227,45 @@ async def test_command_list_contains_slash_top_level_commands():
 
 async def test_command_list_includes_slash_group_subcommands():
     # Phase 7: the tree-driven list walks each app-command Group into its
-    # subcommands, rendering them as `/group sub` (nested groups included, so
-    # the `admin > stat > add` chain renders `/admin stat add`).
-    from n3x_bot.bot import build_command_list
+    # subcommands, rendering them as `/group sub`. Non-admin group subcommands
+    # (`/gate verlauf`) live in the PUBLIC embed; admin group subcommands
+    # (`/admin stat add`, `/config channel`, `/content set`) live only in the
+    # ADMIN embed (revealed via the ephemeral button).
+    from n3x_bot.bot import build_command_list, build_admin_command_list
     repo = await _flatfile_repo()
     bot = await _populated_bot(_settings(), repo)
 
-    text = _embed_text(build_command_list(bot))
-    for sub in ("/gate verlauf", "/admin stat add", "/config channel",
-                "/content set"):
-        assert sub in text, sub
+    public = _embed_text(build_command_list(bot))
+    assert "/gate verlauf" in public
 
+    admin = _embed_text(build_admin_command_list(bot))
+    for sub in ("/admin stat add", "/config channel", "/content set"):
+        assert sub in admin, sub
+
+    await _cleanup(repo)
+
+
+async def test_public_command_list_hides_admin_commands():
+    # The public message must NOT leak admin/config/content commands.
+    from n3x_bot.bot import build_command_list
+    repo = await _flatfile_repo()
+    bot = await _populated_bot(_settings(), repo)
+    text = _embed_text(build_command_list(bot))
+    for hidden in ("/admin", "/config", "/content"):
+        assert hidden not in text, hidden
+    # a non-admin command is still present
+    assert "/erfolge" in text
+    await _cleanup(repo)
+
+
+async def test_admin_command_list_contains_only_admin_block():
+    from n3x_bot.bot import build_admin_command_list
+    repo = await _flatfile_repo()
+    bot = await _populated_bot(_settings(), repo)
+    text = _embed_text(build_admin_command_list(bot))
+    assert "/admin" in text and "/config" in text and "/content" in text
+    # public commands are NOT duplicated into the admin block
+    assert "/erfolge" not in text and "/rank" not in text
     await _cleanup(repo)
 
 
@@ -259,14 +287,19 @@ async def test_command_list_includes_dynamic_per_stat_commands():
 
 async def test_command_list_is_derived_from_the_live_tree():
     # Enumerate the live app-command tree and assert every top-level command
-    # surfaces as `/name` (groups surface by their group name). This fails if the
-    # list is hardcoded and drifts from the tree.
-    from n3x_bot.bot import build_command_list
+    # surfaces as `/name` across the public + admin embeds combined (groups
+    # surface by their group name). This fails if the list is hardcoded and
+    # drifts from the tree. Admin commands live only in the admin embed.
+    from n3x_bot.bot import (build_command_list, build_admin_command_list,
+                             _TOP_LEVEL_CATEGORY, _ADMIN_CATEGORY_KEYS)
     repo = await _flatfile_repo()
     bot = await _populated_bot(_settings(), repo)
-    text = _embed_text(build_command_list(bot))
+    public = _embed_text(build_command_list(bot))
+    admin = _embed_text(build_admin_command_list(bot))
     for command in bot.tree.get_commands():
-        assert f"/{command.name}" in text, command.name
+        is_admin = _TOP_LEVEL_CATEGORY.get(command.name) in _ADMIN_CATEGORY_KEYS
+        target = admin if is_admin else public
+        assert f"/{command.name}" in target, command.name
     await _cleanup(repo)
 
 
@@ -307,6 +340,48 @@ async def test_command_list_top_level_commands_are_sorted():
     text = _embed_text(build_command_list(bot))
     assert "/erfolge" in text and "/rank" in text
     assert text.index("/erfolge") < text.index("/rank")
+    await _cleanup(repo)
+
+
+# ── admin-reveal button: ephemeral, role-gated ──────────────────────────────
+
+def _button_interaction(role_ids):
+    user = SimpleNamespace(id=1, roles=[SimpleNamespace(id=r) for r in role_ids])
+    return SimpleNamespace(user=user,
+                           response=SimpleNamespace(send_message=AsyncMock()))
+
+
+async def test_admin_button_denies_non_admin_ephemerally():
+    from n3x_bot.bot import build_bot, CommandListView
+    repo = await _flatfile_repo()
+    settings = _settings(admin_role_id=999)
+    bot = build_bot(settings, repo)
+    view = CommandListView(bot, settings)
+    interaction = _button_interaction(role_ids=[123])  # not the admin role
+
+    await view.admin.callback(interaction)
+
+    call = interaction.response.send_message.await_args
+    assert call.kwargs.get("ephemeral") is True
+    assert "Admin" in call.args[0] and "embed" not in call.kwargs
+    await _cleanup(repo)
+
+
+async def test_admin_button_shows_admin_embed_to_admin():
+    from n3x_bot.bot import build_bot, register_stat_commands, CommandListView
+    repo = await _flatfile_repo()
+    settings = _settings(admin_role_id=999)
+    bot = build_bot(settings, repo)
+    await register_stat_commands(bot, repo, settings)
+    view = CommandListView(bot, settings)
+    interaction = _button_interaction(role_ids=[999])  # holds the admin role
+
+    await view.admin.callback(interaction)
+
+    call = interaction.response.send_message.await_args
+    assert call.kwargs.get("ephemeral") is True
+    embed = call.kwargs.get("embed")
+    assert embed is not None and "Admin" in (embed.title or "")
     await _cleanup(repo)
 
 

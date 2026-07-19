@@ -551,9 +551,10 @@ async def test_on_ready_registers_persistent_overview_view():
 
     await bot.on_ready()
 
-    bot.add_view.assert_called_once()
-    view_arg = bot.add_view.call_args.args[0]
-    assert isinstance(view_arg, _mod().OverviewView)
+    # on_ready registers several persistent views (overview + command-list);
+    # assert the OverviewView is among them.
+    registered = [c.args[0] for c in bot.add_view.call_args_list]
+    assert any(isinstance(v, _mod().OverviewView) for v in registered)
     await repo.close()
 
 
