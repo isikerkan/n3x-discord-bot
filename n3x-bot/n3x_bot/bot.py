@@ -407,21 +407,23 @@ _COMMAND_CATEGORIES: list[tuple[str, str, str]] = [
     ("achievements", "🏆", "Achievements"),
     ("activity", "🎙️", "Aktivität"),
     ("timers", "⏱️", "Base-Timer"),
-    ("kodex", "📜", "Kodex & Willkommen"),
     ("fun", "🎮", "Fun & Zähler"),
-    ("admin", "⚙️", "Admin & Konfiguration"),
+    ("admin", "⚙️", "Admin & Verwaltung"),
 ]
 # Top-level command name -> category key. Anything unmapped (the dynamic
 # per-stat counter commands) falls into "fun".
 _TOP_LEVEL_CATEGORY: dict[str, str] = {
     "stat": "gates", "del": "gates", "gate": "gates",
     "erfolge": "achievements", "overview": "achievements",
-    "sync_achievements": "achievements", "achievement": "achievements",
+    "achievement": "achievements",
     "activity": "activity",
     "base": "timers", "basestop": "timers",
-    "kodex": "kodex", "kodex_check": "kodex", "sync_welcome": "kodex",
     "rank": "fun",
+    # Admin-gated management + operational commands — hidden behind the
+    # admin-only reveal button, not shown on the public list.
     "admin": "admin", "config": "admin", "content": "admin",
+    "sync_achievements": "admin", "sync_welcome": "admin",
+    "kodex": "admin", "kodex_check": "admin",
 }
 # Per-command line emoji (top-level qualified name). Falls back to the category
 # emoji so every line carries one.
