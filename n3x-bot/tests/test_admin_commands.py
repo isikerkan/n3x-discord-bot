@@ -236,7 +236,7 @@ async def test_admin_create_targeted_stat_command_takes_member_argument():
     await repo.close()
 
 
-async def test_admin_create_non_targeted_stat_command_has_no_member_argument():
+async def test_admin_create_non_targeted_stat_command_has_optional_member_argument():
     repo = await _flatfile_repo()
     settings = _settings(admin_role_id=42)
     bot = build_bot(settings, repo)
@@ -245,7 +245,9 @@ async def test_admin_create_non_targeted_stat_command_has_no_member_argument():
 
     cmd = bot.tree.get_command("boop")
     assert cmd is not None
-    assert "member" not in _param_names(cmd)
+    # non-targeted stats accept an OPTIONAL @user to attribute the count to
+    assert "member" in _param_names(cmd)
+    assert next(p for p in cmd.parameters if p.name == "member").required is False
 
     await repo.close()
 

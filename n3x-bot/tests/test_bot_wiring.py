@@ -410,7 +410,7 @@ async def test_non_targeted_stat_slash_records_use_and_responds():
     await repo.close()
 
 
-async def test_non_targeted_stat_slash_has_cooldown_and_no_member_param():
+async def test_non_targeted_stat_slash_has_cooldown_and_optional_member_param():
     repo = await _flatfile_repo()
     settings = _settings()
     bot = build_bot(settings, repo)
@@ -419,7 +419,31 @@ async def test_non_targeted_stat_slash_has_cooldown_and_no_member_param():
     cmd = bot.tree.get_command("tit")
     assert cmd is not None
     assert _has_app_cooldown(cmd)          # app-command cooldown present
-    assert "member" not in _param_names(cmd)
+    # now accepts an OPTIONAL @user to attribute the count to someone else
+    assert "member" in _param_names(cmd)
+    member_param = next(p for p in cmd.parameters if p.name == "member")
+    assert member_param.required is False
+
+    await repo.close()
+
+
+async def test_non_targeted_stat_slash_attributes_to_mentioned_member():
+    # `/afk @X` records the count for X (not the invoker) and mentions X.
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+    await register_stat_commands(bot, repo, settings)
+
+    cmd = bot.tree.get_command("afk")
+    invoker = _fake_interaction(user_id=1, display_name="Invoker")
+    target = SimpleNamespace(id=42, display_name="Target", mention="<@42>")
+
+    await cmd.callback(invoker, target)
+
+    text = _sent_text(invoker.response.send_message)
+    assert "<@42>" in text and "<@1>" not in text     # mentions the target
+    assert await repo.get_user_stats(42) == {"afk": 1}  # counted for target
+    assert await repo.get_user_stats(1) == {}           # invoker not credited
 
     await repo.close()
 
