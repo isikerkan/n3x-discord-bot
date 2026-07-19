@@ -397,34 +397,81 @@ _COMMAND_DESCRIPTIONS: dict[str, str] = {
 }
 
 
+# Ordered command categories: key -> (emoji, German label). Order is the
+# display order of the embed fields.
+_COMMAND_CATEGORIES: list[tuple[str, str, str]] = [
+    ("gates", "📊", "Gates"),
+    ("achievements", "🏆", "Achievements"),
+    ("activity", "🎙️", "Aktivität"),
+    ("timers", "⏱️", "Base-Timer"),
+    ("kodex", "📜", "Kodex & Willkommen"),
+    ("fun", "🎮", "Fun & Zähler"),
+    ("admin", "⚙️", "Admin & Konfiguration"),
+]
+# Top-level command name -> category key. Anything unmapped (the dynamic
+# per-stat counter commands) falls into "fun".
+_TOP_LEVEL_CATEGORY: dict[str, str] = {
+    "stat": "gates", "del": "gates", "gate": "gates",
+    "erfolge": "achievements", "overview": "achievements",
+    "sync_achievements": "achievements", "achievement": "achievements",
+    "activity": "activity",
+    "base": "timers", "basestop": "timers",
+    "kodex": "kodex", "kodex_check": "kodex", "sync_welcome": "kodex",
+    "rank": "fun",
+    "admin": "admin", "config": "admin", "content": "admin",
+}
+# Per-command line emoji (top-level qualified name). Falls back to the category
+# emoji so every line carries one.
+_COMMAND_EMOJI: dict[str, str] = {
+    "stat": "📈", "del": "🗑️", "gate": "📉",
+    "erfolge": "🎖️", "overview": "🏅", "sync_achievements": "🔄",
+    "achievement": "🧩", "activity": "📊", "base": "▶️", "basestop": "⏹️",
+    "kodex": "📜", "kodex_check": "✅", "sync_welcome": "👋", "rank": "🥇",
+    "admin": "🛠️", "config": "⚙️", "content": "📝",
+}
+
+
 def build_command_list(bot) -> discord.Embed:
-    """Build the deterministic German command-list embed from the live registry.
+    """Build the deterministic German command-list embed, GROUPED by category.
 
-    Tree-driven: enumerates `bot.tree.get_commands()` (sorted), recursing into
-    every `app_commands.Group` and rendering each command as a `/`-prefixed line
-    keyed by its `qualified_name` (so `admin > stat > add` renders
-    `/admin stat add`). The curated blurb from `_COMMAND_DESCRIPTIONS` (keyed by
-    `qualified_name`; unmapped → name only) drives the description column. Lines
-    are chunked to respect Discord's embed field/description limits.
+    Tree-driven: enumerates `bot.tree.get_commands()`, recursing into every
+    `app_commands.Group` so `admin > stat > add` renders `/admin stat add`.
+    Each top-level command is bucketed by `_TOP_LEVEL_CATEGORY` (dynamic
+    per-stat counters fall into 🎮 Fun). Each category becomes an embed field
+    (emoji + German label) whose lines carry a per-command emoji and the curated
+    `_COMMAND_DESCRIPTIONS` blurb. Deterministic (sorted); chunked to respect
+    the 1024-char field limit.
     """
-    lines: list[str] = []
+    cat_emoji_by_key = {key: emoji for key, emoji, _ in _COMMAND_CATEGORIES}
+    # category key -> list of (qualified_name, rendered_line)
+    buckets: dict[str, list[tuple[str, str]]] = {c[0]: [] for c in _COMMAND_CATEGORIES}
 
-    def _emit(cmd):
+    def _emit(cmd, cat, emoji):
         desc = _COMMAND_DESCRIPTIONS.get(cmd.qualified_name, "")
-        lines.append(f"/{cmd.qualified_name} — {desc}" if desc
-                     else f"/{cmd.qualified_name}")
+        line = f"{emoji} `/{cmd.qualified_name}`"
+        if desc:
+            line += f" — {desc}"
+        buckets[cat].append((cmd.qualified_name, line))
         if isinstance(cmd, app_commands.Group):
             for sub in sorted(cmd.commands, key=lambda c: c.name):
-                _emit(sub)
+                _emit(sub, cat, emoji)
 
-    for cmd in sorted(bot.tree.get_commands(), key=lambda c: c.name):
-        _emit(cmd)
+    for top in bot.tree.get_commands():
+        cat = _TOP_LEVEL_CATEGORY.get(top.name, "fun")
+        emoji = _COMMAND_EMOJI.get(top.name, cat_emoji_by_key[cat])
+        _emit(top, cat, emoji)
 
-    chunks = _chunk_gate_lines(lines, limit=1024)
-    embed = discord.Embed(title="📋 Befehlsübersicht", description=chunks[0],
+    embed = discord.Embed(title="📋 Befehlsübersicht",
                           color=discord.Color.blurple())
-    for extra in chunks[1:]:
-        embed.add_field(name="​", value=extra, inline=False)
+    for key, cat_emoji, label in _COMMAND_CATEGORIES:
+        entries = sorted(buckets.get(key, []))
+        if not entries:
+            continue
+        lines = [line for _, line in entries]
+        chunks = _chunk_gate_lines(lines, limit=1024)
+        for i, chunk in enumerate(chunks):
+            name = f"{cat_emoji} {label}" if i == 0 else "​"
+            embed.add_field(name=name, value=chunk, inline=False)
     return embed
 
 
