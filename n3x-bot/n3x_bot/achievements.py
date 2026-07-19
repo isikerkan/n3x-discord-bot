@@ -373,10 +373,99 @@ def _milestone_progress(metric: str, live: int, threshold: int) -> str:
     return f"{live}/{threshold}"
 
 
+def _fmt(n: int) -> str:
+    """German thousands separator (1.234.567)."""
+    return f"{n:,}".replace(",", ".")
+
+
+def _achievement_label(a: Achievement) -> str:
+    """Human milestone label for a single achievement in a ✅/⬛ checklist."""
+    if a.metric == "voice_seconds":
+        return f"{a.threshold // 3600}h"
+    if a.metric == "gate_cost_total":
+        return f"{_fmt(a.threshold)} Uridium"
+    if a.metric == "gate_total":
+        return f"{a.threshold} Gate" if a.threshold == 1 else f"{a.threshold} Gates"
+    if a.metric.startswith("gate_"):
+        return f"{a.threshold} Läufe"
+    if a.category == "streak":
+        return f"{a.threshold} Tage"
+    if a.category == "night":
+        return f"{a.threshold} Nächte"
+    return str(a.threshold)
+
+
+def _checklist(defs: list[Achievement], owned: set[str]) -> str:
+    """✅/⬛ line per achievement (sorted by threshold): icon, label — title."""
+    lines = []
+    for a in sorted(defs, key=lambda d: d.threshold):
+        icon = "✅" if a.id in owned else "⬛"
+        lines.append(f"{icon} {_achievement_label(a)} — {a.title}")
+    return "\n".join(lines)
+
+
+async def _tracking_value(repo: StatsRepository, uid: int) -> str:
+    """Live raw-stat block (v3-style): the numbers the milestones track."""
+    voice_h = (await repo.get_activity(uid, "voice_seconds")) / 3600
+    messages = await repo.get_activity(uid, "messages")
+    reactions = await repo.get_activity(uid, "reactions")
+    streak = await repo.get_streak(uid) or {}
+    night = await repo.get_night(uid) or {}
+    return (f"🎙️ Voice: {voice_h:.1f}h\n"
+            f"💬 Nachrichten: {_fmt(messages)}\n"
+            f"🔥 Streak: {streak.get('current_streak', 0)} Tage "
+            f"(Max: {streak.get('max_streak', 0)})\n"
+            f"🌙 Nächte: {night.get('night_count', 0)}\n"
+            f"👍 Reaktionen: {_fmt(reactions)}")
+
+
+async def build_erfolge_detail_embeds(repo: StatsRepository, owned: set[str],
+                                      uid: int,
+                                      defs: list[Achievement] | None = None
+                                      ) -> list[discord.Embed]:
+    """v3-style DETAILED checklists: every non-secret achievement with ✅/⬛.
+
+    Two embeds — 🛡️ Gate Achievements (one field per gate type + specials) and
+    ⭐ Weitere Achievements (Voice/Streak/Nacht + a count-only 🔒 Secret row).
+    Secret achievements are NEVER listed by title, only summarised as a count.
+    """
+    source = defs if defs is not None else ACHIEVEMENTS
+
+    gate_embed = discord.Embed(title="🛡️ Gate Achievements",
+                               color=discord.Color.blue())
+    for gtype, gname in GATE_NAMES.items():
+        tier = [a for a in source if a.metric == f"gate_{gtype}"]
+        if tier:
+            gate_embed.add_field(name=f"{gname} Gate",
+                                 value=_checklist(tier, owned), inline=True)
+    specials = [a for a in source
+                if a.metric in ("gate_total", "gate_cost_total")]
+    if specials:
+        gate_embed.add_field(name="⭐ Spezial",
+                             value=_checklist(specials, owned), inline=False)
+
+    weitere = discord.Embed(title="⭐ Weitere Achievements",
+                            color=discord.Color.purple())
+    for category, label in (("voice", "🎙️ Voice-Zeit"),
+                            ("streak", "🔥 Login-Streak"),
+                            ("night", "🌙 Nachtaktivität")):
+        cat_defs = [a for a in source if a.category == category and not a.secret]
+        if cat_defs:
+            weitere.add_field(name=label, value=_checklist(cat_defs, owned),
+                              inline=True)
+    secret_total = sum(1 for a in source if a.secret)
+    secret_unlocked = len(owned & {a.id for a in source if a.secret})
+    weitere.add_field(name="🔒 Secret",
+                      value=f"{secret_unlocked}/{secret_total} freigeschaltet  ???",
+                      inline=False)
+    return [gate_embed, weitere]
+
+
 async def _build_erfolge_embed(repo: StatsRepository, owned: set[str], uid: int,
                                display_name: str,
                                defs: list[Achievement] | None = None,
-                               total: int | None = None) -> discord.Embed:
+                               total: int | None = None,
+                               avatar_url: str | None = None) -> discord.Embed:
     source = defs if defs is not None else ACHIEVEMENTS
     denom = total if total is not None else TOTAL_ACHIEVEMENTS
     count = len(owned)
@@ -387,6 +476,10 @@ async def _build_erfolge_embed(repo: StatsRepository, owned: set[str], uid: int,
     embed.description = (
         f"**{count}/{denom}** Achievements freigeschaltet\n"
         f"{_bar(count, denom)} {percent} %")
+    if avatar_url:
+        embed.set_thumbnail(url=avatar_url)
+    embed.add_field(name="📊 Tracking",
+                    value=await _tracking_value(repo, uid), inline=False)
 
     category_labels = {"gate": "🚀 Gates", "voice": "🎙️ Voice",
                        "streak": "🔥 Streak", "night": "🌙 Nachtaktiv"}
@@ -429,12 +522,19 @@ def register_achievement_commands(bot, repo: StatsRepository,
                       description="Zeigt deine freigeschalteten Achievements.")
     async def erfolge(interaction):
         owned = await repo.get_user_achievements(interaction.user.id)
-        embed = await _build_erfolge_embed(
+        defs = bot.achievement_defs.all()
+        avatar = getattr(getattr(interaction.user, "display_avatar", None),
+                         "url", None)
+        summary = await _build_erfolge_embed(
             repo, owned, interaction.user.id, interaction.user.display_name,
-            defs=bot.achievement_defs.all(), total=bot.achievement_defs.total)
+            defs=defs, total=bot.achievement_defs.total, avatar_url=avatar)
+        details = await build_erfolge_detail_embeds(
+            repo, owned, interaction.user.id, defs=defs)
+        embeds = [summary, *details]
         try:
-            await interaction.user.send(embed=embed)
+            for e in embeds:
+                await interaction.user.send(embed=e)
             await interaction.response.send_message(
                 "📬 Ich hab dir deine Erfolge per DM geschickt.", ephemeral=True)
         except discord.Forbidden:
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.response.send_message(embeds=embeds, ephemeral=True)
