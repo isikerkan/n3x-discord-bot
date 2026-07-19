@@ -230,17 +230,20 @@ async def register_stat_commands(bot, repo: StatsRepository, settings: Settings)
     if bot.tree.get_command("rank") is None:
         async def _rank_cmd(interaction: discord.Interaction):
             data = await repo.get_user_stats(interaction.user.id)
+            mention = f"<@{interaction.user.id}>"
             if not data:
-                text = (f"📊 **Command-Ranking von {interaction.user.display_name}**\n\n"
+                text = (f"📊 **Command-Ranking von {mention}**\n\n"
                         "Du hast bisher noch keine Befehle genutzt!")
             else:
                 ordered = sorted(data.items(), key=lambda x: x[1], reverse=True)
                 emojis = ["🥇", "🥈", "🥉"]
-                text = f"📊 **Command-Ranking von {interaction.user.display_name}**\n\n"
+                text = f"📊 **Command-Ranking von {mention}**\n\n"
                 for i, (cmd, count) in enumerate(ordered):
                     pref = emojis[i] if i < 3 else f"{i+1}."
-                    text += f"{pref} !{cmd:<10} {count}\n"
-            await interaction.response.send_message(text)
+                    text += f"{pref} /{cmd:<10} {count}\n"
+            # Mention pill without a self-ping on every rank check.
+            await interaction.response.send_message(
+                text, allowed_mentions=discord.AllowedMentions.none())
 
         bot.tree.add_command(app_commands.Command(
             name="rank", description="Zeigt dein Command-Ranking.",

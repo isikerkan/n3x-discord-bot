@@ -298,22 +298,23 @@ async def announce_voice_change(bot, member, before, after) -> None:
     channel = bot.get_channel(channel_id)
     if channel is None:
         return
-    name = member.display_name
+    mention = f"<@{member.id}>"
     if b is None and a is not None:
-        text = f"🔊 **{name}** ist **{a.name}** beigetreten."
+        text = f"🔊 {mention} ist **{a.name}** beigetreten."
     elif b is not None and a is None:
-        text = f"👋 **{name}** hat **{b.name}** verlassen."
+        text = f"👋 {mention} hat **{b.name}** verlassen."
     else:
         mover = await _find_voice_mover(getattr(member, "guild", None), member, a)
         if mover is not None:
-            text = (f"🔀 **{name}** wurde von **{mover.display_name}** "
+            text = (f"🔀 {mention} wurde von <@{mover.id}> "
                     f"nach **{a.name}** verschoben.")
         else:
-            text = f"🔀 **{name}**: **{b.name}** → **{a.name}**"
+            text = f"🔀 {mention}: **{b.name}** → **{a.name}**"
     try:
-        # `member.display_name` is user-controlled free text — a name like
-        # "@everyone"/"<@&role>" would otherwise make the bot ping with its own
-        # permissions. Suppress all mentions in the announcement.
+        # Render the users as `<@id>` mention pills (clickable, link to profile)
+        # but suppress the notification: AllowedMentions.none() means a busy
+        # voice-log channel never actually pings anyone on every join/leave, and
+        # any stray `<@&role>`/@everyone in a channel name can't mass-ping either.
         await channel.send(text, allowed_mentions=discord.AllowedMentions.none())
     except Exception:
         pass
