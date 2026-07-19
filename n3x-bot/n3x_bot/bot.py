@@ -64,12 +64,14 @@ GATE_STAT_CHUNK_LIMIT = 1900
 
 async def build_output(repo: StatsRepository, stat_key: str,
                        discord_id: int, display_name: str) -> str:
+    # Track & display the INVOKER's own count (user_count), not the global
+    # total, and mention them via {user} so the message names who triggered it.
     user_count, total = await repo.record_use(discord_id, display_name, stat_key)
     stat = await repo.get_stat(stat_key)
     message = None
     if stat.message_id is not None:
         message = await repo.get_message(stat.message_id)
-    return render_output(stat, message, display_name, total)
+    return render_output(stat, message, f"<@{discord_id}>", user_count)
 
 
 async def build_target_output(repo: StatsRepository, stat_key: str,
@@ -87,7 +89,8 @@ async def build_target_output(repo: StatsRepository, stat_key: str,
     message = None
     if stat.message_id is not None:
         message = await repo.get_message(stat.message_id)
-    return render_output(stat, message, invoker_display, count, target_display=target_display)
+    return render_output(stat, message, f"<@{invoker_id}>", count,
+                         target_display=target_display)
 
 
 def build_bot(settings: Settings, repo: StatsRepository) -> commands.Bot:

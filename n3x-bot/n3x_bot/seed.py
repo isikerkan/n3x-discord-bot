@@ -4,16 +4,14 @@ import os
 from n3x_bot.storage.base import StatsRepository
 
 LEGACY_STATS: list[tuple[str, str, str]] = [
-    ("tit", "Tit", "Erkans boobies wurden schon {count} mal geshaket!"),
-    ("wahab", "Wahab", "Wahab hat bereits {count} mal jemanden auf diesem Discord beleidigt :*"),
-    ("cry", "Cry", "Es wurde bereits {count} mal geheult."),
-    ("afk", "AFK", "Muneeb ist zum {count} mal AFK..."),
-    ("oma", "Oma", "Patrick wurde zum {count} mal Perma gebannt."),
-    ("jules", "Jules", "Der aller echteste Homelander hat euch schon {count} mal am leben gelassen!"),
-    ("smart", "Smart", "{target} beweist zum {count} Mal, dass er ein Klugscheisser ist.."),
-    ("crash", "Crash", "{target} geht zum {count} mal komplett crashout... opfer"),
+    ("tit", "Tit", "{user} hat Erkans Boobies schon {count} mal geshaked! 🤲"),
+    ("wahab", "Wahab", "{user} hat Wahab schon {count} mal an den Pranger gestellt :*"),
+    ("cry", "Cry", "{user} hat schon {count} mal geheult. 😭"),
+    ("afk", "AFK", "{user} ist schon {count} mal AFK gegangen... 💤"),
+    ("smart", "Smart", "{user} nennt {target} zum {count}. Mal einen Klugscheisser.. 🤓"),
+    ("crash", "Crash", "{user} schickt {target} zum {count}. Mal in den Crashout... 💥"),
     ("home", "Home",
-     "Der aller echteste Homelander {target} hat euch schon {count} mal am leben gelassen!"),
+     "{user} lässt den Homelander {target} zum {count}. Mal am Leben! 🦸"),
 ]
 
 # Stats counted against a TARGET member (e.g. `!smart @user`) rather than
