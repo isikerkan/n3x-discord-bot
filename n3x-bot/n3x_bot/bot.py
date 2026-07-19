@@ -255,9 +255,15 @@ def _add_stat_command(bot, repo, settings, key: str):
         return
 
     @app_commands.checks.cooldown(1, 20)
-    async def _cmd(interaction: discord.Interaction):
-        text = await build_output(repo, key, interaction.user.id,
-                                  interaction.user.display_name)
+    @app_commands.describe(
+        member="Optional: für wen der Zähler gilt (Standard: du selbst).")
+    async def _cmd(interaction: discord.Interaction,
+                   member: discord.Member | None = None):
+        # Optional @user: attribute the count to the mentioned member instead of
+        # the invoker (e.g. `/afk @X` counts afk for X and mentions X). No arg =
+        # the invoker's own count, as before.
+        target = member or interaction.user
+        text = await build_output(repo, key, target.id, target.display_name)
         await interaction.response.send_message(text)
 
     bot.tree.add_command(app_commands.Command(
