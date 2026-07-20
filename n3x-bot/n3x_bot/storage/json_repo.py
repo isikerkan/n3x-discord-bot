@@ -502,6 +502,13 @@ class JsonRepository(StatsRepository):
                           "avg": round(sum(costs) / count) if count else 0}
         return out
 
+    async def list_user_gate_entries(self, discord_id, gate_type):
+        rows = [r for r in self._db["gate_entries"]
+                if r["gate_type"] == gate_type and r["user_id"] == discord_id]
+        rows.sort(key=lambda r: (_parse_dt(r["created_at"]), r["id"]))
+        return [{"cost": r["cost"], "created_at": _parse_dt(r["created_at"]),
+                 "drops": _drops_of(r)} for r in rows]
+
     async def user_gate_counts(self, discord_id):
         out: dict[str, int] = {}
         for r in self._db["gate_entries"]:

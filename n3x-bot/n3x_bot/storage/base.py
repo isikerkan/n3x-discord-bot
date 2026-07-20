@@ -325,6 +325,12 @@ class StatsRepository(ABC):
     @abstractmethod
     async def get_activity(self, discord_id: int, metric: str) -> int: ...
 
+    @abstractmethod
+    async def list_user_gate_entries(self, discord_id: int, gate_type: str) -> list:
+        """A single user's gate entries for `gate_type`, oldest first
+        (``[{cost, created_at, drops}]``)."""
+        ...
+
     # voice sessions (durable in-progress checkpoints)
     @abstractmethod
     async def voice_session_set(self, discord_id: int, since) -> None:

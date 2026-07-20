@@ -655,6 +655,28 @@ class SqlRepository(StatsRepository):
                              "avg": round(avg) if avg else 0}
         return out
 
+    async def list_user_gate_entries(self, discord_id, gate_type):
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                select(sc.gate_entries.c.cost, sc.gate_entries.c.drops,
+                       sc.gate_entries.c.laser_dropped,
+                       sc.gate_entries.c.created_at)
+                .where((sc.gate_entries.c.gate_type == gate_type) &
+                       (sc.gate_entries.c.user_id == discord_id))
+                .order_by(sc.gate_entries.c.created_at.asc(),
+                          sc.gate_entries.c.id.asc()))).all()
+        out = []
+        for r in rows:
+            if r.drops:
+                drop_map = json.loads(r.drops)
+            elif r.laser_dropped is not None:
+                drop_map = {"laser": bool(r.laser_dropped)}
+            else:
+                drop_map = {}
+            out.append({"cost": r.cost, "created_at": _as_aware_utc(r.created_at),
+                        "drops": drop_map})
+        return out
+
     async def user_gate_counts(self, discord_id):
         async with self.engine.connect() as conn:
             rows = await conn.execute(
