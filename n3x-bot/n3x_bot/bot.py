@@ -33,6 +33,7 @@ from n3x_bot.cards import announce_achievements
 from n3x_bot.config import Settings
 from n3x_bot.config_commands import register_config_commands
 from n3x_bot.history_backfill import register_history_backfill_command
+from n3x_bot.mystats import register_mystats_command
 from n3x_bot.achievement_commands import register_achievement_def_commands
 from n3x_bot.achievement_defs import AchievementDefs
 from n3x_bot.colors import ColorConfig
@@ -137,6 +138,7 @@ def build_bot(settings: Settings, repo: StatsRepository) -> commands.Bot:
     register_overview_and_sync_commands(bot, repo, settings)
     register_kodex_commands(bot, repo, settings)
     register_history_backfill_command(bot, repo, settings)
+    register_mystats_command(bot, repo, settings)
     register_welcome_commands(bot, settings)
     register_timer_commands(bot, repo, settings)
     return bot
@@ -394,6 +396,7 @@ _COMMAND_DESCRIPTIONS: dict[str, str] = {
     "overview": "Postet die Achievement-Übersicht.",
     "sync_achievements": "Synchronisiert alle Achievements (Admin).",
     "stat": "Zeigt die Gate-Statistik.",
+    "meinestats": "Zeigt deine eigenen Stats (Gates & Zähler).",
     "del": "Löscht einen Gate-Eintrag (Rolle erforderlich).",
     "gate verlauf": "Zeigt den Gate-Kostenverlauf als Diagramm.",
     "base": "Startet einen Base-Timer.",
@@ -422,7 +425,7 @@ _COMMAND_CATEGORIES: list[tuple[str, str, str]] = [
 # Top-level command name -> category key. Anything unmapped (the dynamic
 # per-stat counter commands) falls into "fun".
 _TOP_LEVEL_CATEGORY: dict[str, str] = {
-    "stat": "gates", "del": "gates", "gate": "gates",
+    "stat": "gates", "del": "gates", "gate": "gates", "meinestats": "gates",
     "erfolge": "achievements", "overview": "achievements",
     "achievement": "achievements",
     "activity": "activity",
@@ -437,7 +440,7 @@ _TOP_LEVEL_CATEGORY: dict[str, str] = {
 # Per-command line emoji (top-level qualified name). Falls back to the category
 # emoji so every line carries one.
 _COMMAND_EMOJI: dict[str, str] = {
-    "stat": "📈", "del": "🗑️", "gate": "📉",
+    "stat": "📈", "del": "🗑️", "gate": "📉", "meinestats": "📊",
     "erfolge": "🎖️", "overview": "🏅", "sync_achievements": "🔄",
     "achievement": "🧩", "activity": "📊", "base": "▶️", "basestop": "⏹️",
     "kodex": "📜", "kodex_check": "✅", "sync_welcome": "👋", "rank": "🥇",
