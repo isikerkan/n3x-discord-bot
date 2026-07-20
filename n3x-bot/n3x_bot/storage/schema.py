@@ -154,6 +154,15 @@ achievement_defs = Table(
     Column("color", String(50), nullable=True),
 )
 
+# Active voice sessions: `since` is the "uncredited-from" checkpoint. The flush
+# loop credits (now - since) and advances `since`, so a crash/restart can
+# recover the in-progress interval instead of losing it.
+voice_sessions = Table(
+    "voice_sessions", metadata,
+    Column("discord_id", BigInteger, primary_key=True),
+    Column("since", DateTime(timezone=True), nullable=False),
+)
+
 gate_pending = Table(
     "gate_pending", metadata,
     Column("message_id", BigInteger, primary_key=True),

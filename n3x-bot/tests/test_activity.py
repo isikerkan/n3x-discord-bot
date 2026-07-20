@@ -465,6 +465,113 @@ async def test_flush_voice_on_shutdown_noop_when_nobody_connected():
     await repo.close()
 
 
+# ── voice-session persistence + recovery ─────────────────────────────────────
+
+def _vbot(*guilds):
+    import asyncio
+    return SimpleNamespace(guilds=list(guilds), voice_lock=asyncio.Lock(),
+                           voice_join_times={})
+
+
+def _vguild(*member_ids):
+    ch = SimpleNamespace(members=[SimpleNamespace(id=i, bot=False)
+                                  for i in member_ids])
+    return SimpleNamespace(voice_channels=[ch])
+
+
+async def test_voice_session_repo_roundtrip():
+    repo = await _flatfile_repo()
+    settings = _settings()
+    t = datetime(2026, 7, 13, 20, 0, tzinfo=ZoneInfo(settings.timezone))
+    await repo.voice_session_set(7, t)
+    assert (await repo.voice_sessions_all()) == {7: t}
+    assert await repo.voice_session_end(7) == t
+    assert (await repo.voice_sessions_all()) == {}
+    await repo.close()
+
+
+async def test_recover_credits_in_progress_for_member_still_in_voice():
+    from n3x_bot.activity import recover_voice_sessions
+    repo = await _flatfile_repo()
+    settings = _settings()
+    now = datetime(2026, 7, 13, 20, 5, tzinfo=ZoneInfo(settings.timezone))
+    await repo.voice_session_set(7, now - timedelta(seconds=90))
+    bot = _vbot(_vguild(7))            # member 7 still in voice
+
+    recovered = await recover_voice_sessions(bot, repo, settings, now)
+
+    assert recovered == 90
+    assert await repo.get_activity(7, "voice_seconds") == 90
+    assert bot.voice_join_times[7] == now             # re-checkpointed
+    assert (await repo.voice_sessions_all())[7] == now
+    await repo.close()
+
+
+async def test_recover_discards_session_when_member_left_during_downtime():
+    from n3x_bot.activity import recover_voice_sessions
+    repo = await _flatfile_repo()
+    settings = _settings()
+    now = datetime(2026, 7, 13, 20, 5, tzinfo=ZoneInfo(settings.timezone))
+    await repo.voice_session_set(8, now - timedelta(seconds=90))
+    bot = _vbot(_vguild())            # nobody in voice now
+
+    recovered = await recover_voice_sessions(bot, repo, settings, now)
+
+    assert recovered == 0
+    assert await repo.get_activity(8, "voice_seconds") == 0   # not credited
+    assert (await repo.voice_sessions_all()) == {}            # session discarded
+    await repo.close()
+
+
+async def test_recover_caps_long_outage():
+    from n3x_bot.activity import recover_voice_sessions, VOICE_RECOVERY_CAP_SECONDS
+    repo = await _flatfile_repo()
+    settings = _settings()
+    now = datetime(2026, 7, 13, 20, 5, tzinfo=ZoneInfo(settings.timezone))
+    await repo.voice_session_set(9, now - timedelta(hours=6))   # long gap
+    bot = _vbot(_vguild(9))
+
+    recovered = await recover_voice_sessions(bot, repo, settings, now)
+
+    assert recovered == VOICE_RECOVERY_CAP_SECONDS   # capped, not 6h
+    await repo.close()
+
+
+async def test_recover_seeds_new_in_voice_member_without_session():
+    from n3x_bot.activity import recover_voice_sessions
+    repo = await _flatfile_repo()
+    settings = _settings()
+    now = datetime(2026, 7, 13, 20, 5, tzinfo=ZoneInfo(settings.timezone))
+    bot = _vbot(_vguild(10))          # in voice, no persisted session
+
+    recovered = await recover_voice_sessions(bot, repo, settings, now)
+
+    assert recovered == 0
+    assert bot.voice_join_times[10] == now
+    assert (await repo.voice_sessions_all())[10] == now
+    await repo.close()
+
+
+async def test_leave_ends_persisted_session():
+    from n3x_bot.bot import handle_voice_state_update
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+    member = SimpleNamespace(id=7, bot=False)
+    chan = SimpleNamespace(id=100)
+    t0 = datetime(2026, 7, 13, 20, 0, tzinfo=ZoneInfo(settings.timezone))
+    t1 = t0 + timedelta(seconds=30)
+
+    await handle_voice_state_update(bot, repo, settings, member,
+                                    _vs(None), _vs(chan), t0)   # join
+    assert (await repo.voice_sessions_all()) == {7: t0}         # persisted
+    await handle_voice_state_update(bot, repo, settings, member,
+                                    _vs(chan), _vs(None), t1)   # leave
+    assert (await repo.voice_sessions_all()) == {}             # ended
+    assert await repo.get_activity(7, "voice_seconds") == 30
+    await repo.close()
+
+
 # ── handler: reaction skips (member None / bot) ────────────────────────────
 
 async def test_reaction_skipped_when_member_is_none():
@@ -518,6 +625,13 @@ class _AwaitingRepo:
 
     async def unlock_achievement(self, discord_id, achievement_id):
         return True
+
+    # voice-session mirror stubs (no-ops for the race invariant)
+    async def voice_session_set(self, discord_id, since):
+        return None
+
+    async def voice_session_end(self, discord_id):
+        return None
 
 
 async def test_flush_voice_times_credits_elapsed_and_resets_join():

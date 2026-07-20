@@ -324,6 +324,20 @@ class StatsRepository(ABC):
         ...
     @abstractmethod
     async def get_activity(self, discord_id: int, metric: str) -> int: ...
+
+    # voice sessions (durable in-progress checkpoints)
+    @abstractmethod
+    async def voice_session_set(self, discord_id: int, since) -> None:
+        """Upsert the active session's `since` (uncredited-from) timestamp."""
+        ...
+    @abstractmethod
+    async def voice_session_end(self, discord_id: int):
+        """Remove the session; return its `since` timestamp (or None)."""
+        ...
+    @abstractmethod
+    async def voice_sessions_all(self) -> dict:
+        """All active sessions as ``{discord_id: since}``."""
+        ...
     @abstractmethod
     async def get_streak(self, discord_id: int) -> dict | None: ...
     @abstractmethod

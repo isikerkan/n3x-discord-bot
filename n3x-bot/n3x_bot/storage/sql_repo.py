@@ -708,6 +708,32 @@ class SqlRepository(StatsRepository):
                 (sc.activity_counters.c.metric == metric)))).one_or_none()
             return r.count if r else 0
 
+    async def voice_session_set(self, discord_id, since):
+        async with self.engine.begin() as conn:
+            exists = (await conn.execute(select(sc.voice_sessions.c.discord_id)
+                      .where(sc.voice_sessions.c.discord_id == discord_id))).one_or_none()
+            if exists is None:
+                await conn.execute(insert(sc.voice_sessions).values(
+                    discord_id=discord_id, since=since))
+            else:
+                await conn.execute(update(sc.voice_sessions)
+                                   .where(sc.voice_sessions.c.discord_id == discord_id)
+                                   .values(since=since))
+
+    async def voice_session_end(self, discord_id):
+        async with self.engine.begin() as conn:
+            r = (await conn.execute(select(sc.voice_sessions.c.since)
+                 .where(sc.voice_sessions.c.discord_id == discord_id))).one_or_none()
+            await conn.execute(delete(sc.voice_sessions)
+                               .where(sc.voice_sessions.c.discord_id == discord_id))
+            return r.since if r else None
+
+    async def voice_sessions_all(self):
+        async with self.engine.connect() as conn:
+            rows = await conn.execute(select(sc.voice_sessions.c.discord_id,
+                                             sc.voice_sessions.c.since))
+            return {did: since for did, since in rows}
+
     async def get_streak(self, discord_id):
         async with self.engine.connect() as conn:
             r = (await conn.execute(select(sc.streak_stats)
