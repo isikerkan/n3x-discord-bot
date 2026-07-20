@@ -519,6 +519,12 @@ class JsonRepository(StatsRepository):
         self._flush()
         return d[metric]
 
+    async def set_activity(self, discord_id, metric, value):
+        d = self._db["activity_counters"].setdefault(str(discord_id), {})
+        d[metric] = value
+        self._flush()
+        return value
+
     async def get_activity(self, discord_id, metric):
         return self._db["activity_counters"].get(str(discord_id), {}).get(metric, 0)
 

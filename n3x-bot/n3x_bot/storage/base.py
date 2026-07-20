@@ -316,6 +316,13 @@ class StatsRepository(ABC):
         """Increment the `metric` counter for `discord_id`, return the new total."""
         ...
     @abstractmethod
+    async def set_activity(self, discord_id: int, metric: str, value: int) -> int:
+        """Set the `metric` counter for `discord_id` to an ABSOLUTE value.
+
+        Used by the history backfill, which computes true totals from Discord
+        history and must be idempotent across re-runs (unlike add_activity)."""
+        ...
+    @abstractmethod
     async def get_activity(self, discord_id: int, metric: str) -> int: ...
     @abstractmethod
     async def get_streak(self, discord_id: int) -> dict | None: ...
