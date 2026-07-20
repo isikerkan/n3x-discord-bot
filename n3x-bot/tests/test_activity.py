@@ -434,6 +434,37 @@ async def test_voice_state_update_noops_for_bot_member():
     await repo.close()
 
 
+# ── shutdown flush: credit in-progress voice time on exit ────────────────────
+
+async def test_flush_voice_on_shutdown_credits_in_progress_time():
+    from n3x_bot.__main__ import _flush_voice_on_shutdown
+    from n3x_bot.activity import now_local
+    from datetime import timedelta
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+    # a member connected ~120s ago with no flush yet
+    bot.voice_join_times[7] = now_local(settings) - timedelta(seconds=120)
+
+    await _flush_voice_on_shutdown(bot, repo, settings)
+
+    secs = await repo.get_activity(7, "voice_seconds")
+    assert 120 <= secs <= 123          # credited the in-progress interval
+    assert bot.voice_join_times.get(7) is not None  # reset, not dropped
+    await repo.close()
+
+
+async def test_flush_voice_on_shutdown_noop_when_nobody_connected():
+    from n3x_bot.__main__ import _flush_voice_on_shutdown
+    repo = await _flatfile_repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+    # no voice_join_times -> nothing to flush, must not raise
+    await _flush_voice_on_shutdown(bot, repo, settings)
+    assert await repo.get_activity(7, "voice_seconds") == 0
+    await repo.close()
+
+
 # ── handler: reaction skips (member None / bot) ────────────────────────────
 
 async def test_reaction_skipped_when_member_is_none():
