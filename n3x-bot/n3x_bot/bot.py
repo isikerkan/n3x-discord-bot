@@ -32,6 +32,7 @@ from n3x_bot.achievements import (
 from n3x_bot.cards import announce_achievements
 from n3x_bot.config import Settings
 from n3x_bot.config_commands import register_config_commands
+from n3x_bot.history_backfill import register_history_backfill_command
 from n3x_bot.achievement_commands import register_achievement_def_commands
 from n3x_bot.achievement_defs import AchievementDefs
 from n3x_bot.colors import ColorConfig
@@ -135,6 +136,7 @@ def build_bot(settings: Settings, repo: StatsRepository) -> commands.Bot:
     register_achievement_def_commands(bot, repo, settings)
     register_overview_and_sync_commands(bot, repo, settings)
     register_kodex_commands(bot, repo, settings)
+    register_history_backfill_command(bot, repo, settings)
     register_welcome_commands(bot, settings)
     register_timer_commands(bot, repo, settings)
     return bot
@@ -403,6 +405,7 @@ _COMMAND_DESCRIPTIONS: dict[str, str] = {
     "content": "Verwaltet Textbausteine (Admin).",
     "admin": "Admin-Verwaltung (Stats & Nachrichten).",
     "achievement": "Achievement-Definitionen verwalten (Admin).",
+    "backfill_history": "Zählt Nachrichten & Reaktionen aus dem Verlauf nach (Admin).",
 }
 
 
@@ -429,7 +432,7 @@ _TOP_LEVEL_CATEGORY: dict[str, str] = {
     # admin-only reveal button, not shown on the public list.
     "admin": "admin", "config": "admin", "content": "admin",
     "sync_achievements": "admin", "sync_welcome": "admin",
-    "kodex": "admin", "kodex_check": "admin",
+    "kodex": "admin", "kodex_check": "admin", "backfill_history": "admin",
 }
 # Per-command line emoji (top-level qualified name). Falls back to the category
 # emoji so every line carries one.
@@ -438,7 +441,7 @@ _COMMAND_EMOJI: dict[str, str] = {
     "erfolge": "🎖️", "overview": "🏅", "sync_achievements": "🔄",
     "achievement": "🧩", "activity": "📊", "base": "▶️", "basestop": "⏹️",
     "kodex": "📜", "kodex_check": "✅", "sync_welcome": "👋", "rank": "🥇",
-    "admin": "🛠️", "config": "⚙️", "content": "📝",
+    "admin": "🛠️", "config": "⚙️", "content": "📝", "backfill_history": "🕓",
 }
 # Categories that are admin-only. These are hidden from the public command-list
 # message and revealed only via the ephemeral "Admin-Befehle" button (gated on

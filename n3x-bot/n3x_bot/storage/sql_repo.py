@@ -687,6 +687,20 @@ class SqlRepository(StatsRepository):
                     (sc.activity_counters.c.metric == metric)).values(count=new_total))
             return new_total
 
+    async def set_activity(self, discord_id, metric, value):
+        async with self.engine.begin() as conn:
+            row = (await conn.execute(select(sc.activity_counters.c.count).where(
+                (sc.activity_counters.c.discord_id == discord_id) &
+                (sc.activity_counters.c.metric == metric)))).one_or_none()
+            if row is None:
+                await conn.execute(insert(sc.activity_counters).values(
+                    discord_id=discord_id, metric=metric, count=value))
+            else:
+                await conn.execute(update(sc.activity_counters).where(
+                    (sc.activity_counters.c.discord_id == discord_id) &
+                    (sc.activity_counters.c.metric == metric)).values(count=value))
+            return value
+
     async def get_activity(self, discord_id, metric):
         async with self.engine.connect() as conn:
             r = (await conn.execute(select(sc.activity_counters.c.count).where(
