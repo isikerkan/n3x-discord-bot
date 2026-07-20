@@ -120,13 +120,14 @@ def test_overview_channel_id_read_from_env(monkeypatch):
 
 # ── definitions ────────────────────────────────────────────────────────────
 
-def test_total_achievements_constant_is_83():
-    # Grew 59 -> 83 with the E/Z/K gates: +8 tiers each for gate_e/z/k (+24).
-    assert _ach().TOTAL_ACHIEVEMENTS == 83
+def test_total_achievements_constant_is_92():
+    # 59 -> 83 (E/Z/K gates) -> 92 with the restored pre-v3 starter tiers:
+    # +7 gate "1 Lauf" (a_1..k_1), +1 voice (18000/5h), +1 streak (streak_3).
+    assert _ach().TOTAL_ACHIEVEMENTS == 92
 
 
-def test_there_are_exactly_83_definitions():
-    assert len(_ach().ACHIEVEMENTS) == 83
+def test_there_are_exactly_92_definitions():
+    assert len(_ach().ACHIEVEMENTS) == 92
 
 
 def test_all_definition_ids_are_unique():
@@ -228,26 +229,27 @@ def test_newly_unlocked_crosses_multiple_tiers_at_once():
     m = _ach()
     streak_defs = _metric_defs(m, "streak")
     got = m.newly_unlocked(streak_defs, 30, set())
-    assert got == {"streak_7", "streak_14", "streak_30"}
+    assert got == {"streak_3", "streak_7", "streak_14", "streak_30"}
 
 
 def test_newly_unlocked_excludes_already_unlocked():
     m = _ach()
     streak_defs = _metric_defs(m, "streak")
-    got = m.newly_unlocked(streak_defs, 30, {"streak_7", "streak_14", "streak_30"})
+    got = m.newly_unlocked(streak_defs, 30,
+                           {"streak_3", "streak_7", "streak_14", "streak_30"})
     assert got == set()
 
 
 def test_newly_unlocked_returns_nothing_below_lowest_threshold():
     m = _ach()
     streak_defs = _metric_defs(m, "streak")
-    assert m.newly_unlocked(streak_defs, 6, set()) == set()
+    assert m.newly_unlocked(streak_defs, 2, set()) == set()   # below streak_3
 
 
 def test_newly_unlocked_returns_only_the_newly_crossed_tier():
     m = _ach()
     streak_defs = _metric_defs(m, "streak")
-    got = m.newly_unlocked(streak_defs, 14, {"streak_7"})
+    got = m.newly_unlocked(streak_defs, 14, {"streak_3", "streak_7"})
     assert got == {"streak_14"}
 
 
@@ -428,7 +430,7 @@ async def test_erfolge_reports_unlocked_count_and_total():
     text = _collect_text(interaction.user.send,
                          interaction.response.send_message,
                          interaction.followup.send)
-    assert "2/83" in text  # total grew 59 -> 83 with the E/Z/K gates
+    assert "2/92" in text  # total grew 83 -> 92 with the restored starter tiers
     await repo.close()
 
 
@@ -657,26 +659,28 @@ async def _erfolge_embed(uid: int = 7, display_name: str = "Erkan"):
 
 async def _seed_erfolge_default(repo, uid: int = 7):
     """Two live-value categories (voice hours + streak days) + a gate Läufe
-    category, with a deterministic owned set → overall 5/83."""
+    category, with a deterministic owned set → overall 7/92. Unlocks the new
+    lowest tiers (voice_18000, streak_3) too so the "next" milestone stays the
+    same as before the restore."""
     await repo.add_activity(uid, "voice_seconds", 295200)          # 82h live
-    for aid in ("voice_3600", "voice_36000", "voice_180000"):
+    for aid in ("voice_3600", "voice_18000", "voice_36000", "voice_180000"):
         await repo.unlock_achievement(uid, aid)                    # → next Veteran
     await repo.set_streak(uid, current_streak=18,
                           last_active_date="2026-07-13", max_streak=18)
-    for aid in ("streak_7", "streak_14"):
+    for aid in ("streak_3", "streak_7", "streak_14"):
         await repo.unlock_achievement(uid, aid)                    # → next Monats-Krieger
 
 
 async def test_erfolge_header_shows_count_bar_and_percent():
     # Header summary line: overall count/total (preserved), a 10-segment bar
-    # (new) and the completion percent (new). round(5/83*100) == 6 (int() too).
+    # (new) and the completion percent (new). round(7/92*100) == 8.
     repo, invoke = await _erfolge_embed()
     await _seed_erfolge_default(repo)
     embed = await invoke()
     desc = str(embed.description)
-    assert "5/83" in desc                                    # preserved invariant
+    assert "7/92" in desc                                    # preserved invariant
     assert _bar_run(desc), "header must render a 10-segment █/░ progress bar"
-    assert _re.search(r"6\s*%", desc), "header must show the completion percent"
+    assert _re.search(r"8\s*%", desc), "header must show the completion percent"
     await repo.close()
 
 
@@ -688,7 +692,7 @@ async def test_erfolge_voice_field_shows_count_next_and_live_hours():
     await _seed_erfolge_default(repo)
     embed = await invoke()
     voice = _field_by_emoji(embed, "🎙️")
-    assert "3/6" in voice          # 3 voice tiers of 6 unlocked (preserved)
+    assert "4/7" in voice          # 4 voice tiers of 7 unlocked
     assert "Veteran" in voice      # next milestone title (preserved)
     assert "82h" in voice and "100h" in voice   # live hours (new)
     await repo.close()
@@ -722,6 +726,9 @@ async def test_erfolge_gate_field_shows_live_runs_with_laeufe_unit():
     # entries → next Alpha Bronze Pilot (a_5), live 3/5 Läufe.
     repo, invoke = await _erfolge_embed()
     await repo.unlock_achievement(7, "total_1")
+    # own every new 1-Lauf tier so the category "next" is a_5 (Läufe live value)
+    for aid in ("a_1", "b_1", "c_1", "d_1", "e_1", "z_1", "k_1"):
+        await repo.unlock_achievement(7, aid)
     for cost in (100, 200, 300):
         await repo.add_gate_entry("a", cost, 7, "u")
     embed = await invoke()
@@ -735,8 +742,8 @@ async def test_erfolge_completed_category_shows_alle_freigeschaltet_with_bar():
     # A fully-unlocked category keeps "Alle freigeschaltet" (preserved) and, in
     # the new layout, still renders a (full) progress bar.
     repo, invoke = await _erfolge_embed()
-    for thr in (3600, 36000, 180000, 360000, 1800000, 3600000):
-        await repo.unlock_achievement(7, f"voice_{thr}")   # all 6 voice tiers
+    for thr in (3600, 18000, 36000, 180000, 360000, 1800000, 3600000):
+        await repo.unlock_achievement(7, f"voice_{thr}")   # all 7 voice tiers
     embed = await invoke()
     voice = _field_by_emoji(embed, "🎙️")
     assert "Alle freigeschaltet" in voice   # preserved invariant

@@ -244,7 +244,7 @@ def test_overview_last_user_shows_platz_three():
 
 def test_overview_breakdown_shows_gate_count_for_page_user():
     embed = _mod().build_overview_embed(_RANK_HOLDERS, _RANK_USER_IDS, 1)
-    assert "1/60" in _embed_text(embed)
+    assert "1/67" in _embed_text(embed)
 
 
 def test_overview_breakdown_shows_night_and_secret_buckets():

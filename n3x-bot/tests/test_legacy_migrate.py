@@ -102,11 +102,12 @@ def _build_v3_db(path: str) -> None:
         "INSERT INTO delta_stats (cost,laser_dropped,user_id,username,timestamp) VALUES (?,?,?,?,?)",
         (150000, 1, "4001", "gamerA", "2024-01-02T00:00:00"))
 
-    # achievements — voice_3600 is a REAL id; a_1 and streak_3 are v3 ids we lack
+    # achievements — voice_3600 is a REAL id; ghost_stat_9 / legacy_only_1 are
+    # ids no current definition has, so migration must skip them.
     cur.executemany("INSERT INTO achievements VALUES (?,?)", [
         ("5001", "voice_3600"),
-        ("5001", "a_1"),
-        ("5001", "streak_3"),
+        ("5001", "ghost_stat_9"),
+        ("5001", "legacy_only_1"),
     ])
 
     # gate_records — SKIP (ours derive on demand)
@@ -289,10 +290,10 @@ async def test_known_achievement_is_unlocked(tmp_path):
 
 
 async def test_unknown_achievement_id_is_skipped(tmp_path):
-    # a_1 / streak_3 are not real ids in achievements.ACHIEVEMENTS.
+    # ghost_stat_9 / legacy_only_1 are not real ids in achievements.ACHIEVEMENTS.
     repo, _ = await _migrate_full(tmp_path)
-    assert await repo.has_achievement(5001, "a_1") is False
-    assert await repo.has_achievement(5001, "streak_3") is False
+    assert await repo.has_achievement(5001, "ghost_stat_9") is False
+    assert await repo.has_achievement(5001, "legacy_only_1") is False
     await repo.close()
 
 
