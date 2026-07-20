@@ -78,7 +78,7 @@ def _defs_cls():
 
 
 async def _seed_code_defaults(repo) -> None:
-    """Persist the 83 code-default achievements into ``achievement_defs``."""
+    """Persist the 92 code-default achievements into ``achievement_defs``."""
     for a in ACHIEVEMENTS:
         await repo.set_achievement_def(
             a.id, category=a.category, metric=a.metric, threshold=a.threshold,
@@ -106,7 +106,7 @@ def test_default_resolver_holds_code_default_achievements():
 
 def test_default_resolver_total_matches_code_baseline():
     resolver = _defs_cls()()
-    assert resolver.total == TOTAL_ACHIEVEMENTS == 83
+    assert resolver.total == TOTAL_ACHIEVEMENTS == 92
 
 
 def test_total_equals_len_of_all():
@@ -170,7 +170,7 @@ async def test_refresh_empty_table_falls_back_to_code_defaults():
     await resolver.refresh(repo)  # table is empty
 
     assert [a.id for a in resolver.all()] == [a.id for a in ACHIEVEMENTS]
-    assert resolver.total == 83
+    assert resolver.total == 92
     await _cleanup(repo)
 
 
@@ -229,15 +229,15 @@ async def test_load_with_empty_table_is_behaviour_preserving():
 
     resolver = await _defs_cls().load(repo)
 
-    assert resolver.total == 83
+    assert resolver.total == 92
     await _cleanup(repo)
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# 4. end-to-end override: 83 defaults + one extra def -> total grows to 84
+# 4. end-to-end override: 92 defaults + one extra def -> total grows to 93
 # ══════════════════════════════════════════════════════════════════════════
 
-async def test_end_to_end_override_grows_total_to_84():
+async def test_end_to_end_override_grows_total_to_93():
     from n3x_bot.achievements import build_overview_embed
     repo = await _flatfile_repo()
     await _seed_code_defaults(repo)
@@ -249,14 +249,14 @@ async def test_end_to_end_override_grows_total_to_84():
 
     await resolver.refresh(repo)
 
-    assert resolver.total == 84
+    assert resolver.total == 93
     assert resolver.by_id("voice_7200000") is not None
     # a big signed-int64 snowflake holder id
     holders = {9223372036854775807: {"a_5"}}
     embed = build_overview_embed(holders, [9223372036854775807], 0,
                                  total=resolver.total)
     text = str(getattr(embed, "description", "") or "")
-    assert "/84" in text
+    assert "/93" in text
     await _cleanup(repo)
 
 
@@ -272,7 +272,7 @@ async def test_build_bot_attaches_achievement_defs_defaulting_to_baseline():
     bot = build_bot(settings, repo)
 
     assert isinstance(bot.achievement_defs, AchievementDefs)
-    assert bot.achievement_defs.total == 83
+    assert bot.achievement_defs.total == 92
     await _cleanup(repo)
 
 
@@ -289,7 +289,7 @@ async def test_on_ready_refreshes_achievement_defs_from_db():
 
     await bot.on_ready()
 
-    assert bot.achievement_defs.total == 84
+    assert bot.achievement_defs.total == 93
     assert bot.achievement_defs.by_id("voice_7200000") is not None
     await _cleanup(repo)
 
@@ -303,5 +303,5 @@ async def test_on_ready_keeps_defaults_when_table_empty():
 
     await bot.on_ready()
 
-    assert bot.achievement_defs.total == 83
+    assert bot.achievement_defs.total == 92
     await _cleanup(repo)

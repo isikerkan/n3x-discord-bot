@@ -211,7 +211,7 @@ async def test_list_empty_table_reports_defaults_active():
     await _ach_sub(bot, "list").callback(interaction)
 
     text = _sent_text(interaction)
-    assert str(TOTAL_ACHIEVEMENTS) in text        # resolver total (83)
+    assert str(TOTAL_ACHIEVEMENTS) in text        # resolver total (92)
     assert "Code-Defaults aktiv" in text          # 0 DB rows -> defaults hint
 
     await _cleanup(repo)
@@ -229,7 +229,7 @@ async def test_list_with_db_rows_reports_resolver_total():
 
     await _ach_sub(bot, "list").callback(interaction)
 
-    assert "84" in _sent_text(interaction)  # 83 seeds + 1 custom row
+    assert "93" in _sent_text(interaction)  # 92 seeds + 1 custom row
 
     await _cleanup(repo)
 

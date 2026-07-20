@@ -19,9 +19,9 @@ class Achievement:
 
 GATE_NAMES = {"a": "Alpha", "b": "Beta", "c": "Gamma", "d": "Delta",
               "e": "Epsilon", "z": "Zeta", "k": "Kappa"}
-MILESTONE_LEVELS = {5: "Bronze", 10: "Silber", 25: "Gold", 50: "Platin",
-                    100: "Diamant", 250: "Master", 500: "Grandmaster",
-                    1000: "Gott"}
+MILESTONE_LEVELS = {1: "Erstflug", 5: "Bronze", 10: "Silber", 25: "Gold",
+                    50: "Platin", 100: "Diamant", 250: "Master",
+                    500: "Grandmaster", 1000: "Gott"}
 
 
 def _build_achievements() -> list[Achievement]:
@@ -48,6 +48,7 @@ def _build_achievements() -> list[Achievement]:
 
     voice = [
         (3600, "Rookie Talker"),
+        (18000, "Aufwärmer"),
         (36000, "Stammgast"),
         (180000, "Stammspieler"),
         (360000, "Veteran"),
@@ -71,6 +72,7 @@ def _build_achievements() -> list[Achievement]:
                                title=title, secret=True))
 
     streak = [
+        (3, "Warmgelaufen"),
         (7, "Treuer Soldat"),
         (14, "Zuverlässig"),
         (30, "Monats-Krieger"),

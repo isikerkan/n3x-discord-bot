@@ -198,7 +198,7 @@ async def test_sync_achievements_command_uses_resolver_defs():
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# 4. /erfolge -> resolver total in the embed (84 with an extra def)
+# 4. /erfolge -> resolver total in the embed (93 with an extra def)
 # ══════════════════════════════════════════════════════════════════════════
 
 async def test_erfolge_embed_uses_resolver_total():
@@ -210,7 +210,7 @@ async def test_erfolge_embed_uses_resolver_total():
                                    metric="voice_seconds", threshold=9999999,
                                    title="Test Legende", secret=False)
     await bot.achievement_defs.refresh(repo)
-    assert bot.achievement_defs.total == 84
+    assert bot.achievement_defs.total == 93
 
     await repo.unlock_achievement(7, "voice_3600")
 
@@ -229,13 +229,13 @@ async def test_erfolge_embed_uses_resolver_total():
     # the resolver total. The interaction reply is just the ephemeral ack.
     embed = interaction.user.send.await_args_list[0].kwargs.get("embed")
     assert embed is not None
-    assert "/84" in _embed_text(embed)
+    assert "/93" in _embed_text(embed)
 
     await _cleanup(repo)
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# 5. /overview -> resolver total in the embed (84 with an extra def)
+# 5. /overview -> resolver total in the embed (93 with an extra def)
 # ══════════════════════════════════════════════════════════════════════════
 
 def _overview_channel():
@@ -272,7 +272,7 @@ async def test_overview_embed_uses_resolver_total():
                                    metric="voice_seconds", threshold=9999999,
                                    title="Test Legende", secret=False)
     await bot.achievement_defs.refresh(repo)
-    assert bot.achievement_defs.total == 84
+    assert bot.achievement_defs.total == 93
 
     await repo.unlock_achievement(10, "a_5")
 
@@ -289,7 +289,7 @@ async def test_overview_embed_uses_resolver_total():
     channel.send.assert_awaited_once()
     embed = channel.send.await_args.kwargs.get("embed")
     assert embed is not None
-    assert "/84" in _embed_text(embed)
+    assert "/93" in _embed_text(embed)
 
     await _cleanup(repo)
 

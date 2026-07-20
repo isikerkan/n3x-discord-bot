@@ -100,7 +100,7 @@ async def test_register_stat_commands_is_idempotent():
 
 async def test_build_bot_attaches_achievement_defs_baseline():
     # Phase 2a: build_bot attaches an AchievementDefs resolver defaulting to the
-    # 83 code-default achievements (no new command is registered by this slice).
+    # 92 code-default achievements (no new command is registered by this slice).
     from n3x_bot.achievement_defs import AchievementDefs
     repo = await _flatfile_repo()
     settings = _settings()
@@ -108,7 +108,7 @@ async def test_build_bot_attaches_achievement_defs_baseline():
     bot = build_bot(settings, repo)
 
     assert isinstance(bot.achievement_defs, AchievementDefs)
-    assert bot.achievement_defs.total == 83
+    assert bot.achievement_defs.total == 92
 
     await repo.close()
 
