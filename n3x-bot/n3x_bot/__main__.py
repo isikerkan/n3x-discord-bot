@@ -16,6 +16,8 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 
+log = logging.getLogger(__name__)
+
 
 def _is_legacy_flatfile(path: str) -> bool:
     """Detect whether `path` holds the old pre-migration stats.json shape.
@@ -62,6 +64,21 @@ async def _prepare(settings: Settings):
     return repo
 
 
+async def _flush_voice_on_shutdown(bot, repo, settings) -> None:
+    """Credit in-progress voice time before the process exits.
+
+    The 5-minute flush loop and the leave handler are the only points that
+    persist voice seconds, so a Stop/Restart between ticks would otherwise
+    DISCARD every connected member's un-flushed interval. This runs on shutdown
+    (deploys restart the bot often) so that time is not lost. Best-effort."""
+    try:
+        from n3x_bot.activity import flush_voice_times, now_local
+        if getattr(bot, "voice_join_times", None):
+            await flush_voice_times(bot, repo, now_local(settings))
+    except Exception:
+        log.exception("shutdown voice flush failed; in-progress time may be lost")
+
+
 async def amain() -> None:
     # Kill any leftover instance from a botched Stop/Restart BEFORE connecting,
     # so exactly one bot holds the Discord gateway (no duplicated events).
@@ -69,8 +86,12 @@ async def amain() -> None:
     settings = Settings()
     repo = await _prepare(settings)
     bot = build_bot(settings, repo)
-    async with bot:
-        await bot.start(settings.discord_token)
+    try:
+        async with bot:
+            await bot.start(settings.discord_token)
+    finally:
+        # SIGINT/SIGTERM (AMP Stop) unwinds through here — flush before exit.
+        await _flush_voice_on_shutdown(bot, repo, settings)
 
 
 def main() -> None:
