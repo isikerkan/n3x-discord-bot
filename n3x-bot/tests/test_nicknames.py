@@ -95,14 +95,21 @@ def _member(*, display_name="Player", roles=None, top_role=1,
 
 # ── desired_nick: the PURE decision helper ───────────────────────────────────
 
-def test_desired_nick_adds_prefix_for_role_holder_without_prefix():
+def test_desired_nick_adds_prefix_with_space_for_role_holder_without_prefix():
     from n3x_bot.nicknames import desired_nick
-    assert desired_nick("Player", True, PREFIX) == "[N3X]Player"
+    assert desired_nick("Player", True, PREFIX) == "[N3X] Player"
 
 
-def test_desired_nick_returns_none_for_already_prefixed_role_holder():
+def test_desired_nick_returns_none_for_already_correctly_prefixed_role_holder():
     from n3x_bot.nicknames import desired_nick
-    assert desired_nick("[N3X]Player", True, PREFIX) is None
+    # "[N3X] Player" (tag + space) is already correct
+    assert desired_nick("[N3X] Player", True, PREFIX) is None
+
+
+def test_desired_nick_inserts_space_into_old_no_space_prefix():
+    from n3x_bot.nicknames import desired_nick
+    # legacy "[N3X]Player" (no space) is corrected to "[N3X] Player"
+    assert desired_nick("[N3X]Player", True, PREFIX) == "[N3X] Player"
 
 
 def test_desired_nick_removes_prefix_for_non_role_holder():
@@ -117,16 +124,17 @@ def test_desired_nick_returns_none_for_unprefixed_non_role_holder():
 
 def test_desired_nick_strips_legacy_r3x_marker():
     from n3x_bot.nicknames import desired_nick
-    assert desired_nick("R3XPlayer", True, PREFIX) == "[N3X]Player"
+    assert desired_nick("R3XPlayer", True, PREFIX) == "[N3X] Player"
 
 
 def test_desired_nick_truncates_base_keeping_full_prefix_within_32():
     from n3x_bot.nicknames import desired_nick
     long_name = "X" * 40
     result = desired_nick(long_name, True, PREFIX)
-    assert result.startswith(PREFIX)
+    tag = PREFIX + " "
+    assert result.startswith(tag)
     assert len(result) <= 32
-    assert result == PREFIX + "X" * (32 - len(PREFIX))
+    assert result == tag + "X" * (32 - len(tag))
 
 
 def test_desired_nick_handles_whitespace_only_name():
@@ -156,7 +164,7 @@ async def test_enforce_nick_edits_and_returns_true_when_role_granted():
     result = await enforce_nick(member, settings)
 
     member.edit.assert_awaited_once()
-    assert member.edit.await_args.kwargs["nick"] == "[N3X]Player"
+    assert member.edit.await_args.kwargs["nick"] == "[N3X] Player"
     assert result is True
 
 
@@ -176,7 +184,7 @@ async def test_enforce_nick_does_not_edit_correct_role_holder():
     # The B5 win: an already-correct role-holder is never re-edited.
     from n3x_bot.nicknames import enforce_nick
     settings = _settings()
-    member = _member(display_name="[N3X]Player",
+    member = _member(display_name="[N3X] Player",
                      roles=[_FakeRole(settings.target_role_id)])
 
     result = await enforce_nick(member, settings)
@@ -249,7 +257,7 @@ async def test_enforce_nick_adds_prefix_for_member_holding_a_later_target_role()
     result = await enforce_nick(member, settings)
 
     member.edit.assert_awaited_once()
-    assert member.edit.await_args.kwargs["nick"] == "[N3X]Player"
+    assert member.edit.await_args.kwargs["nick"] == "[N3X] Player"
     assert result is True
 
 
