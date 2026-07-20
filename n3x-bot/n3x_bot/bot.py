@@ -398,6 +398,7 @@ _COMMAND_DESCRIPTIONS: dict[str, str] = {
     "sync_achievements": "Synchronisiert alle Achievements (Admin).",
     "stat": "Zeigt die Gate-Statistik.",
     "meinestats": "Zeigt deine eigenen Stats (Gates & Zähler).",
+    "statme": "Deine Stats; mit Gate deinen Eingabe-Verlauf (z. B. /statme delta).",
     "del": "Löscht einen Gate-Eintrag (Rolle erforderlich).",
     "gate verlauf": "Zeigt den Gate-Kostenverlauf als Diagramm.",
     "base": "Startet einen Base-Timer.",
@@ -427,6 +428,7 @@ _COMMAND_CATEGORIES: list[tuple[str, str, str]] = [
 # per-stat counter commands) falls into "fun".
 _TOP_LEVEL_CATEGORY: dict[str, str] = {
     "stat": "gates", "del": "gates", "gate": "gates", "meinestats": "gates",
+    "statme": "gates",
     "erfolge": "achievements", "overview": "achievements",
     "achievement": "achievements",
     "activity": "activity",
@@ -441,7 +443,7 @@ _TOP_LEVEL_CATEGORY: dict[str, str] = {
 # Per-command line emoji (top-level qualified name). Falls back to the category
 # emoji so every line carries one.
 _COMMAND_EMOJI: dict[str, str] = {
-    "stat": "📈", "del": "🗑️", "gate": "📉", "meinestats": "📊",
+    "stat": "📈", "del": "🗑️", "gate": "📉", "meinestats": "📊", "statme": "📜",
     "erfolge": "🎖️", "overview": "🏅", "sync_achievements": "🔄",
     "achievement": "🧩", "activity": "📊", "base": "▶️", "basestop": "⏹️",
     "kodex": "📜", "kodex_check": "✅", "sync_welcome": "👋", "rank": "🥇",

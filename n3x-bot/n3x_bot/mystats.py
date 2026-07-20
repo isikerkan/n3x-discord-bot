@@ -1,13 +1,32 @@
-"""`/meinestats` — a personal table of the caller's own stats: gate runs
-(from stat-input) and command/counter stats. Read-only, public embed."""
+"""`/meinestats` + `/statme` — the caller's own stats.
+
+``/meinestats`` (and ``/statme`` with no gate) show the overview table: gate
+runs from stat-input + command/counter stats. ``/statme <gate>`` lists the
+caller's own INPUT HISTORY for that gate (every entry: cost, drops, date) —
+the "what did I actually input" view v3 had. Read-only, public embeds.
+"""
+from zoneinfo import ZoneInfo
+
 import discord
+from discord import app_commands
 
 from n3x_bot.config import Settings
-from n3x_bot.gates import GATE_NAMES
+from n3x_bot.gates import GATE_NAMES, _DROP_LABELS
 from n3x_bot.storage.base import StatsRepository
 
 # Fixed gate order for the table.
 _GATE_ORDER = ["a", "b", "c", "d", "e", "z", "k"]
+
+# Accept a gate by letter ("d") or name ("delta", "Delta Gate").
+_GATE_ALIASES: dict[str, str] = {}
+for _k, _name in GATE_NAMES.items():
+    _GATE_ALIASES[_k] = _k
+    _GATE_ALIASES[_name.lower()] = _k               # "delta gate"
+    _GATE_ALIASES[_name.split()[0].lower()] = _k    # "delta"
+
+
+def resolve_gate(raw: str) -> str | None:
+    return _GATE_ALIASES.get((raw or "").strip().lower())
 
 
 def _fmt(n: int) -> str:
@@ -52,13 +71,37 @@ def build_mystats_embed(display_name: str, user_stats: dict, gate_counts: dict,
     return embed
 
 
+def build_gate_history_embed(display_name: str, gate_key: str, entries: list,
+                             tz, limit: int = 25) -> discord.Embed:
+    """A numbered list of the user's own entries for one gate (newest last)."""
+    name = GATE_NAMES.get(gate_key, gate_key)
+    embed = discord.Embed(title=f"📜 {name} — Verlauf von {display_name}",
+                          color=discord.Color.green())
+    if not entries:
+        embed.description = "_Noch keine Einträge erfasst._"
+        return embed
+    shown = entries[-limit:]
+    start = len(entries) - len(shown) + 1
+    lines = []
+    for i, e in enumerate(shown, start):
+        when = e["created_at"].astimezone(tz).strftime("%d.%m %H:%M")
+        dropped = [_DROP_LABELS[k] for k, v in e["drops"].items()
+                   if v and k in _DROP_LABELS]
+        drop_str = "  ·  " + ", ".join(dropped) if dropped else ""
+        lines.append(f"{i:>3}. {_fmt(e['cost']):>10}   {when}{drop_str}")
+    total = sum(e["cost"] for e in entries)
+    head = (f"**{len(entries)}** Einträge · Kosten gesamt **{_fmt(total)}**")
+    if len(entries) > limit:
+        head += f"  (letzte {limit} gezeigt)"
+    embed.description = head + "\n```\n" + "\n".join(lines) + "\n```"
+    return embed
+
+
 def register_mystats_command(bot, repo: StatsRepository, settings: Settings) -> None:
     if bot.tree.get_command("meinestats") is not None:
         return
 
-    @bot.tree.command(name="meinestats",
-                      description="Zeigt deine eigenen Stats (Gates & Zähler).")
-    async def meinestats(interaction):
+    async def _overview_embed(interaction) -> discord.Embed:
         uid = interaction.user.id
         user_stats = await repo.get_user_stats(uid)
         gate_counts = await repo.user_gate_counts(uid)
@@ -67,4 +110,43 @@ def register_mystats_command(bot, repo: StatsRepository, settings: Settings) -> 
                       for s in await repo.list_stats(include_archived=True)}
         embed = build_mystats_embed(interaction.user.display_name, user_stats,
                                     gate_counts, gate_cost, stat_names)
+        embed.set_footer(text="Verlauf: /statme <gate> (z. B. /statme delta)")
+        return embed
+
+    if bot.tree.get_command("meinestats") is None:
+        @bot.tree.command(name="meinestats",
+                          description="Zeigt deine eigenen Stats (Gates & Zähler).")
+        async def meinestats(interaction):
+            await interaction.response.send_message(
+                embed=await _overview_embed(interaction))
+
+    if bot.tree.get_command("statme") is not None:
+        return
+    tz = ZoneInfo(settings.timezone)
+
+    @bot.tree.command(
+        name="statme",
+        description="Deine Stats; mit Gate den Eingabe-Verlauf (z. B. /statme delta).")
+    @app_commands.describe(gate="Gate für deinen Eingabe-Verlauf (a-k oder Name)")
+    async def statme(interaction, gate: str | None = None):
+        if gate is None:
+            await interaction.response.send_message(
+                embed=await _overview_embed(interaction))
+            return
+        key = resolve_gate(gate)
+        if key is None:
+            await interaction.response.send_message(
+                f"❌ Unbekanntes Gate `{gate}`. Nutze a-k oder z. B. `delta`.",
+                ephemeral=True)
+            return
+        entries = await repo.list_user_gate_entries(interaction.user.id, key)
+        embed = build_gate_history_embed(
+            interaction.user.display_name, key, entries, tz)
         await interaction.response.send_message(embed=embed)
+
+    @statme.autocomplete("gate")
+    async def _gate_ac(interaction, current: str):
+        cur = (current or "").lower()
+        return [app_commands.Choice(name=n, value=k)
+                for k, n in GATE_NAMES.items()
+                if cur in k or cur in n.lower()][:25]
