@@ -48,6 +48,7 @@ class JsonRepository(StatsRepository):
             "kodex_confirmations": [], "kodex_messages": {},
             "base_timers": {}, "channel_messages": {},
             "gate_pending": {},
+            "voice_sessions": {},
             "runtime_config": {},
             "content_texts": {},
             "color_config": {},
@@ -527,6 +528,19 @@ class JsonRepository(StatsRepository):
 
     async def get_activity(self, discord_id, metric):
         return self._db["activity_counters"].get(str(discord_id), {}).get(metric, 0)
+
+    async def voice_session_set(self, discord_id, since):
+        self._db["voice_sessions"][str(discord_id)] = since.isoformat()
+        self._flush()
+
+    async def voice_session_end(self, discord_id):
+        raw = self._db["voice_sessions"].pop(str(discord_id), None)
+        self._flush()
+        return _parse_dt(raw) if raw else None
+
+    async def voice_sessions_all(self):
+        return {int(k): _parse_dt(v)
+                for k, v in self._db["voice_sessions"].items()}
 
     async def get_streak(self, discord_id):
         r = self._db["streak_stats"].get(str(discord_id))

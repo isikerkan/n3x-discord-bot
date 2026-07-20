@@ -148,10 +148,14 @@ async def handle_voice_state_update(bot, repo: StatsRepository, settings: Settin
         times = bot.voice_join_times
         # NOTE: keyed by member.id alone (single-guild bot — N3X). If the bot
         # ever joined multiple guilds, a per-guild key would be required.
+        # The in-memory dict is mirrored to `voice_sessions` (repo) so a crash
+        # can recover the in-progress interval; `since` == the dict value.
         if b is None and a is not None:
             times[member.id] = now
+            await repo.voice_session_set(member.id, now)
         elif b is not None and a is None:
             join = times.pop(member.id, None)
+            await repo.voice_session_end(member.id)
             if join is not None:
                 secs = elapsed_seconds(join, now)
                 if secs > 0:
@@ -165,6 +169,7 @@ async def handle_voice_state_update(bot, repo: StatsRepository, settings: Settin
                     await repo.add_activity(member.id, "voice_seconds", secs)
                     credited = True
             times[member.id] = now
+            await repo.voice_session_set(member.id, now)
     if credited:
         newly = await check_achievements(repo, member.id, "voice_seconds",
                                          defs=bot.achievement_defs.all())
@@ -200,6 +205,9 @@ async def flush_voice_times(bot, repo: StatsRepository, now: datetime) -> None:
                 credited.append(member_id)
             if member_id in bot.voice_join_times:
                 bot.voice_join_times[member_id] = now
+                # advance the durable checkpoint so a crash after this flush
+                # never re-credits (or loses) the interval just credited.
+                await repo.voice_session_set(member_id, now)
     # Unlock voice achievements OUTSIDE voice_lock (mirrors the leave path in
     # handle_voice_state_update, keeping the lock cheap). Without this a
     # continuously-connected member crosses a voice threshold via this flush
@@ -220,6 +228,50 @@ async def flush_voice_times(bot, repo: StatsRepository, now: datetime) -> None:
                 except Exception:
                     pass
                 await apply_voice_roles(bot, bot.runtime_config, member, newly)
+
+
+# Never credit more than this in one recovery step. A brief deploy restart is a
+# few seconds; this caps a long outage (where we can't verify presence) so it is
+# not booked as voice time.
+VOICE_RECOVERY_CAP_SECONDS = 900
+
+
+async def recover_voice_sessions(bot, repo: StatsRepository, settings: Settings,
+                                 now: datetime) -> int:
+    """On startup, reconcile persisted `voice_sessions` with who is ACTUALLY in
+    voice, so in-progress time survives a restart.
+
+    For a member still in a voice channel: credit ``min(now - since, CAP)`` (the
+    interval not yet flushed, plus any brief downtime) and re-checkpoint to now.
+    For a session whose member is no longer in voice: discard it — they left
+    while the bot was down and we can't know when. Members newly in voice with
+    no prior session are seeded at ``now``. Returns total seconds recovered.
+    """
+    sessions = await repo.voice_sessions_all()
+    in_voice: set[int] = set()
+    for g in bot.guilds:
+        for ch in getattr(g, "voice_channels", []):
+            for m in ch.members:
+                if not getattr(m, "bot", False):
+                    in_voice.add(m.id)
+    recovered = 0
+    async with bot.voice_lock:
+        for uid, since in sessions.items():
+            if uid in in_voice:
+                secs = min(max(0, int((now - since).total_seconds())),
+                           VOICE_RECOVERY_CAP_SECONDS)
+                if secs > 0:
+                    await repo.add_activity(uid, "voice_seconds", secs)
+                    recovered += secs
+                bot.voice_join_times[uid] = now
+                await repo.voice_session_set(uid, now)
+            else:
+                await repo.voice_session_end(uid)
+        for uid in in_voice:
+            if uid not in bot.voice_join_times:
+                bot.voice_join_times[uid] = now
+                await repo.voice_session_set(uid, now)
+    return recovered
 
 
 async def handle_activity_reaction(bot, repo: StatsRepository, settings: Settings,

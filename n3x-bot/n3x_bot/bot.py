@@ -23,6 +23,7 @@ from n3x_bot.activity import (
     announce_voice_change,
     handle_activity_reaction,
     flush_voice_times,
+    recover_voice_sessions,
     now_local,
 )
 from n3x_bot.achievements import (
@@ -1340,14 +1341,18 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
                 await enforce_nick(m, bot.runtime_config)
         if not event_reminder_task.is_running():
             event_reminder_task.start()
-        for guild in bot.guilds:
-            for channel in guild.voice_channels:
-                for m in channel.members:
-                    if not m.bot:
-                        # Idempotent across reconnects: setdefault so a repeat
-                        # on_ready doesn't overwrite an existing join time and
-                        # drop un-flushed voice seconds.
-                        bot.voice_join_times.setdefault(m.id, now_local(settings))
+        # Recover in-progress voice time from the durable `voice_sessions`
+        # checkpoints (credits the un-flushed interval for members still in
+        # voice, capped; discards sessions whose member has left) and seed any
+        # newly-connected members. Replaces the old in-memory-only setdefault.
+        try:
+            recovered = await recover_voice_sessions(
+                bot, repo, settings, now_local(settings))
+            if recovered:
+                log.info("recovered %d voice-second(s) from persisted sessions",
+                         recovered)
+        except Exception:
+            log.exception("voice-session recovery failed")
         if not voice_flush_task.is_running():
             voice_flush_task.start()
         start_timer_overview_loop(bot, repo, settings)
