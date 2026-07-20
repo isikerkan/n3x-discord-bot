@@ -17,11 +17,16 @@ def strip_prefix(display_name: str, prefix_str: str) -> str:
 
 
 def desired_nick(display_name: str, has_role: bool, prefix_str: str) -> str | None:
+    # The tag is rendered with a single space after it: "[N3X] Name".
+    tag = prefix_str + " "
     if has_role:
-        if display_name.startswith(prefix_str):
-            return None
         base = display_name.replace("R3X", "").replace(prefix_str, "").strip()
-        return prefix_str + base[:32 - len(prefix_str)]
+        # rstrip drops the trailing space when there is no base ("[N3X]");
+        # the [:32] keeps the tag intact and caps at Discord's nick limit.
+        result = (tag + base)[:32].rstrip()
+        # Noop when already correct (incl. the bare "[N3X]" case); this also
+        # corrects the old no-space "[N3X]Name" form to "[N3X] Name".
+        return result if result != display_name else None
     if display_name.startswith(prefix_str):
         return display_name[len(prefix_str):].strip()
     return None

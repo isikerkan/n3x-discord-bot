@@ -631,7 +631,7 @@ async def test_on_member_update_adds_prefix_when_target_role_granted():
     await bot.on_member_update(before, after)
 
     after.edit.assert_awaited_once()
-    assert after.edit.await_args.kwargs["nick"] == f"{settings.prefix_str}Player"
+    assert after.edit.await_args.kwargs["nick"] == f"{settings.prefix_str} Player"
 
     await repo.close()
 
