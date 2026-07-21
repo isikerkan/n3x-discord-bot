@@ -6,7 +6,9 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 from zoneinfo import ZoneInfo
 
-from n3x_bot.gatelog import build_gatelog_embeds, _sort_entries
+from n3x_bot.gatelog import (
+    build_gatelog_embeds, _sort_entries, compute_user_gate_averages,
+    build_average_embeds)
 from n3x_bot.storage.json_repo import JsonRepository
 from n3x_bot.seed import seed_defaults
 
@@ -89,6 +91,48 @@ def test_build_empty():
     assert "Keine Einträge" in _flat(embeds)
 
 
+# ── /gate durchschnitt (per-user averages) ───────────────────────────────────
+
+def _u(cost, user, gate="d", uid=1):
+    return {"gate_type": gate, "cost": cost, "user_id": uid, "username": user,
+            "drops": {}, "created_at": datetime(2026, 7, 20, 10, 0, tzinfo=timezone.utc)}
+
+
+def test_compute_user_gate_averages_per_user_and_gate():
+    entries = [
+        _u(100, "Alice", "d", 1), _u(300, "Alice", "d", 1),   # Alice d avg 200
+        _u(900, "Bob", "d", 2),                                # Bob d avg 900
+        _u(50, "Alice", "a", 1),                               # Alice a avg 50
+    ]
+    avg = compute_user_gate_averages(entries)
+    # delta sorted by avg desc: Bob (900) before Alice (200)
+    assert avg["d"] == [("Bob", 900, 1), ("Alice", 200, 2)]
+    assert avg["a"] == [("Alice", 50, 1)]
+
+
+def test_build_average_single_gate_table():
+    entries = [_u(100, "Alice", "d", 1), _u(300, "Alice", "d", 1),
+               _u(900, "Bob", "d", 2)]
+    embeds = build_average_embeds(entries, "d")
+    text = _flat(embeds)
+    assert "Delta Gate" in text
+    assert "Bob" in text and "900" in text
+    assert "Alice" in text and "200" in text     # avg (100+300)/2
+    # Bob (higher avg) listed before Alice
+    assert text.index("Bob") < text.index("Alice")
+
+
+def test_build_average_all_gates_one_field_per_gate():
+    entries = [_u(100, "Alice", "d", 1), _u(50, "Alice", "a", 1)]
+    embeds = build_average_embeds(entries, None)
+    names = [f.name for f in embeds[0].fields]
+    assert any("Alpha" in n for n in names) and any("Delta" in n for n in names)
+
+
+def test_build_average_empty():
+    assert "Keine Einträge" in _flat(build_average_embeds([], "d"))
+
+
 # ── command wiring ───────────────────────────────────────────────────────────
 
 def _settings():
@@ -101,6 +145,36 @@ def _settings():
 def _gatelog_cmd(bot):
     gate = bot.tree.get_command("gate")
     return gate.get_command("log")
+
+
+async def test_durchschnitt_admin_gated_and_public():
+    from n3x_bot.bot import build_bot
+    repo = await _repo()
+    settings = _settings()
+    bot = build_bot(settings, repo)
+    cmd = bot.tree.get_command("gate").get_command("durchschnitt")
+    assert cmd is not None
+
+    # non-admin -> denied
+    it = MagicMock()
+    it.user = SimpleNamespace(id=1, roles=[])
+    it.response = MagicMock(send_message=AsyncMock(), defer=AsyncMock())
+    await cmd.callback(it, None)
+    it.response.send_message.assert_awaited_once()
+    it.response.defer.assert_not_awaited()
+
+    # admin -> public (defer without ephemeral) + followups
+    await repo.add_gate_entry("d", 500, 7, "Erkan")
+    it2 = MagicMock()
+    it2.user = SimpleNamespace(id=1, roles=[SimpleNamespace(id=42)])
+    it2.response = MagicMock(defer=AsyncMock(), send_message=AsyncMock())
+    it2.followup = MagicMock(send=AsyncMock())
+    await cmd.callback(it2, "delta")
+    assert it2.response.defer.await_args.kwargs.get("ephemeral") in (None, False)
+    sent = "\n".join(str(c.kwargs["embed"].description)
+                     for c in it2.followup.send.await_args_list)
+    assert "Erkan" in sent and "500" in sent
+    await repo.close()
 
 
 async def test_gatelog_admin_gated():

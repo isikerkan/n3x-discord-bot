@@ -7,8 +7,8 @@ from discord import app_commands
 
 from n3x_bot.admin import app_is_admin
 from n3x_bot.config import Settings
-from n3x_bot.gates import GATE_NAMES, _DROP_LABELS
-from n3x_bot.mystats import resolve_gate
+from n3x_bot.gates import GATE_NAMES, _FIELD_NAMES, _DROP_LABELS
+from n3x_bot.mystats import resolve_gate, _GATE_ORDER
 from n3x_bot.storage.base import StatsRepository
 
 _CHUNK = 20            # entries per embed (keeps each well under the desc limit)
@@ -65,6 +65,72 @@ def build_gatelog_embeds(entries: list, gate_key: str | None, sort: str,
     return embeds
 
 
+def compute_user_gate_averages(entries: list) -> dict:
+    """``{gate: [(username, avg_cost, count)]}`` sorted by avg cost desc — each
+    user's average input per gate."""
+    agg: dict = {}
+    for e in entries:
+        u = agg.setdefault(e["gate_type"], {}).setdefault(
+            e["user_id"], {"name": e["username"], "sum": 0, "count": 0})
+        u["sum"] += e["cost"]
+        u["count"] += 1
+        u["name"] = e["username"]        # keep the latest known name
+    out: dict = {}
+    for gate, users in agg.items():
+        rows = [(v["name"], round(v["sum"] / v["count"]), v["count"])
+                for v in users.values()]
+        rows.sort(key=lambda r: r[1], reverse=True)
+        out[gate] = rows
+    return out
+
+
+def _avg_table(rows: list) -> str:
+    """Monospace 'user  Ø Kosten  (runs)' table for one gate."""
+    wname = max([4] + [len(r[0][:16]) for r in rows])
+    lines = [f"{'User':<{wname}}  {'Ø Kosten':>11}  Runs"]
+    lines += [f"{r[0][:16]:<{wname}}  {_fmt(r[1]):>11}  {r[2]:>4}" for r in rows]
+    return "```\n" + "\n".join(lines) + "\n```"
+
+
+def build_average_embeds(entries: list, gate_key: str | None) -> list[discord.Embed]:
+    averages = compute_user_gate_averages(entries)
+    if gate_key is not None:
+        rows = averages.get(gate_key, [])
+        title = f"📊 Ø Kosten pro User — {GATE_NAMES.get(gate_key, gate_key)}"
+        if not rows:
+            return [discord.Embed(title=title, description="_Keine Einträge._",
+                                  color=discord.Color.teal())]
+        embeds = []
+        for start in range(0, min(len(rows), _CHUNK * _MAX_EMBEDS), _CHUNK):
+            chunk = rows[start:start + _CHUNK]
+            e = discord.Embed(color=discord.Color.teal())
+            if start == 0:
+                e.title = title
+                e.description = f"**{len(rows)}** User\n" + _avg_table(chunk)
+            else:
+                e.description = _avg_table(chunk)
+            embeds.append(e)
+        return embeds
+    # all gates: one field per gate (top 10 users by avg), compact
+    embed = discord.Embed(title="📊 Ø Kosten pro User — Alle Gates",
+                          color=discord.Color.teal())
+    any_gate = False
+    for gate in _GATE_ORDER:
+        rows = averages.get(gate)
+        if not rows:
+            continue
+        any_gate = True
+        top = rows[:10]
+        body = "\n".join(f"{r[0][:14]:<14} {_fmt(r[1]):>11} ({r[2]})" for r in top)
+        if len(rows) > 10:
+            body += f"\n… +{len(rows) - 10}"
+        embed.add_field(name=_FIELD_NAMES.get(gate, GATE_NAMES.get(gate, gate)),
+                        value="```\n" + body + "\n```", inline=True)
+    if not any_gate:
+        embed.description = "_Keine Einträge._"
+    return [embed]
+
+
 def register_gatelog_command(bot, repo: StatsRepository, settings: Settings) -> None:
     # `/gate log` — a subcommand of the existing `/gate` group (created by
     # register_gate_commands, which runs first).
@@ -107,9 +173,39 @@ def register_gatelog_command(bot, repo: StatsRepository, settings: Settings) -> 
 
     @gatelog.autocomplete("gate")
     async def _gate_ac(interaction, current: str):
-        cur = (current or "").lower()
-        choices = [app_commands.Choice(name="Alle Gates", value="all")]
-        choices += [app_commands.Choice(name=n, value=k)
-                    for k, n in GATE_NAMES.items()
-                    if cur in k or cur in n.lower()]
-        return choices[:25]
+        return _gate_choices(current)
+
+    @gate_group.command(
+        name="durchschnitt",
+        description="Ø Kosten pro User pro Gate — öffentlich (Admin).")
+    @app_commands.describe(gate="Gate (a-k oder Name); leer/all = alle Gates")
+    async def gate_avg(interaction, gate: str | None = None):
+        if not app_is_admin(interaction, settings):
+            await interaction.response.send_message(
+                "❌ Keine Berechtigung.", ephemeral=True)
+            return
+        gate_key = None
+        if gate is not None and gate.strip().lower() not in ("", "all", "alle"):
+            gate_key = resolve_gate(gate)
+            if gate_key is None:
+                await interaction.response.send_message(
+                    f"❌ Unbekanntes Gate `{gate}`.", ephemeral=True)
+                return
+        # Public output (everyone sees the averages), per the request.
+        await interaction.response.defer()
+        entries = await repo.list_gate_entries_full(gate_key)
+        for embed in build_average_embeds(entries, gate_key):
+            await interaction.followup.send(embed=embed)
+
+    @gate_avg.autocomplete("gate")
+    async def _avg_gate_ac(interaction, current: str):
+        return _gate_choices(current)
+
+
+def _gate_choices(current: str):
+    cur = (current or "").lower()
+    choices = [app_commands.Choice(name="Alle Gates", value="all")]
+    choices += [app_commands.Choice(name=n, value=k)
+                for k, n in GATE_NAMES.items()
+                if cur in k or cur in n.lower()]
+    return choices[:25]

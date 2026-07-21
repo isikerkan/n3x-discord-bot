@@ -414,6 +414,7 @@ _COMMAND_DESCRIPTIONS: dict[str, str] = {
     "achievement": "Achievement-Definitionen verwalten (Admin).",
     "backfill_history": "Zählt Nachrichten & Reaktionen aus dem Verlauf nach (Admin).",
     "gate log": "Listet alle Gate-Einträge der User (Admin).",
+    "gate durchschnitt": "Ø Kosten pro User pro Gate, öffentlich (Admin).",
 }
 
 
@@ -458,7 +459,8 @@ _COMMAND_EMOJI: dict[str, str] = {
 _ADMIN_CATEGORY_KEYS: set[str] = {"admin"}
 # Admin subcommands nested under an otherwise-public group (e.g. `/gate log`
 # under the public `/gate`): force them into the admin block by qualified name.
-_ADMIN_QUALIFIED_OVERRIDES: dict[str, str] = {"gate log": "admin"}
+_ADMIN_QUALIFIED_OVERRIDES: dict[str, str] = {
+    "gate log": "admin", "gate durchschnitt": "admin"}
 # Fixed custom_id for the persistent admin-reveal button (survives restarts).
 COMMAND_LIST_ADMIN_BUTTON_ID = "n3x:cmdlist:admin"
 
