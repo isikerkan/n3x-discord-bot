@@ -11,7 +11,8 @@ import discord
 from discord import app_commands
 
 from n3x_bot.config import Settings
-from n3x_bot.gates import GATE_NAMES, _DROP_LABELS
+from n3x_bot.gates import (
+    GATE_NAMES, _DROP_LABELS, _FIELD_NAMES, GATE_DROP_REACTION_ITEMS)
 from n3x_bot.storage.base import StatsRepository
 
 # Fixed gate order for the table.
@@ -42,22 +43,54 @@ def _table(rows: list[tuple[str, str]], head_left: str, head_right: str) -> str:
     return "```\n" + "\n".join(lines) + "\n```"
 
 
-def build_mystats_embed(display_name: str, user_stats: dict, gate_counts: dict,
+def _drop_rate_lines(gate: str, rates: dict) -> str:
+    return "".join(f"\n{_DROP_LABELS[i]}: {rates.get(i, 0.0):.1f} %"
+                   for i in GATE_DROP_REACTION_ITEMS.get(gate, []))
+
+
+async def personal_gate_stats(repo: StatsRepository, discord_id: int) -> dict:
+    """Per-gate stats from the caller's OWN entries: ``{gate: {count, avg,
+    rates:{item:pct}}}`` — the personal analogue of the public gate overview."""
+    counts = await repo.user_gate_counts(discord_id)
+    out: dict = {}
+    for gate in counts:
+        entries = await repo.list_user_gate_entries(discord_id, gate)
+        n = len(entries)
+        avg = round(sum(e["cost"] for e in entries) / n) if n else 0
+        rates = {item: (sum(1 for e in entries if e["drops"].get(item)) / n * 100
+                        if n else 0.0)
+                 for item in GATE_DROP_REACTION_ITEMS.get(gate, [])}
+        out[gate] = {"count": n, "avg": avg, "rates": rates}
+    return out
+
+
+def build_mystats_embed(display_name: str, user_stats: dict, gate_stats: dict,
                         gate_cost: int, stat_names: dict) -> discord.Embed:
     embed = discord.Embed(title=f"📊 Stats von {display_name}",
                           color=discord.Color.blurple())
 
-    # Gates (stat-input): one row per gate type + a total.
-    gate_rows = [(GATE_NAMES.get(g, g), _fmt(gate_counts.get(g, 0)))
-                 for g in _GATE_ORDER if gate_counts.get(g)]
-    total_runs = sum(gate_counts.values())
-    if gate_rows:
-        gate_rows.append(("Gesamt", _fmt(total_runs)))
-        value = _table(gate_rows, "Gate", "Runs")
-        value += f"\n💰 Kosten gesamt: **{_fmt(gate_cost)}**"
+    # Personal gate overview: one inline field per gate (Läufe, Ø Kosten, drop
+    # rates) — mirrors the public gate embed but for this user's entries only.
+    any_gate = False
+    for gate in _GATE_ORDER:
+        s = gate_stats.get(gate)
+        if not s or not s["count"]:
+            continue
+        any_gate = True
+        embed.add_field(
+            name=_FIELD_NAMES.get(gate, GATE_NAMES.get(gate, gate)),
+            value=(f"Läufe: {s['count']}\n"
+                   f"Ø Kosten: {_fmt(s['avg'])}"
+                   f"{_drop_rate_lines(gate, s['rates'])}"),
+            inline=True)
+    if not any_gate:
+        embed.add_field(name="🚀 Gates (Stat-Input)",
+                        value="_Noch keine Gates erfasst._", inline=False)
     else:
-        value = "_Noch keine Gates erfasst._"
-    embed.add_field(name="🚀 Gates (Stat-Input)", value=value, inline=False)
+        total_runs = sum(s["count"] for s in gate_stats.values())
+        embed.add_field(name="💰 Gesamt",
+                        value=f"Läufe: {total_runs}\nKosten: {_fmt(gate_cost)}",
+                        inline=True)
 
     # Counter / command stats, highest first.
     counter_rows = [(stat_names.get(k, k), _fmt(c))
@@ -104,12 +137,12 @@ def register_mystats_command(bot, repo: StatsRepository, settings: Settings) -> 
     async def _overview_embed(interaction) -> discord.Embed:
         uid = interaction.user.id
         user_stats = await repo.get_user_stats(uid)
-        gate_counts = await repo.user_gate_counts(uid)
+        gate_stats = await personal_gate_stats(repo, uid)
         gate_cost = await repo.user_gate_cost_total(uid)
         stat_names = {s.key: s.name
                       for s in await repo.list_stats(include_archived=True)}
         embed = build_mystats_embed(interaction.user.display_name, user_stats,
-                                    gate_counts, gate_cost, stat_names)
+                                    gate_stats, gate_cost, stat_names)
         embed.set_footer(text="Verlauf: /statme <gate> (z. B. /statme delta)")
         return embed
 
