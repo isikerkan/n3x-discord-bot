@@ -330,6 +330,11 @@ class StatsRepository(ABC):
         """A single user's gate entries for `gate_type`, oldest first
         (``[{cost, created_at, drops}]``)."""
         ...
+    @abstractmethod
+    async def list_gate_entries_full(self, gate_type: str | None = None) -> list:
+        """All gate entries (optionally one gate), oldest first, with the user
+        (``[{gate_type, cost, user_id, username, drops, created_at}]``)."""
+        ...
 
     # voice sessions (durable in-progress checkpoints)
     @abstractmethod

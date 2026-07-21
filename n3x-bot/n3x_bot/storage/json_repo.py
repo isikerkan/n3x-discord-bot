@@ -509,6 +509,15 @@ class JsonRepository(StatsRepository):
         return [{"cost": r["cost"], "created_at": _parse_dt(r["created_at"]),
                  "drops": _drops_of(r)} for r in rows]
 
+    async def list_gate_entries_full(self, gate_type=None):
+        rows = [r for r in self._db["gate_entries"]
+                if gate_type is None or r["gate_type"] == gate_type]
+        rows.sort(key=lambda r: (_parse_dt(r["created_at"]), r["id"]))
+        return [{"gate_type": r["gate_type"], "cost": r["cost"],
+                 "user_id": r["user_id"], "username": r["username"],
+                 "drops": _drops_of(r), "created_at": _parse_dt(r["created_at"])}
+                for r in rows]
+
     async def user_gate_counts(self, discord_id):
         out: dict[str, int] = {}
         for r in self._db["gate_entries"]:
