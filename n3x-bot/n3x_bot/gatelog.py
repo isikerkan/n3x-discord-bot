@@ -66,12 +66,17 @@ def build_gatelog_embeds(entries: list, gate_key: str | None, sort: str,
 
 
 def register_gatelog_command(bot, repo: StatsRepository, settings: Settings) -> None:
-    if bot.tree.get_command("gatelog") is not None:
+    # `/gate log` — a subcommand of the existing `/gate` group (created by
+    # register_gate_commands, which runs first).
+    gate_group = bot.tree.get_command("gate")
+    if not isinstance(gate_group, app_commands.Group):
+        return
+    if gate_group.get_command("log") is not None:
         return
     tz = ZoneInfo(settings.timezone)
 
-    @bot.tree.command(
-        name="gatelog",
+    @gate_group.command(
+        name="log",
         description="Listet alle Gate-Einträge der User (Admin).")
     @app_commands.describe(
         gate="Gate (a-k oder Name); leer/all = alle Gates",
