@@ -655,6 +655,34 @@ class SqlRepository(StatsRepository):
                              "avg": round(avg) if avg else 0}
         return out
 
+    async def list_gate_entries_full(self, gate_type=None):
+        """All gate entries (optionally one gate), oldest first, WITH the user.
+        ``[{gate_type, cost, user_id, username, drops, created_at}]`` — for the
+        admin gate-log."""
+        async with self.engine.connect() as conn:
+            q = select(sc.gate_entries.c.gate_type, sc.gate_entries.c.cost,
+                       sc.gate_entries.c.user_id, sc.gate_entries.c.username,
+                       sc.gate_entries.c.drops, sc.gate_entries.c.laser_dropped,
+                       sc.gate_entries.c.created_at)
+            if gate_type is not None:
+                q = q.where(sc.gate_entries.c.gate_type == gate_type)
+            rows = (await conn.execute(
+                q.order_by(sc.gate_entries.c.created_at.asc(),
+                           sc.gate_entries.c.id.asc()))).all()
+        out = []
+        for r in rows:
+            if r.drops:
+                drop_map = json.loads(r.drops)
+            elif r.laser_dropped is not None:
+                drop_map = {"laser": bool(r.laser_dropped)}
+            else:
+                drop_map = {}
+            out.append({"gate_type": r.gate_type, "cost": r.cost,
+                        "user_id": r.user_id, "username": r.username,
+                        "drops": drop_map,
+                        "created_at": _as_aware_utc(r.created_at)})
+        return out
+
     async def list_user_gate_entries(self, discord_id, gate_type):
         async with self.engine.connect() as conn:
             rows = (await conn.execute(
