@@ -413,7 +413,7 @@ _COMMAND_DESCRIPTIONS: dict[str, str] = {
     "admin": "Admin-Verwaltung (Stats & Nachrichten).",
     "achievement": "Achievement-Definitionen verwalten (Admin).",
     "backfill_history": "Zählt Nachrichten & Reaktionen aus dem Verlauf nach (Admin).",
-    "gatelog": "Listet alle Gate-Einträge der User (Admin).",
+    "gate log": "Listet alle Gate-Einträge der User (Admin).",
 }
 
 
@@ -442,7 +442,6 @@ _TOP_LEVEL_CATEGORY: dict[str, str] = {
     "admin": "admin", "config": "admin", "content": "admin",
     "sync_achievements": "admin", "sync_welcome": "admin",
     "kodex": "admin", "kodex_check": "admin", "backfill_history": "admin",
-    "gatelog": "admin",
 }
 # Per-command line emoji (top-level qualified name). Falls back to the category
 # emoji so every line carries one.
@@ -452,12 +451,14 @@ _COMMAND_EMOJI: dict[str, str] = {
     "achievement": "🧩", "activity": "📊", "base": "▶️", "basestop": "⏹️",
     "kodex": "📜", "kodex_check": "✅", "sync_welcome": "👋", "rank": "🥇",
     "admin": "🛠️", "config": "⚙️", "content": "📝", "backfill_history": "🕓",
-    "gatelog": "📋",
 }
 # Categories that are admin-only. These are hidden from the public command-list
 # message and revealed only via the ephemeral "Admin-Befehle" button (gated on
 # an admin role). Everything else is public.
 _ADMIN_CATEGORY_KEYS: set[str] = {"admin"}
+# Admin subcommands nested under an otherwise-public group (e.g. `/gate log`
+# under the public `/gate`): force them into the admin block by qualified name.
+_ADMIN_QUALIFIED_OVERRIDES: dict[str, str] = {"gate log": "admin"}
 # Fixed custom_id for the persistent admin-reveal button (survives restarts).
 COMMAND_LIST_ADMIN_BUTTON_ID = "n3x:cmdlist:admin"
 
@@ -473,6 +474,8 @@ def _bucket_commands(bot) -> dict[str, list[tuple[str, str]]]:
     buckets: dict[str, list[tuple[str, str]]] = {c[0]: [] for c in _COMMAND_CATEGORIES}
 
     def _emit(cmd, cat, emoji):
+        # An admin subcommand under a public group jumps to the admin block.
+        cat = _ADMIN_QUALIFIED_OVERRIDES.get(cmd.qualified_name, cat)
         desc = _COMMAND_DESCRIPTIONS.get(cmd.qualified_name, "")
         line = f"{emoji} `/{cmd.qualified_name}`"
         if desc:

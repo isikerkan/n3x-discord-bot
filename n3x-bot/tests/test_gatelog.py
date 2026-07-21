@@ -98,11 +98,16 @@ def _settings():
                     _env_file=None, _env_prefix="NONEXISTENT_")
 
 
+def _gatelog_cmd(bot):
+    gate = bot.tree.get_command("gate")
+    return gate.get_command("log")
+
+
 async def test_gatelog_admin_gated():
     from n3x_bot.bot import build_bot
     repo = await _repo()
     bot = build_bot(_settings(), repo)
-    cmd = bot.tree.get_command("gatelog")
+    cmd = _gatelog_cmd(bot)
     assert cmd is not None
     interaction = MagicMock()
     interaction.user = SimpleNamespace(id=1, roles=[])       # not admin
@@ -122,7 +127,7 @@ async def test_gatelog_admin_lists_entries():
     await repo.add_gate_entry("d", 111, 7, "Erkan")
     await repo.add_gate_entry("a", 222, 8, "Muneeb")
 
-    cmd = bot.tree.get_command("gatelog")
+    cmd = _gatelog_cmd(bot)
     interaction = MagicMock()
     interaction.user = SimpleNamespace(id=1, roles=[SimpleNamespace(id=42)])  # admin
     interaction.response = MagicMock(defer=AsyncMock(), send_message=AsyncMock())
