@@ -28,25 +28,28 @@ def _flat(embed) -> str:
 
 # ── pure builder ─────────────────────────────────────────────────────────────
 
-def test_build_shows_gate_runs_total_cost_and_counters():
+def test_build_shows_per_gate_stats_total_cost_and_counters():
     embed = build_mystats_embed(
         "Erkan",
         user_stats={"tit": 12, "cry": 5},
-        gate_counts={"a": 6, "b": 53},
+        gate_stats={"a": {"count": 6, "avg": 100000, "rates": {}},
+                    "b": {"count": 53, "avg": 200000, "rates": {}},
+                    "d": {"count": 4, "avg": 300000, "rates": {"laser": 25.0}}},
         gate_cost=1234567,
         stat_names={"tit": "Tit", "cry": "Cry"})
     text = _flat(embed)
     assert "Erkan" in text
     assert "Alpha Gate" in text and "53" in text and "6" in text
-    assert "Gesamt" in text and "59" in text          # 6 + 53 total runs
-    assert "1.234.567" in text                          # formatted cost
-    assert "Tit" in text and "12" in text               # counter row
-    # counters sorted highest-first: tit (12) before cry (5)
-    assert text.index("Tit") < text.index("Cry")
+    assert "Ø Kosten" in text and "100.000" in text       # personal avg cost
+    assert "Laser: 25.0 %" in text                          # delta drop rate
+    assert "Gesamt" in text and "63" in text                # 6 + 53 + 4 runs
+    assert "1.234.567" in text                              # total cost
+    assert "Tit" in text and "12" in text
+    assert text.index("Tit") < text.index("Cry")           # highest-first
 
 
 def test_build_handles_empty_stats_gracefully():
-    embed = build_mystats_embed("Neu", user_stats={}, gate_counts={},
+    embed = build_mystats_embed("Neu", user_stats={}, gate_stats={},
                                 gate_cost=0, stat_names={})
     text = _flat(embed)
     assert "Noch keine Gates" in text
@@ -86,6 +89,20 @@ async def test_command_registered_and_sends_embed_with_live_data():
     assert "Erkan" in text
     assert "Tit" in text and "2" in text          # counter
     assert "Alpha Gate" in text and "1" in text   # gate run
+    await repo.close()
+
+
+async def test_personal_gate_stats_computes_avg_and_drop_rates():
+    from n3x_bot.mystats import personal_gate_stats
+    repo = await _repo()
+    await repo.add_gate_entry("d", 100, 7, "Erkan", drops={"laser": True})
+    await repo.add_gate_entry("d", 300, 7, "Erkan", drops={"laser": False})
+    await repo.add_gate_entry("d", 999, 8, "Other", drops={"laser": True})  # other user
+
+    stats = await personal_gate_stats(repo, 7)
+    assert stats["d"]["count"] == 2
+    assert stats["d"]["avg"] == 200                 # (100+300)/2
+    assert stats["d"]["rates"]["laser"] == 50.0     # 1 of 2 dropped
     await repo.close()
 
 
