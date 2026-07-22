@@ -163,6 +163,13 @@ voice_sessions = Table(
     Column("since", DateTime(timezone=True), nullable=False),
 )
 
+# Users opted in to event-reminder pings (via /event reminder or the reaction
+# signup message).
+event_optin = Table(
+    "event_optin", metadata,
+    Column("discord_id", BigInteger, primary_key=True),
+)
+
 gate_pending = Table(
     "gate_pending", metadata,
     Column("message_id", BigInteger, primary_key=True),

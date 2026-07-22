@@ -48,6 +48,7 @@ class JsonRepository(StatsRepository):
             "kodex_confirmations": [], "kodex_messages": {},
             "base_timers": {}, "channel_messages": {},
             "gate_pending": {},
+            "event_optin": [],
             "voice_sessions": {},
             "runtime_config": {},
             "content_texts": {},
@@ -544,6 +545,20 @@ class JsonRepository(StatsRepository):
 
     async def get_activity(self, discord_id, metric):
         return self._db["activity_counters"].get(str(discord_id), {}).get(metric, 0)
+
+    async def event_optin_set(self, discord_id, opted_in):
+        lst = self._db["event_optin"]
+        if opted_in and discord_id not in lst:
+            lst.append(discord_id)
+        elif not opted_in and discord_id in lst:
+            lst.remove(discord_id)
+        self._flush()
+
+    async def event_optin_is(self, discord_id):
+        return discord_id in self._db["event_optin"]
+
+    async def event_optin_all(self):
+        return list(self._db["event_optin"])
 
     async def voice_session_set(self, discord_id, since):
         self._db["voice_sessions"][str(discord_id)] = since.isoformat()

@@ -117,6 +117,9 @@ class Settings(BaseSettings):
     milestone_channel_id: int = 0
     overview_channel_id: int = 0
     kodex_check_channel_id: int = 0
+    # Where event reminders + the opt-in signup message go. 0 falls back to
+    # reminder_channel_id.
+    event_reminder_channel_id: int = 0
     voice_achievement_roles: str = ""
 
     base_timer_role_id: int | str = 0
