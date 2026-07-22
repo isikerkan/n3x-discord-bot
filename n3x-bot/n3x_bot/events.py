@@ -14,7 +14,13 @@ from n3x_bot.config import Settings
 from n3x_bot.storage.base import StatsRepository
 
 EVENT_SIGNUP_KEY = "event_signup"
+# The last-posted reminder is tracked here so it can be deleted when it expires
+# (a new one supersedes it, or the event day has passed).
+EVENT_REMINDER_LAST_KEY = "event_reminder_last"
 EVENT_EMOJI = "🔔"
+
+# weekday -> content_texts key for the daily reminder.
+_REMINDER_TEXTS = {2: "reminder_aceball", 4: "reminder_invasion"}
 _SIGNUP_TEXT = (
     "🔔 **Event-Erinnerungen**\n\n"
     f"Reagiere mit {EVENT_EMOJI}, um für Event-Erinnerungen (z. B. Aceball & "
@@ -38,6 +44,49 @@ def build_reminder_mentions(opted_in_ids: list, event_role_id: int = 0) -> str:
 
 def _event_channel(bot):
     return bot.get_channel(bot.runtime_config.event_reminder_channel_id)
+
+
+def strip_mass_mentions(text: str) -> str:
+    """Drop @everyone/@here so the reminder only pings the event role."""
+    return (text or "").replace("@everyone", "").replace("@here", "").strip()
+
+
+async def _prune_previous_reminder(channel, repo, now, posting: bool) -> None:
+    """Delete the last reminder if a new one supersedes it (`posting`) or the
+    stored one is from a past day (expired). Best-effort."""
+    stored = await repo.get_channel_message(EVENT_REMINDER_LAST_KEY)
+    if stored is None:
+        return
+    try:
+        msg = await channel.fetch_message(stored[0])
+        created = msg.created_at.astimezone(now.tzinfo).date()
+        if posting or created < now.date():
+            await msg.delete()
+    except Exception:
+        pass  # already gone / no access
+
+
+async def run_event_reminder(bot, repo, settings, now) -> None:
+    """Daily reminder: prune the expired/previous post, then (on event days)
+    post a fresh one pinging ONLY the event role — never @everyone."""
+    channel = _event_channel(bot)
+    if channel is None:
+        return
+    weekday = now.weekday()
+    key = _REMINDER_TEXTS.get(weekday)
+    posting = key is not None
+    await _prune_previous_reminder(channel, repo, now, posting)
+    if not posting:
+        return
+    text = strip_mass_mentions(bot.content_texts.get(key))
+    mentions = build_reminder_mentions(
+        await repo.event_optin_all(), bot.runtime_config.event_role_id)
+    msg = await channel.send(
+        text + mentions,
+        # Only the event role / opted-in users may ping — never @everyone/@here.
+        allowed_mentions=discord.AllowedMentions(everyone=False, roles=True,
+                                                 users=True))
+    await repo.set_channel_message(EVENT_REMINDER_LAST_KEY, msg.id, channel.id)
 
 
 async def _apply_event_role(bot, member, opted_in: bool) -> None:

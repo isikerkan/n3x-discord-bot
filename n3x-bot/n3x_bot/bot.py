@@ -37,8 +37,7 @@ from n3x_bot.history_backfill import register_history_backfill_command
 from n3x_bot.mystats import register_mystats_command
 from n3x_bot.gatelog import register_gatelog_command
 from n3x_bot.events import (
-    register_event_commands, handle_event_signup_reaction,
-    build_reminder_mentions)
+    register_event_commands, handle_event_signup_reaction, run_event_reminder)
 from n3x_bot.achievement_commands import register_achievement_def_commands
 from n3x_bot.achievement_defs import AchievementDefs
 from n3x_bot.colors import ColorConfig
@@ -1300,23 +1299,7 @@ def reminder_loop_time(runtime_config, settings: Settings) -> time:
 def _wire_events(bot, settings: Settings, repo: StatsRepository):
     @tasks.loop(time=reminder_loop_time(bot.runtime_config, settings))
     async def event_reminder_task():
-        weekday = now_local(settings).weekday()
-        channel = bot.get_channel(bot.runtime_config.event_reminder_channel_id)
-        if channel is None:
-            return
-        if weekday == 2:
-            text = bot.content_texts.get("reminder_aceball")
-        elif weekday == 4:
-            text = bot.content_texts.get("reminder_invasion")
-        else:
-            return
-        # Ping the event role if configured, else the opted-in users.
-        role_id = bot.runtime_config.event_role_id
-        mentions = build_reminder_mentions(
-            await repo.event_optin_all(), role_id)
-        await channel.send(
-            text + mentions,
-            allowed_mentions=discord.AllowedMentions(users=True, roles=True))
+        await run_event_reminder(bot, repo, settings, now_local(settings))
 
     @tasks.loop(minutes=5)
     async def voice_flush_task():
