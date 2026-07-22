@@ -36,6 +36,9 @@ from n3x_bot.config_commands import register_config_commands
 from n3x_bot.history_backfill import register_history_backfill_command
 from n3x_bot.mystats import register_mystats_command
 from n3x_bot.gatelog import register_gatelog_command
+from n3x_bot.events import (
+    register_event_commands, handle_event_signup_reaction,
+    build_reminder_mentions)
 from n3x_bot.achievement_commands import register_achievement_def_commands
 from n3x_bot.achievement_defs import AchievementDefs
 from n3x_bot.colors import ColorConfig
@@ -142,6 +145,7 @@ def build_bot(settings: Settings, repo: StatsRepository) -> commands.Bot:
     register_history_backfill_command(bot, repo, settings)
     register_mystats_command(bot, repo, settings)
     register_gatelog_command(bot, repo, settings)
+    register_event_commands(bot, repo, settings)
     register_welcome_commands(bot, settings)
     register_timer_commands(bot, repo, settings)
     return bot
@@ -396,6 +400,8 @@ _COMMAND_DESCRIPTIONS: dict[str, str] = {
     "rank": "Zeigt dein persönliches Command-Ranking.",
     "erfolge": "Zeigt deine freigeschalteten Achievements.",
     "activity": "Zeigt die Aktivitätsstatistik.",
+    "event reminder": "Meldet dich für Event-Erinnerungen an oder ab.",
+    "event signup": "Postet die Event-Anmeldung mit Reaktion (Admin).",
     "overview": "Postet die Achievement-Übersicht.",
     "sync_achievements": "Synchronisiert alle Achievements (Admin).",
     "stat": "Zeigt die Gate-Statistik.",
@@ -435,7 +441,7 @@ _TOP_LEVEL_CATEGORY: dict[str, str] = {
     "statme": "gates",
     "erfolge": "achievements", "overview": "achievements",
     "achievement": "achievements",
-    "activity": "activity",
+    "activity": "activity", "event": "activity",
     "base": "timers", "basestop": "timers",
     "rank": "fun",
     # Admin-gated management + operational commands — hidden behind the
@@ -449,7 +455,8 @@ _TOP_LEVEL_CATEGORY: dict[str, str] = {
 _COMMAND_EMOJI: dict[str, str] = {
     "stat": "📈", "del": "🗑️", "gate": "📉", "meinestats": "📊", "statme": "📜",
     "erfolge": "🎖️", "overview": "🏅", "sync_achievements": "🔄",
-    "achievement": "🧩", "activity": "📊", "base": "▶️", "basestop": "⏹️",
+    "achievement": "🧩", "activity": "📊", "event": "🔔",
+    "base": "▶️", "basestop": "⏹️",
     "kodex": "📜", "kodex_check": "✅", "sync_welcome": "👋", "rank": "🥇",
     "admin": "🛠️", "config": "⚙️", "content": "📝", "backfill_history": "🕓",
 }
@@ -460,7 +467,7 @@ _ADMIN_CATEGORY_KEYS: set[str] = {"admin"}
 # Admin subcommands nested under an otherwise-public group (e.g. `/gate log`
 # under the public `/gate`): force them into the admin block by qualified name.
 _ADMIN_QUALIFIED_OVERRIDES: dict[str, str] = {
-    "gate log": "admin", "gate durchschnitt": "admin"}
+    "gate log": "admin", "gate durchschnitt": "admin", "event signup": "admin"}
 # Fixed custom_id for the persistent admin-reveal button (survives restarts).
 COMMAND_LIST_ADMIN_BUTTON_ID = "n3x:cmdlist:admin"
 
@@ -1294,13 +1301,20 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
     @tasks.loop(time=reminder_loop_time(bot.runtime_config, settings))
     async def event_reminder_task():
         weekday = now_local(settings).weekday()
-        channel = bot.get_channel(bot.runtime_config.reminder_channel_id)
+        channel = bot.get_channel(bot.runtime_config.event_reminder_channel_id)
         if channel is None:
             return
         if weekday == 2:
-            await channel.send(bot.content_texts.get("reminder_aceball"))
+            text = bot.content_texts.get("reminder_aceball")
         elif weekday == 4:
-            await channel.send(bot.content_texts.get("reminder_invasion"))
+            text = bot.content_texts.get("reminder_invasion")
+        else:
+            return
+        # Ping everyone opted in via /event reminder or the signup message.
+        mentions = build_reminder_mentions(await repo.event_optin_all())
+        await channel.send(
+            text + mentions,
+            allowed_mentions=discord.AllowedMentions(users=True))
 
     @tasks.loop(minutes=5)
     async def voice_flush_task():
@@ -1468,6 +1482,18 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
             pass
         try:
             await handle_reload_reaction(bot, repo, settings, payload)
+        except Exception:
+            pass
+        try:
+            await handle_event_signup_reaction(bot, repo, payload, added=True)
+        except Exception:
+            pass
+
+    @bot.event
+    async def on_raw_reaction_remove(payload):
+        # Un-reacting 🔔 on the signup message opts the user out.
+        try:
+            await handle_event_signup_reaction(bot, repo, payload, added=False)
         except Exception:
             pass
 

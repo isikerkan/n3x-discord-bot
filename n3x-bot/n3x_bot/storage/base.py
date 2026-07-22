@@ -336,6 +336,16 @@ class StatsRepository(ABC):
         (``[{gate_type, cost, user_id, username, drops, created_at}]``)."""
         ...
 
+    # event-reminder opt-in
+    @abstractmethod
+    async def event_optin_set(self, discord_id: int, opted_in: bool) -> None:
+        """Add or remove `discord_id` from the event-reminder opt-in list."""
+        ...
+    @abstractmethod
+    async def event_optin_is(self, discord_id: int) -> bool: ...
+    @abstractmethod
+    async def event_optin_all(self) -> list: ...
+
     # voice sessions (durable in-progress checkpoints)
     @abstractmethod
     async def voice_session_set(self, discord_id: int, since) -> None:

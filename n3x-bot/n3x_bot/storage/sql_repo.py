@@ -758,6 +758,27 @@ class SqlRepository(StatsRepository):
                 (sc.activity_counters.c.metric == metric)))).one_or_none()
             return r.count if r else 0
 
+    async def event_optin_set(self, discord_id, opted_in):
+        async with self.engine.begin() as conn:
+            exists = (await conn.execute(select(sc.event_optin.c.discord_id)
+                      .where(sc.event_optin.c.discord_id == discord_id))).one_or_none()
+            if opted_in and exists is None:
+                await conn.execute(insert(sc.event_optin).values(discord_id=discord_id))
+            elif not opted_in and exists is not None:
+                await conn.execute(delete(sc.event_optin)
+                                   .where(sc.event_optin.c.discord_id == discord_id))
+
+    async def event_optin_is(self, discord_id):
+        async with self.engine.connect() as conn:
+            r = (await conn.execute(select(sc.event_optin.c.discord_id)
+                 .where(sc.event_optin.c.discord_id == discord_id))).one_or_none()
+            return r is not None
+
+    async def event_optin_all(self):
+        async with self.engine.connect() as conn:
+            rows = await conn.execute(select(sc.event_optin.c.discord_id))
+            return [r.discord_id for r in rows]
+
     async def voice_session_set(self, discord_id, since):
         async with self.engine.begin() as conn:
             exists = (await conn.execute(select(sc.voice_sessions.c.discord_id)
