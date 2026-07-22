@@ -18,7 +18,7 @@ OVERRIDABLE_KEYS: frozenset[str] = frozenset({
     "command_list_channel_id",
     "milestone_channel_id", "overview_channel_id", "event_reminder_channel_id",
     "kodex_check_channel_id", "timer_overview_channel_id",
-    "timer_overview_message_id", "voice_log_channel_id", "target_role_id", "gate_delete_role_id", "stat_override_role_id",
+    "timer_overview_message_id", "voice_log_channel_id", "target_role_id", "gate_delete_role_id", "stat_override_role_id", "event_role_id",
     "base_timer_role_id",
     "gate_rewards", "voice_achievement_roles", "allowed_maps", "reminder_time",
     "gate_message_delete_delay",
@@ -152,6 +152,15 @@ class RuntimeConfig:
     @property
     def base_timer_role_ids(self) -> list[int]:
         return self._role_ids("base_timer_role_id")
+
+    @property
+    def event_role_ids(self) -> list[int]:
+        return self._role_ids("event_role_id")
+
+    @property
+    def event_role_id(self) -> int:
+        ids = self.event_role_ids
+        return ids[0] if ids else 0
 
     @property
     def target_role_id(self) -> int:

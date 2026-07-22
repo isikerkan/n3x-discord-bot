@@ -37,6 +37,7 @@ ROLE_PURPOSES: dict[str, str] = {
     "gate_delete": "gate_delete_role_id",
     "stat_override": "stat_override_role_id",
     "base_timer": "base_timer_role_id",
+    "event": "event_role_id",
 }
 MESSAGE_PURPOSES: dict[str, str] = {
     "timer_overview": "timer_overview_message_id",

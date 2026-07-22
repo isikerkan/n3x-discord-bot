@@ -120,6 +120,9 @@ class Settings(BaseSettings):
     # Where event reminders + the opt-in signup message go. 0 falls back to
     # reminder_channel_id.
     event_reminder_channel_id: int = 0
+    # Role granted to opted-in users; the reminder @mentions it. 0 = no role
+    # (mention the opt-in users individually instead).
+    event_role_id: int | str = 0
     voice_achievement_roles: str = ""
 
     base_timer_role_id: int | str = 0
@@ -203,3 +206,7 @@ class Settings(BaseSettings):
     @property
     def stat_override_role_ids(self) -> list[int]:
         return parse_role_ids(str(self.stat_override_role_id))
+
+    @property
+    def event_role_ids(self) -> list[int]:
+        return parse_role_ids(str(self.event_role_id))
