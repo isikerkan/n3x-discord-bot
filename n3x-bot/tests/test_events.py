@@ -64,6 +64,16 @@ def test_build_reminder_mentions():
     assert "<@1>" in out and "<@2>" in out and EVENT_EMOJI in out
 
 
+def test_build_reminder_mentions_uses_role_when_configured():
+    # A configured event role is mentioned (covers everyone with it), not the
+    # individual user list.
+    out = build_reminder_mentions([1, 2], event_role_id=555)
+    assert "<@&555>" in out
+    assert "<@1>" not in out
+    # even with nobody in the opt-in list, the role is still pinged
+    assert "<@&555>" in build_reminder_mentions([], event_role_id=555)
+
+
 # ── /event reminder toggle ───────────────────────────────────────────────────
 
 async def test_event_reminder_toggles_optin():
@@ -92,10 +102,15 @@ async def test_event_reminder_toggles_optin():
 
 # ── 🔔 signup reactions ───────────────────────────────────────────────────────
 
+def _fake_bot(user_id=1, event_role_id=0):
+    return SimpleNamespace(user=SimpleNamespace(id=user_id),
+                           runtime_config=SimpleNamespace(event_role_id=event_role_id))
+
+
 async def test_signup_reaction_opts_in_and_out():
     repo = await _repo()
     await repo.set_channel_message(EVENT_SIGNUP_KEY, 555, 999)  # the signup msg
-    bot = SimpleNamespace(user=SimpleNamespace(id=1))
+    bot = _fake_bot()
 
     p_in = SimpleNamespace(message_id=555, user_id=7, emoji=EVENT_EMOJI)
     await handle_event_signup_reaction(bot, repo, p_in, added=True)
@@ -107,10 +122,36 @@ async def test_signup_reaction_opts_in_and_out():
     await repo.close()
 
 
+async def test_signup_reaction_grants_and_removes_role():
+    repo = await _repo()
+    await repo.set_channel_message(EVENT_SIGNUP_KEY, 555, 999)
+    role = SimpleNamespace(id=777)
+    added_roles, removed_roles = [], []
+    member = SimpleNamespace(
+        guild=SimpleNamespace(get_role=lambda rid: role if rid == 777 else None),
+        add_roles=AsyncMock(side_effect=lambda r, reason=None: added_roles.append(r.id)),
+        remove_roles=AsyncMock(side_effect=lambda r, reason=None: removed_roles.append(r.id)))
+    bot = _fake_bot(event_role_id=777)
+
+    p_in = SimpleNamespace(message_id=555, user_id=7, emoji=EVENT_EMOJI, member=member)
+    await handle_event_signup_reaction(bot, repo, p_in, added=True)
+    assert added_roles == [777]
+
+    # remove path: no payload.member -> resolve via guild.get_member
+    guild = SimpleNamespace(get_member=lambda uid: member,
+                            get_role=member.guild.get_role)
+    bot.get_guild = lambda gid: guild
+    p_out = SimpleNamespace(message_id=555, user_id=7, emoji=EVENT_EMOJI,
+                            guild_id=1, member=None)
+    await handle_event_signup_reaction(bot, repo, p_out, added=False)
+    assert removed_roles == [777]
+    await repo.close()
+
+
 async def test_signup_reaction_ignores_other_message_and_bot():
     repo = await _repo()
     await repo.set_channel_message(EVENT_SIGNUP_KEY, 555, 999)
-    bot = SimpleNamespace(user=SimpleNamespace(id=1))
+    bot = _fake_bot()
 
     # wrong message
     await handle_event_signup_reaction(

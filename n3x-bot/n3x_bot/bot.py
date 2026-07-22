@@ -1310,11 +1310,13 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
             text = bot.content_texts.get("reminder_invasion")
         else:
             return
-        # Ping everyone opted in via /event reminder or the signup message.
-        mentions = build_reminder_mentions(await repo.event_optin_all())
+        # Ping the event role if configured, else the opted-in users.
+        role_id = bot.runtime_config.event_role_id
+        mentions = build_reminder_mentions(
+            await repo.event_optin_all(), role_id)
         await channel.send(
             text + mentions,
-            allowed_mentions=discord.AllowedMentions(users=True))
+            allowed_mentions=discord.AllowedMentions(users=True, roles=True))
 
     @tasks.loop(minutes=5)
     async def voice_flush_task():

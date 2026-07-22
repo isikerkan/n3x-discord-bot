@@ -22,8 +22,15 @@ _SIGNUP_TEXT = (
     "Alternativ: `/event reminder` zum An-/Abmelden.")
 
 
-def build_reminder_mentions(opted_in_ids: list) -> str:
-    """A ping line for the opted-in users, or '' when nobody is signed up."""
+def build_reminder_mentions(opted_in_ids: list, event_role_id: int = 0) -> str:
+    """A ping line for the reminder.
+
+    When an event role is configured, mention the role (covers everyone with
+    it, including manually-added members). Otherwise mention the opted-in users
+    individually. Empty when there is nobody/nothing to ping.
+    """
+    if event_role_id:
+        return f"\n\n{EVENT_EMOJI} <@&{event_role_id}>"
     if not opted_in_ids:
         return ""
     return "\n\n" + EVENT_EMOJI + " " + " ".join(f"<@{uid}>" for uid in opted_in_ids)
@@ -31,6 +38,23 @@ def build_reminder_mentions(opted_in_ids: list) -> str:
 
 def _event_channel(bot):
     return bot.get_channel(bot.runtime_config.event_reminder_channel_id)
+
+
+async def _apply_event_role(bot, member, opted_in: bool) -> None:
+    """Best-effort: grant/remove the configured event role for `member`."""
+    role_id = bot.runtime_config.event_role_id
+    if not role_id or member is None:
+        return
+    role = member.guild.get_role(role_id)
+    if role is None:
+        return
+    try:
+        if opted_in:
+            await member.add_roles(role, reason="Event-Erinnerung opt-in")
+        else:
+            await member.remove_roles(role, reason="Event-Erinnerung opt-out")
+    except Exception:
+        pass
 
 
 async def handle_event_signup_reaction(bot, repo: StatsRepository, payload,
@@ -44,6 +68,14 @@ async def handle_event_signup_reaction(bot, repo: StatsRepository, payload,
     if stored is None or payload.message_id != stored[0]:
         return
     await repo.event_optin_set(payload.user_id, added)
+    # Sync the event role only when one is configured. `payload.member` is
+    # present on adds; on removes we resolve the member from the guild.
+    if bot.runtime_config.event_role_id:
+        member = getattr(payload, "member", None)
+        if member is None:
+            guild = bot.get_guild(getattr(payload, "guild_id", 0))
+            member = guild.get_member(payload.user_id) if guild is not None else None
+        await _apply_event_role(bot, member, added)
 
 
 def register_event_commands(bot, repo: StatsRepository, settings: Settings) -> None:
@@ -57,6 +89,7 @@ def register_event_commands(bot, repo: StatsRepository, settings: Settings) -> N
         uid = interaction.user.id
         now_in = await repo.event_optin_is(uid)
         await repo.event_optin_set(uid, not now_in)
+        await _apply_event_role(bot, interaction.user, not now_in)
         if now_in:
             await interaction.response.send_message(
                 "🔕 Du bekommst **keine** Event-Erinnerungen mehr.", ephemeral=True)
