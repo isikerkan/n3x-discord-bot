@@ -4,9 +4,13 @@ import tempfile
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 from n3x_bot.events import (
     build_reminder_mentions, handle_event_signup_reaction, EVENT_EMOJI,
-    EVENT_SIGNUP_KEY)
+    EVENT_SIGNUP_KEY, EVENT_REMINDER_LAST_KEY, strip_mass_mentions,
+    run_event_reminder)
 from n3x_bot.storage.json_repo import JsonRepository
 from n3x_bot.seed import seed_defaults
 
@@ -168,4 +172,112 @@ async def test_signup_reaction_ignores_other_message_and_bot():
         bot, repo, SimpleNamespace(message_id=555, user_id=7, emoji="❌"),
         added=True)
     assert await repo.event_optin_is(7) is False
+    await repo.close()
+
+
+# ── daily reminder: prune expired + strip @everyone ──────────────────────────
+
+TZ = ZoneInfo("Europe/Berlin")
+
+
+def test_strip_mass_mentions():
+    assert strip_mass_mentions("Aceball @everyone heute @here!") == "Aceball  heute !"
+    assert strip_mass_mentions("") == ""
+
+
+class _Chan:
+    def __init__(self):
+        self.id = 555
+        self.sent = []
+        self._msgs = {}
+
+    async def send(self, content, allowed_mentions=None):
+        mid = 1000 + len(self.sent)
+        m = SimpleNamespace(id=mid, content=content,
+                            allowed_mentions=allowed_mentions, delete=AsyncMock())
+        self.sent.append(m)
+        self._msgs[mid] = m
+        return m
+
+    async def fetch_message(self, mid):
+        if mid in self._msgs:
+            return self._msgs[mid]
+        raise RuntimeError("not found")
+
+
+def _reminder_bot(chan, role_id=0, texts=None):
+    return SimpleNamespace(
+        get_channel=lambda cid: chan,
+        runtime_config=SimpleNamespace(event_reminder_channel_id=555,
+                                       event_role_id=role_id),
+        content_texts=SimpleNamespace(get=lambda k: (texts or {}).get(k, "")))
+
+
+async def test_reminder_posts_on_event_day_role_only_no_everyone():
+    repo = await _repo()
+    await repo.event_optin_set(7, True)
+    chan = _Chan()
+    bot = _reminder_bot(chan, role_id=777,
+                        texts={"reminder_aceball": "Aceball @everyone!"})
+    now = datetime(2026, 7, 22, 19, 30, tzinfo=TZ)   # Wednesday
+
+    await run_event_reminder(bot, repo, None, now)
+
+    assert len(chan.sent) == 1
+    sent = chan.sent[0]
+    assert "@everyone" not in sent.content            # stripped
+    assert "<@&777>" in sent.content                  # pings the event role
+    assert sent.allowed_mentions.everyone is False     # never mass-ping
+    # tracked for later deletion
+    assert (await repo.get_channel_message(EVENT_REMINDER_LAST_KEY))[0] == sent.id
+    await repo.close()
+
+
+async def test_reminder_deletes_previous_when_posting_new():
+    repo = await _repo()
+    chan = _Chan()
+    prev = SimpleNamespace(id=900, created_at=datetime(2026, 7, 20, tzinfo=TZ),
+                           delete=AsyncMock())
+    chan._msgs[900] = prev
+    await repo.set_channel_message(EVENT_REMINDER_LAST_KEY, 900, 555)
+    bot = _reminder_bot(chan, texts={"reminder_invasion": "Invasion!"})
+    now = datetime(2026, 7, 24, 19, 30, tzinfo=TZ)   # Friday -> posts
+
+    await run_event_reminder(bot, repo, None, now)
+
+    prev.delete.assert_awaited_once()                 # old one removed
+    assert len(chan.sent) == 1
+    await repo.close()
+
+
+async def test_reminder_deletes_expired_on_non_event_day_without_posting():
+    repo = await _repo()
+    chan = _Chan()
+    expired = SimpleNamespace(id=900, created_at=datetime(2026, 7, 22, tzinfo=TZ),
+                              delete=AsyncMock())
+    chan._msgs[900] = expired
+    await repo.set_channel_message(EVENT_REMINDER_LAST_KEY, 900, 555)
+    bot = _reminder_bot(chan)
+    now = datetime(2026, 7, 23, 19, 30, tzinfo=TZ)   # Thursday, day after -> expired
+
+    await run_event_reminder(bot, repo, None, now)
+
+    expired.delete.assert_awaited_once()              # expired one deleted
+    assert len(chan.sent) == 0                        # nothing posted (not event day)
+    await repo.close()
+
+
+async def test_reminder_keeps_current_day_message_on_non_event_day():
+    repo = await _repo()
+    chan = _Chan()
+    same_day = SimpleNamespace(id=900, created_at=datetime(2026, 7, 23, tzinfo=TZ),
+                               delete=AsyncMock())
+    chan._msgs[900] = same_day
+    await repo.set_channel_message(EVENT_REMINDER_LAST_KEY, 900, 555)
+    bot = _reminder_bot(chan)
+    now = datetime(2026, 7, 23, 23, 0, tzinfo=TZ)     # Thursday, same day -> not expired
+
+    await run_event_reminder(bot, repo, None, now)
+
+    same_day.delete.assert_not_awaited()              # not expired, kept
     await repo.close()
