@@ -27,3 +27,6 @@ manus versions/
 
 # Local Claude Code config
 .claude/
+
+# Migration package — contains Discord token + DB password
+n3x-migration/
