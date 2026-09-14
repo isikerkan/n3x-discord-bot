@@ -87,7 +87,7 @@ def _now() -> datetime:
 def _overview_channel():
     """Fake overview channel: get_channel -> channel -> fetch_message -> msg,
     with msg.edit an AsyncMock so we can assert the self-edit happened."""
-    msg = SimpleNamespace(edit=AsyncMock())
+    msg = SimpleNamespace(edit=AsyncMock(), add_reaction=AsyncMock())
     channel = MagicMock()
     channel.fetch_message = AsyncMock(return_value=msg)
     channel._msg = msg
@@ -134,16 +134,16 @@ def _sent_text(interaction) -> str:
 
 # ── build_timer_overview_embed (pure) ──────────────────────────────────────
 
-async def test_overview_embed_has_the_v3_title():
+async def test_overview_embed_has_the_english_title():
     from n3x_bot import timers
     embed = timers.build_timer_overview_embed({}, _now())
-    assert embed.title == "🛰️ BASE TIMER ÜBERSICHT"
+    assert embed.title == "🛰️ BASE TIMER OVERVIEW"
 
 
 async def test_overview_embed_empty_shows_no_timers_line_in_red():
     from n3x_bot import timers
     embed = timers.build_timer_overview_embed({}, _now())
-    assert embed.description == "Keine aktiven Base Timer."
+    assert embed.description == "No active base timers."
     assert embed.color == discord.Color.red()
 
 
@@ -155,27 +155,46 @@ async def test_overview_embed_populated_is_blue():
     assert embed.color == discord.Color.blue()
 
 
-async def test_overview_embed_line_embeds_relative_discord_timestamp():
-    # Liveticker: each line carries a Discord relative timestamp <t:UNIX:R> so
-    # the countdown ticks client-side without the bot re-editing the message.
+async def test_overview_embed_line_renders_countdown_with_seconds():
+    # The countdown is rendered bot-side to the SECOND. Discord's <t:UNIX:R>
+    # stamp collapses to one unit ("in 24 minutes") and can never show seconds,
+    # so it is gone -- pin its absence alongside the new MM:SS text.
     from n3x_bot import timers
     now = _now()
-    end = now + timedelta(minutes=24)
+    end = now + timedelta(minutes=24, seconds=30)
     embed = timers.build_timer_overview_embed({"2-6": end}, now)
-    assert f"<t:{int(end.timestamp())}:R>" in embed.description
+    assert "24:30 remaining" in embed.description
+    assert ":R>" not in embed.description
 
 
-async def test_overview_embed_relative_timestamp_correct_for_aware_datetime():
-    # PIN aware-correctness: 2026-07-14 12:24 Europe/Berlin (CEST, +02:00) is
-    # 10:24 UTC. The embedded unix must be the true epoch of the aware datetime,
-    # not the wall-clock treated as naive/UTC (which would give a +2h-wrong unix).
+async def test_overview_embed_countdown_uses_h_mm_ss_past_an_hour():
+    from n3x_bot import timers
+    now = _now()
+    end = now + timedelta(hours=2, minutes=5, seconds=9)
+    embed = timers.build_timer_overview_embed({"2-6": end}, now)
+    assert "2:05:09 remaining" in embed.description
+
+
+async def test_overview_embed_countdown_rounds_up_so_first_paint_is_exact():
+    # A 30-minute timer painted a hair after it started must read 30:00, not
+    # 29:59 -- the countdown ceils rather than truncates.
+    from n3x_bot import timers
+    now = _now()
+    end = now + timedelta(minutes=30) - timedelta(milliseconds=1)
+    embed = timers.build_timer_overview_embed({"2-6": end}, now)
+    assert "30:00 remaining" in embed.description
+
+
+async def test_overview_embed_countdown_correct_across_timezones():
+    # B6 aware-correctness, now expressed through the countdown: 2026-07-14
+    # 12:24 Europe/Berlin (CEST, +02:00) IS 10:24 UTC, so an end_time given in
+    # UTC must yield the true 24-minute delta -- not a +2h-wrong one from
+    # comparing wall-clock numbers.
     from n3x_bot import timers
     now = datetime(2026, 7, 14, 12, 0, 0, tzinfo=TZ)
-    end = datetime(2026, 7, 14, 12, 24, 0, tzinfo=TZ)
-    expected_unix = int(
-        datetime(2026, 7, 14, 10, 24, 0, tzinfo=ZoneInfo("UTC")).timestamp())
+    end = datetime(2026, 7, 14, 10, 24, 0, tzinfo=ZoneInfo("UTC"))
     embed = timers.build_timer_overview_embed({"2-6": end}, now)
-    assert f"<t:{expected_unix}:R>" in embed.description
+    assert "24:00 remaining" in embed.description
 
 
 async def test_overview_embed_line_keeps_map_marker_and_name():
@@ -187,8 +206,8 @@ async def test_overview_embed_line_keeps_map_marker_and_name():
 
 
 async def test_overview_embed_line_drops_static_minute_remainder():
-    # The old "— {n} Min" static text is GONE (the client-rendered relative
-    # timestamp replaces it); pin its absence so it can't creep back.
+    # The old "— {n} Min" German static text is GONE (an English MM:SS
+    # countdown replaces it); pin its absence so it can't creep back.
     from n3x_bot import timers
     now = _now()
     embed = timers.build_timer_overview_embed(
@@ -207,22 +226,22 @@ async def test_overview_embed_lines_are_sorted_by_end_time_ascending():
     assert len(lines) == 2
     # first line = earliest end_time, second = latest (sorted ascending)
     assert "**4-1**" in lines[0]
-    assert f"<t:{int(early.timestamp())}:R>" in lines[0]
+    assert "30:00 remaining" in lines[0]
     assert "**1-5**" in lines[1]
-    assert f"<t:{int(late.timestamp())}:R>" in lines[1]
-    assert int(early.timestamp()) < int(late.timestamp())
+    assert "1:30:00 remaining" in lines[1]
+    assert early < late
 
 
 async def test_overview_embed_renders_past_timer_line_without_dropping_it():
     from n3x_bot import timers
     now = _now()
-    # PIN: the builder renders every timer handed to it (a past end_time yields a
-    # "vor N Minuten" relative stamp client-side); the CALLER
-    # (update_timer_overview) is what drops expired rows, not the builder.
+    # PIN: the builder renders every timer handed to it (a past end_time reads
+    # "expired"); the CALLER (update_timer_overview) is what drops expired rows,
+    # not the builder.
     end = now - timedelta(minutes=5)
     embed = timers.build_timer_overview_embed({"3-7": end}, now)
     assert "📍 **3-7**" in embed.description
-    assert f"<t:{int(end.timestamp())}:R>" in embed.description
+    assert "expired" in embed.description
 
 
 # ── has_base_timer_role ─────────────────────────────────────────────────────
@@ -413,6 +432,129 @@ async def test_update_timer_overview_swallows_edit_failure():
     await repo.close()
 
 
+# ── format_countdown (pure) ────────────────────────────────────────────────
+
+async def test_format_countdown_renders_mm_ss_under_an_hour():
+    from n3x_bot import timers
+    assert timers.format_countdown(timedelta(minutes=24, seconds=30)) == "24:30"
+    assert timers.format_countdown(timedelta(seconds=9)) == "00:09"
+    assert timers.format_countdown(timedelta(minutes=1)) == "01:00"
+
+
+async def test_format_countdown_renders_h_mm_ss_at_or_past_an_hour():
+    from n3x_bot import timers
+    assert timers.format_countdown(timedelta(hours=1)) == "1:00:00"
+    assert timers.format_countdown(
+        timedelta(hours=2, minutes=5, seconds=9)) == "2:05:09"
+
+
+async def test_format_countdown_rounds_up_sub_second_remainders():
+    from n3x_bot import timers
+    # ceil, not truncate: 29:59.001 remaining still reads 30:00
+    assert timers.format_countdown(
+        timedelta(minutes=30) - timedelta(milliseconds=1)) == "30:00"
+
+
+async def test_format_countdown_reports_expired_at_or_below_zero():
+    from n3x_bot import timers
+    assert timers.format_countdown(timedelta(0)) == "expired"
+    assert timers.format_countdown(timedelta(minutes=-5)) == "expired"
+
+
+# ── update_timer_overview: rate-limit containment for the 1s loop ───────────
+
+async def test_update_timer_overview_skips_edit_when_nothing_changed():
+    # The 1s loop would otherwise burn an API call every second on an idle
+    # overview. Two passes at the same `now` must produce exactly one edit.
+    from n3x_bot import timers
+    repo = await _flatfile_repo()
+    settings = _settings(timer_overview_channel_id=222,
+                         timer_overview_message_id=333)
+    now = _now()
+    channel = _overview_channel()
+    bot = MagicMock()
+    bot.get_channel = MagicMock(return_value=channel)
+
+    await timers.update_timer_overview(bot, repo, settings, now)
+    await timers.update_timer_overview(bot, repo, settings, now)
+
+    assert channel._msg.edit.await_count == 1
+    await repo.close()
+
+
+async def test_update_timer_overview_repaints_when_the_countdown_ticks():
+    from n3x_bot import timers
+    repo = await _flatfile_repo()
+    settings = _settings(timer_overview_channel_id=222,
+                         timer_overview_message_id=333)
+    now = _now()
+    await repo.set_base_timer("4-1", now + timedelta(minutes=30))
+    channel = _overview_channel()
+    bot = MagicMock()
+    bot.get_channel = MagicMock(return_value=channel)
+
+    await timers.update_timer_overview(bot, repo, settings, now)
+    # one second later the rendered seconds differ -> a real repaint is due
+    await timers.update_timer_overview(bot, repo, settings,
+                                      now + timedelta(seconds=1))
+
+    assert channel._msg.edit.await_count == 2
+    descriptions = [c.kwargs["embed"].description
+                    for c in channel._msg.edit.call_args_list]
+    assert "30:00 remaining" in descriptions[0]
+    assert "29:59 remaining" in descriptions[1]
+    await repo.close()
+
+
+async def test_update_timer_overview_seeds_reload_reaction_only_once():
+    # add_reaction is idempotent server-side but still costs a request on the
+    # rate limiter; at 1 tick/s it must not fire on every pass.
+    from n3x_bot import timers
+    repo = await _flatfile_repo()
+    settings = _settings(timer_overview_channel_id=222,
+                         timer_overview_message_id=333)
+    now = _now()
+    await repo.set_base_timer("4-1", now + timedelta(minutes=30))
+    channel = _overview_channel()
+    bot = MagicMock()
+    bot.get_channel = MagicMock(return_value=channel)
+
+    await timers.update_timer_overview(bot, repo, settings, now)
+    await timers.update_timer_overview(bot, repo, settings,
+                                       now + timedelta(seconds=1))
+    await timers.update_timer_overview(bot, repo, settings,
+                                       now + timedelta(seconds=2))
+
+    assert channel._msg.edit.await_count == 3      # countdown repainted
+    assert channel._msg.add_reaction.await_count == 1  # control seeded once
+    await repo.close()
+
+
+async def test_update_timer_overview_skips_write_transaction_when_none_expired():
+    # At 1 tick/s an unconditional purge would open a write transaction every
+    # second for nothing; purge only when something actually expired.
+    from n3x_bot import timers
+    repo = await _flatfile_repo()
+    settings = _settings(timer_overview_channel_id=222,
+                         timer_overview_message_id=333)
+    now = _now()
+    await repo.set_base_timer("4-1", now + timedelta(minutes=30))
+    bot = MagicMock()
+    bot.get_channel = MagicMock(return_value=_overview_channel())
+
+    repo.purge_expired_base_timers = AsyncMock(
+        wraps=repo.purge_expired_base_timers)
+    await timers.update_timer_overview(bot, repo, settings, now)
+    repo.purge_expired_base_timers.assert_not_awaited()
+
+    # ...but an expired row still gets purged
+    await repo.set_base_timer("1-5", now - timedelta(minutes=1))
+    await timers.update_timer_overview(bot, repo, settings, now)
+    repo.purge_expired_base_timers.assert_awaited_once()
+    assert set(await repo.list_base_timers()) == {"4-1"}
+    await repo.close()
+
+
 # ── register_timer_commands (Phase 5: slash-ONLY /base + /basestop) ──────────
 #
 # Phase 5 migrates `!base` / `!basestop` to slash-ONLY app commands on
@@ -421,8 +563,8 @@ async def test_update_timer_overview_swallows_edit_failure():
 # `bot.runtime_config.allowed_maps_list` for /base, and active timers for
 # /basestop, so `/config allowed-maps` changes reflect without a re-sync). The
 # `map` value is validated in-callback (autocomplete is non-binding). Commands
-# are addressed via the tree and invoked with the `map`/`zeit` params by name:
-#     bot.tree.get_command("base").callback(interaction, map="4-1", zeit=30)
+# are addressed via the tree and invoked with the `map`/`minutes` params by name:
+#     bot.tree.get_command("base").callback(interaction, map="4-1", minutes=30)
 
 async def test_register_timer_commands_registers_base_and_basestop_as_slash_only():
     from n3x_bot import timers
@@ -510,7 +652,7 @@ async def test_base_slash_stores_timer_and_refreshes_overview_for_role_holder():
 
     interaction = _fake_interaction(_member(role_ids=(555,)))
 
-    await bot.tree.get_command("base").callback(interaction, map="4-1", zeit=30)
+    await bot.tree.get_command("base").callback(interaction, map="4-1", minutes=30)
 
     stored = await repo.list_base_timers()
     assert "4-1" in stored
@@ -535,11 +677,11 @@ async def test_base_slash_refused_for_non_role_holder_does_no_work():
 
     interaction = _fake_interaction(_member(role_ids=(111,)))  # lacks the role
 
-    await bot.tree.get_command("base").callback(interaction, map="4-1", zeit=30)
+    await bot.tree.get_command("base").callback(interaction, map="4-1", minutes=30)
 
     assert await repo.list_base_timers() == {}   # nothing stored
     channel._msg.edit.assert_not_awaited()        # overview not touched
-    assert "Keine Berechtigung" in _sent_text(interaction)  # ephemeral refusal
+    assert "No permission" in _sent_text(interaction)  # ephemeral refusal
     await repo.close()
 
 
@@ -556,7 +698,7 @@ async def test_base_slash_rejects_invalid_map_and_names_allowed_maps():
 
     # autocomplete is non-binding, so a bogus map can still arrive; the callback
     # must validate it in-body, store nothing, and list the allowed maps.
-    await bot.tree.get_command("base").callback(interaction, map="9-9", zeit=30)
+    await bot.tree.get_command("base").callback(interaction, map="9-9", minutes=30)
 
     assert await repo.list_base_timers() == {}
     assert "4-1" in _sent_text(interaction)  # allowed-map list surfaced
@@ -621,7 +763,7 @@ async def test_basestop_slash_on_unknown_map_reports_no_active_timer():
 
     await bot.tree.get_command("basestop").callback(interaction, map="4-1")  # not running
 
-    assert "Kein aktiver Timer" in _sent_text(interaction)
+    assert "No active timer" in _sent_text(interaction)
     await repo.close()
 
 
@@ -638,7 +780,7 @@ async def test_basestop_slash_refused_for_non_role_holder():
     await bot.tree.get_command("basestop").callback(interaction, map="4-1")
 
     assert set(await repo.list_base_timers()) == {"4-1"}  # untouched
-    assert "Keine Berechtigung" in _sent_text(interaction)
+    assert "No permission" in _sent_text(interaction)
     await repo.close()
 
 
@@ -654,6 +796,22 @@ async def test_start_timer_overview_loop_starts_the_loop():
     loop = timers.start_timer_overview_loop(bot, repo, settings)
     try:
         assert loop.is_running() is True
+    finally:
+        loop.cancel()
+    await repo.close()
+
+
+async def test_timer_overview_loop_ticks_once_per_second():
+    # The countdown shows seconds, so the repaint cadence must be 1s (was 30s).
+    from n3x_bot import timers
+    repo = await _flatfile_repo()
+    settings = _settings(timer_overview_channel_id=0)
+    bot = MagicMock()
+    bot.get_channel = MagicMock(return_value=None)
+
+    loop = timers.start_timer_overview_loop(bot, repo, settings)
+    try:
+        assert loop.seconds == 1
     finally:
         loop.cancel()
     await repo.close()

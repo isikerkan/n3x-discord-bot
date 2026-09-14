@@ -429,7 +429,7 @@ _COMMAND_CATEGORIES: list[tuple[str, str, str]] = [
     ("gates", "📊", "Gates"),
     ("achievements", "🏆", "Achievements"),
     ("activity", "🎙️", "Aktivität"),
-    ("timers", "⏱️", "Base-Timer"),
+    ("timers", "⏱️", "Base Timers"),
     ("fun", "🎮", "Fun & Zähler"),
     ("admin", "⚙️", "Admin & Verwaltung"),
 ]
