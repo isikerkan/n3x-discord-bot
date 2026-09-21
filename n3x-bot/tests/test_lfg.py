@@ -490,10 +490,10 @@ async def test_confirmed_embed_shows_date_time_and_roster():
     lfg = await repo.get_lfg(lfg_id)
     embed = lfg_embeds.build_confirmed_embed(
         lfg, await repo.get_lfg_participants(lfg_id))
-    # Der Titel ist der EVENT-Titel, nicht der Status.
+    # Der Titel ist der EVENT-Titel; "Termin gefunden" kommt nirgends mehr vor.
     assert embed.title == "🎉 Satura Gruppen Gate"
-    assert "TERMIN GEFUNDEN" not in embed.title
-    assert "Termin gefunden" in embed.description
+    assert "Termin gefunden" not in embed.title
+    assert "Termin gefunden" not in embed.description
     assert "20:00 Uhr" in embed.description
     assert "Teilnehmer: 4/8" in embed.description
     assert f"<@{JULES}>" in embed.description
