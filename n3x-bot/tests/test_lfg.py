@@ -10,7 +10,7 @@ without sleeping.
 """
 import os
 import tempfile
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 from zoneinfo import ZoneInfo
@@ -490,7 +490,10 @@ async def test_confirmed_embed_shows_date_time_and_roster():
     lfg = await repo.get_lfg(lfg_id)
     embed = lfg_embeds.build_confirmed_embed(
         lfg, await repo.get_lfg_participants(lfg_id))
-    assert embed.title == "🎉 TERMIN GEFUNDEN"
+    # Der Titel ist der EVENT-Titel, nicht der Status.
+    assert embed.title == "🎉 Satura Gruppen Gate"
+    assert "TERMIN GEFUNDEN" not in embed.title
+    assert "Termin gefunden" in embed.description
     assert "20:00 Uhr" in embed.description
     assert "Teilnehmer: 4/8" in embed.description
     assert f"<@{JULES}>" in embed.description
@@ -503,7 +506,7 @@ async def test_full_embed_says_the_group_is_full():
     lfg = await repo.get_lfg(lfg_id)
     embed = lfg_embeds.build_confirmed_embed(
         lfg, await repo.get_lfg_participants(lfg_id))
-    assert embed.title == "🔒 GRUPPE VOLL"
+    assert embed.title == "🔒 Satura Gruppen Gate"
     assert "voll" in embed.description
     await repo.close()
 
@@ -588,7 +591,7 @@ async def test_render_switches_view_type_on_confirmation():
     embed, view = await views.render(repo, _settings(),
                                      await repo.get_lfg(lfg_id))
     assert isinstance(view, views.LfgConfirmedView)
-    assert embed.title == "🎉 TERMIN GEFUNDEN"
+    assert embed.title == "🎉 Satura Gruppen Gate"
     await repo.close()
 
 
@@ -752,6 +755,16 @@ async def test_help_is_skipped_without_a_configured_channel():
 
 # ── command wiring ─────────────────────────────────────────────────────────
 
+def _future_date_de() -> str:
+    """Morgen als `TT.MM.JJJJ`.
+
+    Die Command-Callbacks validieren gegen `today_local(settings)`, also gegen
+    die echte Uhr — ein fest verdrahtetes Datum würde den Test ab dem Folgetag
+    reißen (Datum in der Vergangenheit wird abgelehnt).
+    """
+    return (datetime.now(TZ).date() + timedelta(days=1)).strftime("%d.%m.%Y")
+
+
 def _interaction(user_id=JULES, channel_id=LFG_CHANNEL):
     it = MagicMock()
     it.user = SimpleNamespace(id=user_id, roles=[])
@@ -799,7 +812,7 @@ async def test_lfg_outside_the_lfg_channel_is_refused():
 
     await bot.tree.get_command("lfg").callback(
         interaction, titel="Satura Gruppen Gate", spieler="4-8",
-        datum="21.09.2026", startzeiten="19:00 / 20:00")
+        datum=_future_date_de(), startzeiten="19:00 / 20:00")
 
     assert await repo.all_active_lfgs() == []       # nichts angelegt
     assert str(LFG_CHANNEL) in _sent_text(interaction)  # Hinweis auf Channel
@@ -818,7 +831,7 @@ async def test_lfg_in_the_right_channel_creates_and_posts():
 
     await bot.tree.get_command("lfg").callback(
         interaction, titel="Satura Gruppen Gate", spieler="4-8",
-        datum="21.09.2026", startzeiten="19:00 / 20:00 / 21:00")
+        datum=_future_date_de(), startzeiten="19:00 / 20:00 / 21:00")
 
     active = await repo.all_active_lfgs()
     assert len(active) == 1
@@ -838,7 +851,7 @@ async def test_lfg_rejects_invalid_input_without_creating_anything():
 
     await bot.tree.get_command("lfg").callback(
         interaction, titel="Satura", spieler="8-4",
-        datum="21.09.2026", startzeiten="19:00")
+        datum=_future_date_de(), startzeiten="19:00")
 
     assert await repo.all_active_lfgs() == []
     assert "Maximum" in _sent_text(interaction)

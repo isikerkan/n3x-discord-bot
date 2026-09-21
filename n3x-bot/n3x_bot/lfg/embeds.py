@@ -48,7 +48,8 @@ def build_confirmed_embed(lfg: dict, participants: list[int]) -> discord.Embed:
     """Die bestätigte LFG: fester Termin plus offene Teilnehmerliste."""
     full = len(participants) >= lfg["max_players"]
     lines = [
-        f"**{lfg['title']}**",
+        "🔒 **Termin gefunden · Gruppe voll**" if full
+        else "🎉 **Termin gefunden**",
         "",
         f"📅 **{format_date(lfg['event_date'])}**",
         f"{clock_for(lfg['confirmed_time'] or '')} "
@@ -68,7 +69,9 @@ def build_confirmed_embed(lfg: dict, participants: list[int]) -> discord.Embed:
         lines.append(f"**Weitere Spieler können beitreten — noch {free} "
                      f"Plätze frei (max. {lfg['max_players']}).**")
     embed = discord.Embed(
-        title="🔒 GRUPPE VOLL" if full else "🎉 TERMIN GEFUNDEN",
+        # Der Titel ist der Event-Titel, nicht der Status — der steht in der
+        # ersten Description-Zeile und in der Farbe.
+        title=f"{'🔒' if full else '🎉'} {lfg['title']}",
         description="\n".join(lines),
         color=discord.Color.red() if full else discord.Color.green())
     embed.set_footer(text=f"LFG #{lfg['id']}")
