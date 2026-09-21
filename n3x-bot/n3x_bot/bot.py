@@ -60,6 +60,10 @@ from n3x_bot.storage.base import GATE_TYPES, StatsRepository
 from n3x_bot.timers import (
     register_timer_commands, start_timer_overview_loop, update_timer_overview,
 )
+from n3x_bot.lfg import (
+    register_lfg_commands, restore_lfg_views, start_lfg_cleanup_loop,
+    update_lfg_help,
+)
 from n3x_bot.welcome import register_welcome_commands, send_welcome_card
 
 log = logging.getLogger("N3X-Bot")
@@ -147,6 +151,7 @@ def build_bot(settings: Settings, repo: StatsRepository) -> commands.Bot:
     register_event_commands(bot, repo, settings)
     register_welcome_commands(bot, settings)
     register_timer_commands(bot, repo, settings)
+    register_lfg_commands(bot, repo, settings)
     return bot
 
 
@@ -409,6 +414,7 @@ _COMMAND_DESCRIPTIONS: dict[str, str] = {
     "del": "Löscht einen Gate-Eintrag (Rolle erforderlich).",
     "gate verlauf": "Zeigt den Gate-Kostenverlauf als Diagramm.",
     "base": "Startet einen Base-Timer.",
+    "lfg": "Erstellt eine LFG-Gruppensuche (nur im LFG-Channel).",
     "basestop": "Stoppt einen Base-Timer.",
     "kodex": "Sendet den Kodex an alle Mitglieder (Admin).",
     "kodex_check": "Prüft die Kodex-Bestätigungen (Admin).",
@@ -430,6 +436,7 @@ _COMMAND_CATEGORIES: list[tuple[str, str, str]] = [
     ("achievements", "🏆", "Achievements"),
     ("activity", "🎙️", "Aktivität"),
     ("timers", "⏱️", "Base Timers"),
+    ("lfg", "🔎", "LFG"),
     ("fun", "🎮", "Fun & Zähler"),
     ("admin", "⚙️", "Admin & Verwaltung"),
 ]
@@ -442,6 +449,7 @@ _TOP_LEVEL_CATEGORY: dict[str, str] = {
     "achievement": "achievements",
     "activity": "activity", "event": "activity",
     "base": "timers", "basestop": "timers",
+    "lfg": "lfg",
     "rank": "fun",
     # Admin-gated management + operational commands — hidden behind the
     # admin-only reveal button, not shown on the public list.
@@ -456,6 +464,7 @@ _COMMAND_EMOJI: dict[str, str] = {
     "erfolge": "🎖️", "overview": "🏅", "sync_achievements": "🔄",
     "achievement": "🧩", "activity": "📊", "event": "🔔",
     "base": "▶️", "basestop": "⏹️",
+    "lfg": "🔎",
     "kodex": "📜", "kodex_check": "✅", "sync_welcome": "👋", "rank": "🥇",
     "admin": "🛠️", "config": "⚙️", "content": "📝", "backfill_history": "🕓",
 }
@@ -1367,6 +1376,15 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
         if not voice_flush_task.is_running():
             voice_flush_task.start()
         start_timer_overview_loop(bot, repo, settings)
+        try:
+            await restore_lfg_views(bot, repo, settings)
+        except Exception:
+            log.exception("lfg view restore failed")
+        try:
+            await update_lfg_help(bot, repo, settings)
+        except Exception:
+            log.exception("lfg help update failed")
+        start_lfg_cleanup_loop(bot, repo, settings)
         if bot.runtime_config.gate_stats_channel_id:
             await update_gate_stats_embed(bot, repo, settings)
         try:

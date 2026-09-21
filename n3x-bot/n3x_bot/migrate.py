@@ -31,6 +31,7 @@ _DATA_TABLES = (
     "color_config",
     "achievement_defs",
     "gate_pending",
+    "lfg_posts", "lfg_availability", "lfg_participants",
 )
 
 

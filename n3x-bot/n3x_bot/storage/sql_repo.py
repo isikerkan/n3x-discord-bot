@@ -926,6 +926,169 @@ class SqlRepository(StatsRepository):
                                    .where(sc.base_timers.c.map_name.in_(removed)))
             return removed
 
+    # ── lfg ───────────────────────────────────────────────────────────────
+    @staticmethod
+    def _lfg_row(r) -> dict:
+        return {"id": int(r.id), "creator_id": int(r.creator_id),
+                "title": r.title, "event_date": r.event_date,
+                "min_players": int(r.min_players),
+                "max_players": int(r.max_players),
+                "start_times": json.loads(r.start_times) if r.start_times else [],
+                "confirmed_time": r.confirmed_time, "status": r.status,
+                "channel_id": int(r.channel_id),
+                "message_id": int(r.message_id) if r.message_id else None,
+                "created_at": _as_aware_utc(r.created_at),
+                "event_at": _as_aware_utc(r.event_at),
+                "cleanup_at": _as_aware_utc(r.cleanup_at)}
+
+    async def create_lfg(self, *, creator_id, title, event_date, min_players,
+                         max_players, start_times, status, channel_id,
+                         created_at, cleanup_at):
+        async with self.engine.begin() as conn:
+            result = await conn.execute(insert(sc.lfg_posts).values(
+                creator_id=creator_id, title=title, event_date=event_date,
+                min_players=min_players, max_players=max_players,
+                start_times=json.dumps(list(start_times)), status=status,
+                channel_id=channel_id,
+                created_at=_as_aware_utc(created_at).astimezone(timezone.utc),
+                cleanup_at=_as_aware_utc(cleanup_at).astimezone(timezone.utc)))
+            return int(result.inserted_primary_key[0])
+
+    async def get_lfg(self, lfg_id):
+        async with self.engine.connect() as conn:
+            r = (await conn.execute(select(sc.lfg_posts)
+                 .where(sc.lfg_posts.c.id == lfg_id))).one_or_none()
+            return self._lfg_row(r) if r else None
+
+    async def get_lfg_by_message(self, message_id):
+        async with self.engine.connect() as conn:
+            r = (await conn.execute(select(sc.lfg_posts)
+                 .where(sc.lfg_posts.c.message_id == message_id))).one_or_none()
+            return self._lfg_row(r) if r else None
+
+    async def set_lfg_message(self, lfg_id, message_id, channel_id):
+        async with self.engine.begin() as conn:
+            await conn.execute(update(sc.lfg_posts)
+                               .where(sc.lfg_posts.c.id == lfg_id)
+                               .values(message_id=message_id,
+                                       channel_id=channel_id))
+
+    async def set_lfg_status(self, lfg_id, status):
+        async with self.engine.begin() as conn:
+            await conn.execute(update(sc.lfg_posts)
+                               .where(sc.lfg_posts.c.id == lfg_id)
+                               .values(status=status))
+
+    async def set_lfg_availability(self, lfg_id, discord_id, start_times):
+        async with self.engine.begin() as conn:
+            await conn.execute(delete(sc.lfg_availability).where(and_(
+                sc.lfg_availability.c.lfg_id == lfg_id,
+                sc.lfg_availability.c.discord_id == discord_id)))
+            for start_time in dict.fromkeys(start_times):
+                await conn.execute(insert(sc.lfg_availability).values(
+                    lfg_id=lfg_id, discord_id=discord_id,
+                    start_time=start_time))
+
+    async def get_lfg_availability(self, lfg_id):
+        async with self.engine.connect() as conn:
+            rows = await conn.execute(
+                select(sc.lfg_availability.c.start_time,
+                       sc.lfg_availability.c.discord_id)
+                .where(sc.lfg_availability.c.lfg_id == lfg_id))
+            out: dict[str, list[int]] = {}
+            for start_time, discord_id in rows:
+                out.setdefault(start_time, []).append(int(discord_id))
+        return {t: sorted(ids) for t, ids in out.items()}
+
+    async def confirm_lfg(self, lfg_id, *, start_time, event_at, cleanup_at,
+                          status, participants, joined_at, expect_status):
+        async with self.engine.begin() as conn:
+            # Compare-and-swap on the status: the WHERE clause is what makes a
+            # second concurrent confirm a no-op instead of a second date.
+            result = await conn.execute(
+                update(sc.lfg_posts)
+                .where(and_(sc.lfg_posts.c.id == lfg_id,
+                            sc.lfg_posts.c.status == expect_status))
+                .values(status=status, confirmed_time=start_time,
+                        event_at=_as_aware_utc(event_at).astimezone(timezone.utc),
+                        cleanup_at=_as_aware_utc(cleanup_at).astimezone(timezone.utc)))
+            if result.rowcount != 1:
+                return False
+            stamp = _as_aware_utc(joined_at).astimezone(timezone.utc)
+            for discord_id in dict.fromkeys(participants):
+                await conn.execute(insert(sc.lfg_participants).values(
+                    lfg_id=lfg_id, discord_id=discord_id, joined_at=stamp))
+            return True
+
+    async def add_lfg_participant(self, lfg_id, discord_id, joined_at, *,
+                                  max_players):
+        async with self.engine.begin() as conn:
+            existing = (await conn.execute(
+                select(sc.lfg_participants.c.discord_id)
+                .where(sc.lfg_participants.c.lfg_id == lfg_id))).all()
+            ids = {int(r[0]) for r in existing}
+            if discord_id in ids:
+                return "already"
+            if len(ids) >= max_players:
+                return "full"
+            await conn.execute(insert(sc.lfg_participants).values(
+                lfg_id=lfg_id, discord_id=discord_id,
+                joined_at=_as_aware_utc(joined_at).astimezone(timezone.utc)))
+            return "added"
+
+    async def remove_lfg_participant(self, lfg_id, discord_id):
+        async with self.engine.begin() as conn:
+            exists = (await conn.execute(
+                select(sc.lfg_participants.c.discord_id).where(and_(
+                    sc.lfg_participants.c.lfg_id == lfg_id,
+                    sc.lfg_participants.c.discord_id == discord_id)))
+            ).one_or_none()
+            if exists is None:
+                return False
+            await conn.execute(delete(sc.lfg_participants).where(and_(
+                sc.lfg_participants.c.lfg_id == lfg_id,
+                sc.lfg_participants.c.discord_id == discord_id)))
+            return True
+
+    async def get_lfg_participants(self, lfg_id):
+        async with self.engine.connect() as conn:
+            rows = await conn.execute(
+                select(sc.lfg_participants.c.discord_id)
+                .where(sc.lfg_participants.c.lfg_id == lfg_id)
+                .order_by(sc.lfg_participants.c.joined_at.asc(),
+                          sc.lfg_participants.c.discord_id.asc()))
+            return [int(r[0]) for r in rows]
+
+    async def lfg_due_for_cleanup(self, now):
+        threshold = _as_aware_utc(now)
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(select(sc.lfg_posts))).all()
+        return [self._lfg_row(r) for r in rows
+                if r.status != "EXPIRED"
+                and _as_aware_utc(r.cleanup_at) is not None
+                and _as_aware_utc(r.cleanup_at) <= threshold]
+
+    async def all_active_lfgs(self):
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(select(sc.lfg_posts)
+                    .order_by(sc.lfg_posts.c.id.asc()))).all()
+        return [self._lfg_row(r) for r in rows
+                if r.status not in ("EXPIRED", "CANCELLED")]
+
+    async def delete_lfg(self, lfg_id):
+        async with self.engine.begin() as conn:
+            exists = (await conn.execute(select(sc.lfg_posts.c.id)
+                      .where(sc.lfg_posts.c.id == lfg_id))).one_or_none()
+            if exists is None:
+                return False
+            await conn.execute(delete(sc.lfg_availability)
+                               .where(sc.lfg_availability.c.lfg_id == lfg_id))
+            await conn.execute(delete(sc.lfg_participants)
+                               .where(sc.lfg_participants.c.lfg_id == lfg_id))
+            await conn.execute(delete(sc.lfg_posts)
+                               .where(sc.lfg_posts.c.id == lfg_id))
+            return True
+
     # ── bulk export / import ───────────────────────────────────────────────
     @staticmethod
     def _dt(dt: datetime | None) -> str | None:
@@ -1043,9 +1206,35 @@ class SqlRepository(StatsRepository):
                        "secret": bool(r.secret), "color": r.color}
                 for r in await conn.execute(select(sc.achievement_defs))
             }
+            lfg_posts = [
+                {"id": int(r.id), "creator_id": int(r.creator_id),
+                 "title": r.title, "event_date": r.event_date,
+                 "min_players": int(r.min_players),
+                 "max_players": int(r.max_players),
+                 "start_times": json.loads(r.start_times) if r.start_times else [],
+                 "confirmed_time": r.confirmed_time, "status": r.status,
+                 "channel_id": int(r.channel_id),
+                 "message_id": int(r.message_id) if r.message_id else None,
+                 "created_at": self._dt(r.created_at),
+                 "event_at": self._dt(r.event_at),
+                 "cleanup_at": self._dt(r.cleanup_at)}
+                for r in await conn.execute(
+                    select(sc.lfg_posts).order_by(sc.lfg_posts.c.id.asc()))
+            ]
+            lfg_availability = [
+                {"lfg_id": int(r.lfg_id), "discord_id": int(r.discord_id),
+                 "start_time": r.start_time}
+                for r in await conn.execute(select(sc.lfg_availability))
+            ]
+            lfg_participants = [
+                {"lfg_id": int(r.lfg_id), "discord_id": int(r.discord_id),
+                 "joined_at": self._dt(r.joined_at)}
+                for r in await conn.execute(select(sc.lfg_participants))
+            ]
             seq = {}
             for key, table in (("user", sc.users), ("message", sc.messages),
-                               ("stat", sc.stats), ("gate", sc.gate_entries)):
+                               ("stat", sc.stats), ("gate", sc.gate_entries),
+                               ("lfg", sc.lfg_posts)):
                 m = (await conn.execute(select(func.max(table.c.id)))).scalar()
                 seq[key] = m or 0
         return {
@@ -1063,6 +1252,9 @@ class SqlRepository(StatsRepository):
             "content_texts": content_texts,
             "color_config": color_config,
             "achievement_defs": achievement_defs,
+            "lfg_posts": lfg_posts,
+            "lfg_availability": lfg_availability,
+            "lfg_participants": lfg_participants,
             "seq": seq,
         }
 
@@ -1156,9 +1348,29 @@ class SqlRepository(StatsRepository):
                     id=aid, category=v["category"], metric=v["metric"],
                     threshold=v["threshold"], title=v["title"],
                     secret=v["secret"], color=v.get("color")))
+            for r in snapshot.get("lfg_posts", []):
+                await conn.execute(insert(sc.lfg_posts).values(
+                    id=r["id"], creator_id=r["creator_id"], title=r["title"],
+                    event_date=r["event_date"],
+                    min_players=r["min_players"], max_players=r["max_players"],
+                    start_times=json.dumps(list(r.get("start_times") or [])),
+                    confirmed_time=r.get("confirmed_time"), status=r["status"],
+                    channel_id=r["channel_id"], message_id=r.get("message_id"),
+                    created_at=_as_aware_utc(_parse_dt(r["created_at"])),
+                    event_at=_as_aware_utc(_parse_dt(r.get("event_at"))),
+                    cleanup_at=_as_aware_utc(_parse_dt(r["cleanup_at"]))))
+            for r in snapshot.get("lfg_availability", []):
+                await conn.execute(insert(sc.lfg_availability).values(
+                    lfg_id=r["lfg_id"], discord_id=r["discord_id"],
+                    start_time=r["start_time"]))
+            for r in snapshot.get("lfg_participants", []):
+                await conn.execute(insert(sc.lfg_participants).values(
+                    lfg_id=r["lfg_id"], discord_id=r["discord_id"],
+                    joined_at=_as_aware_utc(_parse_dt(r["joined_at"]))))
             if self.engine.dialect.name == "postgresql":
                 for tbl, key in (("users", "user"), ("messages", "message"),
-                                 ("stats", "stat"), ("gate_entries", "gate")):
+                                 ("stats", "stat"), ("gate_entries", "gate"),
+                                 ("lfg_posts", "lfg")):
                     if snapshot["seq"].get(key, 0) > 0:
                         await conn.execute(
                             text("SELECT setval(pg_get_serial_sequence(:t, 'id'), :v)"),
@@ -1174,6 +1386,8 @@ class SqlRepository(StatsRepository):
                           sc.kodex_confirmations, sc.kodex_messages,
                           sc.base_timers, sc.channel_messages,
                           sc.gate_pending,
+                          sc.lfg_availability, sc.lfg_participants,
+                          sc.lfg_posts,
                           sc.runtime_config, sc.content_texts,
                           sc.color_config,
                           sc.achievement_defs):

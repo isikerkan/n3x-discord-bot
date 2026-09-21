@@ -23,6 +23,12 @@ def _as_aware_utc(dt):
     return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
 
 
+def _iso(dt):
+    """Store a datetime as aware-UTC ISO text (mirrors SqlRepository._dt)."""
+    aware = _as_aware_utc(dt)
+    return aware.astimezone(timezone.utc).isoformat() if aware else None
+
+
 def _drops_of(row) -> dict:
     d = row.get("drops")
     if d:
@@ -39,7 +45,7 @@ class JsonRepository(StatsRepository):
     # ── lifecycle / persistence ────────────────────────────────────────────
     def _empty(self) -> dict:
         return {
-            "seq": {"user": 0, "message": 0, "stat": 0, "gate": 0},
+            "seq": {"user": 0, "message": 0, "stat": 0, "gate": 0, "lfg": 0},
             "users": [], "messages": [], "stats": [],
             "user_stats": {}, "stat_totals": {}, "stat_last_post": {},
             "target_stats": {}, "gate_entries": [],
@@ -54,6 +60,9 @@ class JsonRepository(StatsRepository):
             "content_texts": {},
             "color_config": {},
             "achievement_defs": {},
+            "lfg_posts": [],
+            "lfg_availability": [],
+            "lfg_participants": [],
         }
 
     async def connect(self) -> None:
@@ -663,6 +672,164 @@ class JsonRepository(StatsRepository):
         return removed
 
     # ── bulk export / import ───────────────────────────────────────────────
+    # ── lfg ───────────────────────────────────────────────────────────────
+    @staticmethod
+    def _lfg_row(row) -> dict:
+        return {"id": int(row["id"]), "creator_id": int(row["creator_id"]),
+                "title": row["title"], "event_date": row["event_date"],
+                "min_players": int(row["min_players"]),
+                "max_players": int(row["max_players"]),
+                "start_times": list(row.get("start_times") or []),
+                "confirmed_time": row.get("confirmed_time"),
+                "status": row["status"], "channel_id": int(row["channel_id"]),
+                "message_id": (int(row["message_id"])
+                               if row.get("message_id") else None),
+                "created_at": _as_aware_utc(_parse_dt(row["created_at"])),
+                "event_at": _as_aware_utc(_parse_dt(row.get("event_at"))),
+                "cleanup_at": _as_aware_utc(_parse_dt(row["cleanup_at"]))}
+
+    def _lfg(self, lfg_id):
+        for row in self._db["lfg_posts"]:
+            if int(row["id"]) == int(lfg_id):
+                return row
+        return None
+
+    async def create_lfg(self, *, creator_id, title, event_date, min_players,
+                         max_players, start_times, status, channel_id,
+                         created_at, cleanup_at):
+        self._db["seq"]["lfg"] = self._db["seq"].get("lfg", 0) + 1
+        lfg_id = self._db["seq"]["lfg"]
+        self._db["lfg_posts"].append({
+            "id": lfg_id, "creator_id": creator_id, "title": title,
+            "event_date": event_date, "min_players": min_players,
+            "max_players": max_players, "start_times": list(start_times),
+            "confirmed_time": None, "status": status,
+            "channel_id": channel_id, "message_id": None,
+            "created_at": _iso(created_at), "event_at": None,
+            "cleanup_at": _iso(cleanup_at)})
+        self._flush()
+        return lfg_id
+
+    async def get_lfg(self, lfg_id):
+        row = self._lfg(lfg_id)
+        return None if row is None else self._lfg_row(row)
+
+    async def get_lfg_by_message(self, message_id):
+        for row in self._db["lfg_posts"]:
+            if row.get("message_id") and int(row["message_id"]) == int(message_id):
+                return self._lfg_row(row)
+        return None
+
+    async def set_lfg_message(self, lfg_id, message_id, channel_id):
+        row = self._lfg(lfg_id)
+        if row is not None:
+            row["message_id"] = message_id
+            row["channel_id"] = channel_id
+            self._flush()
+
+    async def set_lfg_status(self, lfg_id, status):
+        row = self._lfg(lfg_id)
+        if row is not None:
+            row["status"] = status
+            self._flush()
+
+    async def set_lfg_availability(self, lfg_id, discord_id, start_times):
+        self._db["lfg_availability"] = [
+            r for r in self._db["lfg_availability"]
+            if not (int(r["lfg_id"]) == int(lfg_id)
+                    and int(r["discord_id"]) == int(discord_id))]
+        for start_time in dict.fromkeys(start_times):
+            self._db["lfg_availability"].append(
+                {"lfg_id": int(lfg_id), "discord_id": int(discord_id),
+                 "start_time": start_time})
+        self._flush()
+
+    async def get_lfg_availability(self, lfg_id):
+        out: dict[str, list[int]] = {}
+        for r in self._db["lfg_availability"]:
+            if int(r["lfg_id"]) == int(lfg_id):
+                out.setdefault(r["start_time"], []).append(int(r["discord_id"]))
+        return {t: sorted(ids) for t, ids in out.items()}
+
+    async def confirm_lfg(self, lfg_id, *, start_time, event_at, cleanup_at,
+                          status, participants, joined_at, expect_status):
+        row = self._lfg(lfg_id)
+        # Same compare-and-swap as the SQL backend. There is no await between
+        # the check and the write, so on single-threaded asyncio this is
+        # atomic against a concurrent interaction.
+        if row is None or row["status"] != expect_status:
+            return False
+        row["status"] = status
+        row["confirmed_time"] = start_time
+        row["event_at"] = _iso(event_at)
+        row["cleanup_at"] = _iso(cleanup_at)
+        for discord_id in dict.fromkeys(participants):
+            self._db["lfg_participants"].append(
+                {"lfg_id": int(lfg_id), "discord_id": int(discord_id),
+                 "joined_at": _iso(joined_at)})
+        self._flush()
+        return True
+
+    async def add_lfg_participant(self, lfg_id, discord_id, joined_at, *,
+                                  max_players):
+        current = [r for r in self._db["lfg_participants"]
+                   if int(r["lfg_id"]) == int(lfg_id)]
+        if any(int(r["discord_id"]) == int(discord_id) for r in current):
+            return "already"
+        if len(current) >= max_players:
+            return "full"
+        self._db["lfg_participants"].append(
+            {"lfg_id": int(lfg_id), "discord_id": int(discord_id),
+             "joined_at": _iso(joined_at)})
+        self._flush()
+        return "added"
+
+    async def remove_lfg_participant(self, lfg_id, discord_id):
+        before = len(self._db["lfg_participants"])
+        self._db["lfg_participants"] = [
+            r for r in self._db["lfg_participants"]
+            if not (int(r["lfg_id"]) == int(lfg_id)
+                    and int(r["discord_id"]) == int(discord_id))]
+        removed = len(self._db["lfg_participants"]) != before
+        if removed:
+            self._flush()
+        return removed
+
+    async def get_lfg_participants(self, lfg_id):
+        rows = [r for r in self._db["lfg_participants"]
+                if int(r["lfg_id"]) == int(lfg_id)]
+        rows.sort(key=lambda r: (r["joined_at"] or "", int(r["discord_id"])))
+        return [int(r["discord_id"]) for r in rows]
+
+    async def lfg_due_for_cleanup(self, now):
+        due = []
+        for row in self._db["lfg_posts"]:
+            if row["status"] == "EXPIRED":
+                continue
+            deadline = _as_aware_utc(_parse_dt(row.get("cleanup_at")))
+            if deadline is not None and deadline <= now:
+                due.append(self._lfg_row(row))
+        return due
+
+    async def all_active_lfgs(self):
+        return [self._lfg_row(r) for r in
+                sorted(self._db["lfg_posts"], key=lambda r: int(r["id"]))
+                if r["status"] not in ("EXPIRED", "CANCELLED")]
+
+    async def delete_lfg(self, lfg_id):
+        if self._lfg(lfg_id) is None:
+            return False
+        self._db["lfg_posts"] = [r for r in self._db["lfg_posts"]
+                                 if int(r["id"]) != int(lfg_id)]
+        self._db["lfg_availability"] = [
+            r for r in self._db["lfg_availability"]
+            if int(r["lfg_id"]) != int(lfg_id)]
+        self._db["lfg_participants"] = [
+            r for r in self._db["lfg_participants"]
+            if int(r["lfg_id"]) != int(lfg_id)]
+        self._flush()
+        return True
+
     @staticmethod
     def _max_id(rows) -> int:
         return max((r["id"] for r in rows), default=0)
@@ -705,11 +872,15 @@ class JsonRepository(StatsRepository):
             "content_texts": copy.deepcopy(self._db["content_texts"]),
             "color_config": copy.deepcopy(self._db["color_config"]),
             "achievement_defs": copy.deepcopy(self._db["achievement_defs"]),
+            "lfg_posts": copy.deepcopy(self._db["lfg_posts"]),
+            "lfg_availability": copy.deepcopy(self._db["lfg_availability"]),
+            "lfg_participants": copy.deepcopy(self._db["lfg_participants"]),
             "seq": {
                 "user": self._max_id(users),
                 "message": self._max_id(messages),
                 "stat": self._max_id(stats),
                 "gate": self._max_id(gate_entries),
+                "lfg": self._max_id(self._db["lfg_posts"]),
             },
         }
 
@@ -743,6 +914,11 @@ class JsonRepository(StatsRepository):
             snapshot.get("color_config", {}))
         self._db["achievement_defs"] = copy.deepcopy(
             snapshot.get("achievement_defs", {}))
+        self._db["lfg_posts"] = copy.deepcopy(snapshot.get("lfg_posts", []))
+        self._db["lfg_availability"] = copy.deepcopy(
+            snapshot.get("lfg_availability", []))
+        self._db["lfg_participants"] = copy.deepcopy(
+            snapshot.get("lfg_participants", []))
         self._db["seq"] = dict(snapshot["seq"])
         self._flush()
 

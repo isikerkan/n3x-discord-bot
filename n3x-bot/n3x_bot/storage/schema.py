@@ -180,3 +180,46 @@ gate_pending = Table(
     Column("username", String(100), nullable=False),
     Column("options", Text, nullable=True),
 )
+
+# ── LFG (Looking For Group) ────────────────────────────────────────────────
+# User-created group-finding posts, independent of any activity/quest catalog.
+# `start_times` is a JSON list of "HH:MM" strings (same Text-as-JSON convention
+# as `gate_pending.options`). `cleanup_at` is the DURABLE expiry deadline the
+# cleanup loop reconciles against — keeping it in the row (rather than in an
+# in-process timer) is what makes cleanup survive a restart.
+lfg_posts = Table(
+    "lfg_posts", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("creator_id", BigInteger, nullable=False),
+    Column("title", String(100), nullable=False),
+    Column("event_date", String(10), nullable=False),      # YYYY-MM-DD
+    Column("min_players", Integer, nullable=False),
+    Column("max_players", Integer, nullable=False),
+    Column("start_times", Text, nullable=False),           # JSON ["HH:MM", ...]
+    Column("confirmed_time", String(5), nullable=True),    # "HH:MM" once fixed
+    Column("status", String(20), nullable=False),
+    Column("channel_id", BigInteger, nullable=False),
+    Column("message_id", BigInteger, nullable=True),       # set after posting
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("event_at", DateTime(timezone=True), nullable=True),
+    Column("cleanup_at", DateTime(timezone=True), nullable=False),
+)
+
+# Who is available for which start time. Replace-set per (lfg, user): a user
+# changing their selection clears their rows and re-inserts.
+lfg_availability = Table(
+    "lfg_availability", metadata,
+    Column("lfg_id", Integer, ForeignKey("lfg_posts.id"), primary_key=True),
+    Column("discord_id", BigInteger, primary_key=True),
+    Column("start_time", String(5), primary_key=True),
+)
+
+# The actual roster. Deliberately NOT derived from `lfg_availability`: after a
+# time is confirmed, people join and leave who never declared availability, so
+# the two sets diverge.
+lfg_participants = Table(
+    "lfg_participants", metadata,
+    Column("lfg_id", Integer, ForeignKey("lfg_posts.id"), primary_key=True),
+    Column("discord_id", BigInteger, primary_key=True),
+    Column("joined_at", DateTime(timezone=True), nullable=False),
+)

@@ -420,6 +420,100 @@ class StatsRepository(ABC):
         """Delete timers with `end_time <= now`; return the removed map names."""
         ...
 
+    # lfg
+    @abstractmethod
+    async def create_lfg(self, *, creator_id: int, title: str, event_date: str,
+                         min_players: int, max_players: int,
+                         start_times: list[str], status: str, channel_id: int,
+                         created_at: datetime, cleanup_at: datetime) -> int:
+        """Insert an LFG post and return its new id.
+
+        `event_date` is `YYYY-MM-DD`; `start_times` is a list of `"HH:MM"`
+        stored as JSON text. `cleanup_at` is tz-aware and durable, so expiry
+        survives a restart. No participants are created — the creator is NOT
+        automatically a participant.
+        """
+        ...
+    @abstractmethod
+    async def get_lfg(self, lfg_id: int) -> dict | None:
+        """The LFG row as a dict, or None. `start_times` comes back as a list;
+        `created_at`/`event_at`/`cleanup_at` as tz-aware datetimes."""
+        ...
+    @abstractmethod
+    async def get_lfg_by_message(self, message_id: int) -> dict | None:
+        """The LFG owning `message_id`, or None. This is how a persistent view
+        resolves which LFG an interaction belongs to."""
+        ...
+    @abstractmethod
+    async def set_lfg_message(self, lfg_id: int, message_id: int,
+                              channel_id: int) -> None:
+        """Attach the posted Discord message to the LFG."""
+        ...
+    @abstractmethod
+    async def set_lfg_status(self, lfg_id: int, status: str) -> None:
+        """Overwrite the status (e.g. CONFIRMED <-> FULL, or EXPIRED)."""
+        ...
+    @abstractmethod
+    async def set_lfg_availability(self, lfg_id: int, discord_id: int,
+                                   start_times: list[str]) -> None:
+        """Replace this user's availability for the LFG with `start_times`.
+
+        Replace-set semantics: an empty list removes the user's availability
+        entirely.
+        """
+        ...
+    @abstractmethod
+    async def get_lfg_availability(self, lfg_id: int) -> dict[str, list[int]]:
+        """`{start_time: [discord_id, ...]}`, user ids ascending. Times with
+        nobody available are absent."""
+        ...
+    @abstractmethod
+    async def confirm_lfg(self, lfg_id: int, *, start_time: str,
+                          event_at: datetime, cleanup_at: datetime,
+                          status: str, participants: list[int],
+                          joined_at: datetime, expect_status: str) -> bool:
+        """Atomically fix `start_time` as THE date, if still at `expect_status`.
+
+        Compare-and-swap: the status guard means exactly one caller wins even
+        when two interactions race, so an LFG can never get a second confirmed
+        time. `expect_status` is passed in rather than hardcoded so the storage
+        layer carries no LFG status semantics. Returns True for the winner
+        (participants inserted), False for a loser (nothing written).
+        """
+        ...
+    @abstractmethod
+    async def add_lfg_participant(self, lfg_id: int, discord_id: int,
+                                  joined_at: datetime, *,
+                                  max_players: int) -> str:
+        """Join the roster. Capacity is enforced inside the transaction.
+
+        Returns `"added"`, `"already"` (already on the roster) or `"full"`
+        (roster already at `max_players`) — never exceeding the maximum.
+        """
+        ...
+    @abstractmethod
+    async def remove_lfg_participant(self, lfg_id: int,
+                                     discord_id: int) -> bool:
+        """Leave the roster; True if the user was on it."""
+        ...
+    @abstractmethod
+    async def get_lfg_participants(self, lfg_id: int) -> list[int]:
+        """Roster discord ids, in join order."""
+        ...
+    @abstractmethod
+    async def lfg_due_for_cleanup(self, now: datetime) -> list[dict]:
+        """LFG rows with `cleanup_at <= now` that are not yet EXPIRED."""
+        ...
+    @abstractmethod
+    async def all_active_lfgs(self) -> list[dict]:
+        """Every LFG not yet EXPIRED/CANCELLED — used to re-arm views on boot."""
+        ...
+    @abstractmethod
+    async def delete_lfg(self, lfg_id: int) -> bool:
+        """Delete the LFG and its availability/participant rows; True if it
+        existed. Not used by the default cleanup, which keeps history."""
+        ...
+
     # bulk export / import
     @abstractmethod
     async def export_all(self) -> dict:
