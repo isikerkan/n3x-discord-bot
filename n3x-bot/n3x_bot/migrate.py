@@ -32,6 +32,7 @@ _DATA_TABLES = (
     "achievement_defs",
     "gate_pending",
     "lfg_posts", "lfg_availability", "lfg_participants",
+    "gf_settings", "gf_zones", "gf_members",
 )
 
 

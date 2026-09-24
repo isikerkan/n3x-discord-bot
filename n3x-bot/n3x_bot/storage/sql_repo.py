@@ -1092,6 +1092,83 @@ class SqlRepository(StatsRepository):
                                .where(sc.lfg_posts.c.id == lfg_id))
             return True
 
+    # ── group finder: settings / zones / member zones ─────────────────────
+    async def gf_get_setting(self, key):
+        async with self.engine.connect() as conn:
+            r = (await conn.execute(select(sc.gf_settings.c.value)
+                 .where(sc.gf_settings.c.key == key))).one_or_none()
+            return r.value if r else None
+
+    async def gf_set_setting(self, key, value):
+        async with self.engine.begin() as conn:
+            await self._upsert(conn, sc.gf_settings, {"key": key},
+                               {"value": value})
+
+    @staticmethod
+    def _gf_zone_row(r) -> dict:
+        return {"zone": r.zone,
+                "role_id": int(r.role_id) if r.role_id else None,
+                "channel_id": int(r.channel_id) if r.channel_id else None,
+                "status": r.status,
+                "created_at": _as_aware_utc(r.created_at),
+                "updated_at": _as_aware_utc(r.updated_at),
+                "deactivated_at": _as_aware_utc(r.deactivated_at)}
+
+    async def gf_get_zone(self, zone):
+        async with self.engine.connect() as conn:
+            r = (await conn.execute(select(sc.gf_zones)
+                 .where(sc.gf_zones.c.zone == zone))).one_or_none()
+            return self._gf_zone_row(r) if r else None
+
+    async def gf_all_zones(self):
+        async with self.engine.connect() as conn:
+            rows = await conn.execute(select(sc.gf_zones)
+                                      .order_by(sc.gf_zones.c.zone.asc()))
+            return [self._gf_zone_row(r) for r in rows]
+
+    async def gf_zone_by_channel(self, channel_id):
+        async with self.engine.connect() as conn:
+            r = (await conn.execute(select(sc.gf_zones)
+                 .where(sc.gf_zones.c.channel_id == channel_id))).first()
+            return self._gf_zone_row(r) if r else None
+
+    async def gf_save_zone(self, zone, *, role_id, channel_id, status, now):
+        stamp = _as_aware_utc(now).astimezone(timezone.utc)
+        async with self.engine.begin() as conn:
+            exists = (await conn.execute(select(sc.gf_zones.c.zone)
+                      .where(sc.gf_zones.c.zone == zone))).one_or_none()
+            values = {"role_id": role_id, "channel_id": channel_id,
+                      "status": status, "updated_at": stamp,
+                      "deactivated_at": stamp if status == "DEACTIVATED" else None}
+            if exists is None:
+                await conn.execute(insert(sc.gf_zones).values(
+                    zone=zone, created_at=stamp, **values))
+            else:
+                await conn.execute(update(sc.gf_zones)
+                                   .where(sc.gf_zones.c.zone == zone)
+                                   .values(**values))
+
+    async def gf_set_member_zone(self, discord_id, zone, now):
+        stamp = _as_aware_utc(now).astimezone(timezone.utc)
+        async with self.engine.begin() as conn:
+            await self._upsert(conn, sc.gf_members, {"discord_id": discord_id},
+                               {"zone": zone, "updated_at": stamp})
+
+    async def gf_get_member_zone(self, discord_id):
+        async with self.engine.connect() as conn:
+            r = (await conn.execute(select(sc.gf_members.c.zone)
+                 .where(sc.gf_members.c.discord_id == discord_id))).one_or_none()
+            return r.zone if r else None
+
+    async def gf_clear_zone_members(self, zone):
+        async with self.engine.begin() as conn:
+            ids = [int(r[0]) for r in await conn.execute(
+                select(sc.gf_members.c.discord_id)
+                .where(sc.gf_members.c.zone == zone))]
+            await conn.execute(delete(sc.gf_members)
+                               .where(sc.gf_members.c.zone == zone))
+            return sorted(ids)
+
     # ── bulk export / import ───────────────────────────────────────────────
     @staticmethod
     def _dt(dt: datetime | None) -> str | None:
@@ -1234,6 +1311,24 @@ class SqlRepository(StatsRepository):
                  "joined_at": self._dt(r.joined_at)}
                 for r in await conn.execute(select(sc.lfg_participants))
             ]
+            gf_settings = {
+                r.key: r.value
+                for r in await conn.execute(select(sc.gf_settings))
+            }
+            gf_zones = {
+                r.zone: {"role_id": int(r.role_id) if r.role_id else None,
+                         "channel_id": int(r.channel_id) if r.channel_id else None,
+                         "status": r.status,
+                         "created_at": self._dt(r.created_at),
+                         "updated_at": self._dt(r.updated_at),
+                         "deactivated_at": self._dt(r.deactivated_at)}
+                for r in await conn.execute(select(sc.gf_zones))
+            }
+            gf_members = {
+                str(r.discord_id): {"zone": r.zone,
+                                    "updated_at": self._dt(r.updated_at)}
+                for r in await conn.execute(select(sc.gf_members))
+            }
             seq = {}
             for key, table in (("user", sc.users), ("message", sc.messages),
                                ("stat", sc.stats), ("gate", sc.gate_entries),
@@ -1258,6 +1353,9 @@ class SqlRepository(StatsRepository):
             "lfg_posts": lfg_posts,
             "lfg_availability": lfg_availability,
             "lfg_participants": lfg_participants,
+            "gf_settings": gf_settings,
+            "gf_zones": gf_zones,
+            "gf_members": gf_members,
             "seq": seq,
         }
 
@@ -1370,6 +1468,20 @@ class SqlRepository(StatsRepository):
                 await conn.execute(insert(sc.lfg_participants).values(
                     lfg_id=r["lfg_id"], discord_id=r["discord_id"],
                     joined_at=_as_aware_utc(_parse_dt(r["joined_at"]))))
+            for key, value in snapshot.get("gf_settings", {}).items():
+                await conn.execute(insert(sc.gf_settings).values(
+                    key=key, value=value))
+            for zone, v in snapshot.get("gf_zones", {}).items():
+                await conn.execute(insert(sc.gf_zones).values(
+                    zone=zone, role_id=v.get("role_id"),
+                    channel_id=v.get("channel_id"), status=v["status"],
+                    created_at=_as_aware_utc(_parse_dt(v["created_at"])),
+                    updated_at=_as_aware_utc(_parse_dt(v["updated_at"])),
+                    deactivated_at=_as_aware_utc(_parse_dt(v.get("deactivated_at")))))
+            for did, v in snapshot.get("gf_members", {}).items():
+                await conn.execute(insert(sc.gf_members).values(
+                    discord_id=int(did), zone=v["zone"],
+                    updated_at=_as_aware_utc(_parse_dt(v["updated_at"]))))
             if self.engine.dialect.name == "postgresql":
                 for tbl, key in (("users", "user"), ("messages", "message"),
                                  ("stats", "stat"), ("gate_entries", "gate"),
@@ -1391,6 +1503,7 @@ class SqlRepository(StatsRepository):
                           sc.gate_pending,
                           sc.lfg_availability, sc.lfg_participants,
                           sc.lfg_posts,
+                          sc.gf_settings, sc.gf_zones, sc.gf_members,
                           sc.runtime_config, sc.content_texts,
                           sc.color_config,
                           sc.achievement_defs):

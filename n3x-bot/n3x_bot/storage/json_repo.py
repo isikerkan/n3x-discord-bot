@@ -63,6 +63,9 @@ class JsonRepository(StatsRepository):
             "lfg_posts": [],
             "lfg_availability": [],
             "lfg_participants": [],
+            "gf_settings": {},
+            "gf_zones": {},
+            "gf_members": {},
         }
 
     async def connect(self) -> None:
@@ -830,6 +833,64 @@ class JsonRepository(StatsRepository):
         self._flush()
         return True
 
+    # ── group finder: settings / zones / member zones ─────────────────────
+    async def gf_get_setting(self, key):
+        return self._db["gf_settings"].get(key)
+
+    async def gf_set_setting(self, key, value):
+        self._db["gf_settings"][key] = value
+        self._flush()
+
+    @staticmethod
+    def _gf_zone_row(zone, row) -> dict:
+        return {"zone": zone, "role_id": row.get("role_id"),
+                "channel_id": row.get("channel_id"), "status": row["status"],
+                "created_at": _as_aware_utc(_parse_dt(row.get("created_at"))),
+                "updated_at": _as_aware_utc(_parse_dt(row.get("updated_at"))),
+                "deactivated_at": _as_aware_utc(_parse_dt(row.get("deactivated_at")))}
+
+    async def gf_get_zone(self, zone):
+        row = self._db["gf_zones"].get(zone)
+        return None if row is None else self._gf_zone_row(zone, row)
+
+    async def gf_all_zones(self):
+        return [self._gf_zone_row(z, r)
+                for z, r in sorted(self._db["gf_zones"].items())]
+
+    async def gf_zone_by_channel(self, channel_id):
+        for z, r in sorted(self._db["gf_zones"].items()):
+            if r.get("channel_id") and int(r["channel_id"]) == int(channel_id):
+                return self._gf_zone_row(z, r)
+        return None
+
+    async def gf_save_zone(self, zone, *, role_id, channel_id, status, now):
+        stamp = _iso(now)
+        prev = self._db["gf_zones"].get(zone)
+        self._db["gf_zones"][zone] = {
+            "role_id": role_id, "channel_id": channel_id, "status": status,
+            "created_at": prev["created_at"] if prev else stamp,
+            "updated_at": stamp,
+            "deactivated_at": stamp if status == "DEACTIVATED" else None}
+        self._flush()
+
+    async def gf_set_member_zone(self, discord_id, zone, now):
+        self._db["gf_members"][str(discord_id)] = {"zone": zone,
+                                                   "updated_at": _iso(now)}
+        self._flush()
+
+    async def gf_get_member_zone(self, discord_id):
+        row = self._db["gf_members"].get(str(discord_id))
+        return row["zone"] if row else None
+
+    async def gf_clear_zone_members(self, zone):
+        ids = sorted(int(k) for k, v in self._db["gf_members"].items()
+                     if v["zone"] == zone)
+        for did in ids:
+            self._db["gf_members"].pop(str(did), None)
+        if ids:
+            self._flush()
+        return ids
+
     @staticmethod
     def _max_id(rows) -> int:
         return max((r["id"] for r in rows), default=0)
@@ -875,6 +936,9 @@ class JsonRepository(StatsRepository):
             "lfg_posts": copy.deepcopy(self._db["lfg_posts"]),
             "lfg_availability": copy.deepcopy(self._db["lfg_availability"]),
             "lfg_participants": copy.deepcopy(self._db["lfg_participants"]),
+            "gf_settings": copy.deepcopy(self._db["gf_settings"]),
+            "gf_zones": copy.deepcopy(self._db["gf_zones"]),
+            "gf_members": copy.deepcopy(self._db["gf_members"]),
             "seq": {
                 "user": self._max_id(users),
                 "message": self._max_id(messages),
@@ -919,6 +983,9 @@ class JsonRepository(StatsRepository):
             snapshot.get("lfg_availability", []))
         self._db["lfg_participants"] = copy.deepcopy(
             snapshot.get("lfg_participants", []))
+        self._db["gf_settings"] = copy.deepcopy(snapshot.get("gf_settings", {}))
+        self._db["gf_zones"] = copy.deepcopy(snapshot.get("gf_zones", {}))
+        self._db["gf_members"] = copy.deepcopy(snapshot.get("gf_members", {}))
         self._db["seq"] = dict(snapshot["seq"])
         self._flush()
 

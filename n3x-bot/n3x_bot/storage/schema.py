@@ -223,3 +223,34 @@ lfg_participants = Table(
     Column("discord_id", BigInteger, primary_key=True),
     Column("joined_at", DateTime(timezone=True), nullable=False),
 )
+
+# ── Group Finder (global, timezone-channel based) ──────────────────────────
+# Successor of the single-channel LFG above; the lfg_* tables stay as history.
+# Key/value settings: the Group Finder category and the hub channel.
+gf_settings = Table(
+    "gf_settings", metadata,
+    Column("key", String(50), primary_key=True),
+    Column("value", Text, nullable=True),
+)
+
+# Admin-curated zones. A zone is ACTIVE while its channel exists; a manually
+# deleted channel marks it DEACTIVATED (channel_id cleared, role_id kept so a
+# later re-activation reuses the role instead of creating a duplicate).
+gf_zones = Table(
+    "gf_zones", metadata,
+    Column("zone", String(64), primary_key=True),          # IANA id
+    Column("role_id", BigInteger, nullable=True),
+    Column("channel_id", BigInteger, nullable=True),
+    Column("status", String(20), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    Column("deactivated_at", DateTime(timezone=True), nullable=True),
+)
+
+# One zone per member.
+gf_members = Table(
+    "gf_members", metadata,
+    Column("discord_id", BigInteger, primary_key=True),
+    Column("zone", String(64), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+)

@@ -514,6 +514,49 @@ class StatsRepository(ABC):
         existed. Not used by the default cleanup, which keeps history."""
         ...
 
+    # group finder: settings / zones / member zones
+    @abstractmethod
+    async def gf_get_setting(self, key: str) -> str | None:
+        """The raw string stored under `key` in gf_settings, or None."""
+        ...
+    @abstractmethod
+    async def gf_set_setting(self, key: str, value: str | None) -> None:
+        """Upsert `key`; a None value clears it."""
+        ...
+    @abstractmethod
+    async def gf_get_zone(self, zone: str) -> dict | None:
+        """The zone row, or None. Keys: zone, role_id, channel_id, status,
+        created_at, updated_at, deactivated_at (datetimes tz-aware)."""
+        ...
+    @abstractmethod
+    async def gf_all_zones(self) -> list[dict]:
+        """Every zone row, sorted by zone id."""
+        ...
+    @abstractmethod
+    async def gf_zone_by_channel(self, channel_id: int) -> dict | None:
+        """The zone whose channel is `channel_id`, or None."""
+        ...
+    @abstractmethod
+    async def gf_save_zone(self, zone: str, *, role_id: int | None,
+                           channel_id: int | None, status: str,
+                           now: datetime) -> None:
+        """Upsert a zone. `created_at` is set on first insert only;
+        `deactivated_at` is set when `status` is DEACTIVATED, else cleared."""
+        ...
+    @abstractmethod
+    async def gf_set_member_zone(self, discord_id: int, zone: str,
+                                 now: datetime) -> None:
+        """Set the member's single zone (replacing any previous one)."""
+        ...
+    @abstractmethod
+    async def gf_get_member_zone(self, discord_id: int) -> str | None:
+        """The member's zone, or None."""
+        ...
+    @abstractmethod
+    async def gf_clear_zone_members(self, zone: str) -> list[int]:
+        """Remove every member assignment to `zone`; return their ids."""
+        ...
+
     # bulk export / import
     @abstractmethod
     async def export_all(self) -> dict:

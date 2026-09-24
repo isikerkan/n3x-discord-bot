@@ -61,6 +61,7 @@ from n3x_bot.timers import (
     TIMER_OVERVIEW_KEY, register_timer_commands, start_timer_overview_loop,
     update_timer_overview,
 )
+from n3x_bot.groupfinder import register_groupfinder, start_groupfinder
 from n3x_bot.lfg import (
     register_lfg_commands, restore_lfg_views, start_lfg_cleanup_loop,
     update_lfg_help,
@@ -153,6 +154,7 @@ def build_bot(settings: Settings, repo: StatsRepository) -> commands.Bot:
     register_welcome_commands(bot, settings)
     register_timer_commands(bot, repo, settings)
     register_lfg_commands(bot, repo, settings)
+    register_groupfinder(bot, repo, settings)
     return bot
 
 
@@ -416,6 +418,10 @@ _COMMAND_DESCRIPTIONS: dict[str, str] = {
     "gate verlauf": "Zeigt den Gate-Kostenverlauf als Diagramm.",
     "base": "Startet einen Base-Timer.",
     "lfg": "Erstellt eine LFG-Gruppensuche (nur im LFG-Channel).",
+    "timezone": "Setzt deine Group-Finder-Zeitzone.",
+    "groupfinder setup": "Richtet die Group-Finder-Zeitzonen ein (Admin).",
+    "groupfinder timezone-add": "Fügt eine beliebige Zeitzone hinzu (Admin).",
+    "groupfinder timezone-delete": "Löscht Channel und Rolle einer Zeitzone (Admin).",
     "basestop": "Stoppt einen Base-Timer.",
     "kodex": "Sendet den Kodex an alle Mitglieder (Admin).",
     "kodex_check": "Prüft die Kodex-Bestätigungen (Admin).",
@@ -450,7 +456,7 @@ _TOP_LEVEL_CATEGORY: dict[str, str] = {
     "achievement": "achievements",
     "activity": "activity", "event": "activity",
     "base": "timers", "basestop": "timers",
-    "lfg": "lfg",
+    "lfg": "lfg", "timezone": "lfg", "groupfinder": "admin",
     "rank": "fun",
     # Admin-gated management + operational commands — hidden behind the
     # admin-only reveal button, not shown on the public list.
@@ -465,7 +471,7 @@ _COMMAND_EMOJI: dict[str, str] = {
     "erfolge": "🎖️", "overview": "🏅", "sync_achievements": "🔄",
     "achievement": "🧩", "activity": "📊", "event": "🔔",
     "base": "▶️", "basestop": "⏹️",
-    "lfg": "🔎",
+    "lfg": "🔎", "timezone": "🕐", "groupfinder": "🌍",
     "kodex": "📜", "kodex_check": "✅", "sync_welcome": "👋", "rank": "🥇",
     "admin": "🛠️", "config": "⚙️", "content": "📝", "backfill_history": "🕓",
 }
@@ -1387,6 +1393,10 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
         except Exception:
             log.exception("lfg help update failed")
         start_lfg_cleanup_loop(bot, repo, settings)
+        try:
+            await start_groupfinder(bot, repo, settings)
+        except Exception:
+            log.exception("group finder startup failed")
         if bot.runtime_config.gate_stats_channel_id:
             await update_gate_stats_embed(bot, repo, settings)
         try:
