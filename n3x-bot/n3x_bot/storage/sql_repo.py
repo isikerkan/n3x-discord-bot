@@ -1171,9 +1171,11 @@ class SqlRepository(StatsRepository):
 
     # ── group finder: events / votes / roster / messages ──────────────────
     _GF_EVENT_FIELDS = ("status", "scheduled_at", "closed_at",
-                        "time_found_notified_at", "cleanup_at", "cancelled_at")
+                        "time_found_notified_at", "cleanup_at", "cancelled_at",
+                        "cleaned_at")
     _GF_EVENT_DATES = ("scheduled_at", "created_at", "closed_at",
-                       "time_found_notified_at", "cleanup_at", "cancelled_at")
+                       "time_found_notified_at", "cleanup_at", "cancelled_at",
+                       "cleaned_at")
 
     @staticmethod
     def _utc(dt):
@@ -1219,11 +1221,13 @@ class SqlRepository(StatsRepository):
                 return None
             return self._gf_event_row(r, await self._gf_slots(conn, event_id))
 
-    async def gf_events_with_status(self, statuses):
+    async def gf_events_with_status(self, statuses, *, uncleaned_only=False):
+        where = sc.gf_events.c.status.in_(list(statuses))
+        if uncleaned_only:
+            where = and_(where, sc.gf_events.c.cleaned_at.is_(None))
         async with self.engine.connect() as conn:
             rows = (await conn.execute(
-                select(sc.gf_events)
-                .where(sc.gf_events.c.status.in_(list(statuses)))
+                select(sc.gf_events).where(where)
                 .order_by(sc.gf_events.c.id.asc()))).all()
             return [self._gf_event_row(r, await self._gf_slots(conn, r.id))
                     for r in rows]

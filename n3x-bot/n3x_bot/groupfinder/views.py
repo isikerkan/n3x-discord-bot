@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 import discord
 
+from n3x_bot.admin import app_is_admin
 from n3x_bot.groupfinder import events
 from n3x_bot.groupfinder.render import clock, day_label, time_label
 
@@ -19,6 +20,7 @@ UTC = timezone.utc
 VOTE_SELECT_ID = "n3x:gf:vote"
 JOIN_ID = "n3x:gf:join"
 LEAVE_ID = "n3x:gf:leave"
+CANCEL_ID = "n3x:gf:cancel"
 
 _GONE = "❌ This group search no longer exists."
 
@@ -132,6 +134,67 @@ class _JoinButton(discord.ui.Button):
         await _after_change(interaction, self.repo, self.settings, event_id)
 
 
+class _ConfirmCancelView(discord.ui.View):
+    """Ephemeral, only for the one who clicked Cancel — not persistent."""
+
+    def __init__(self, repo, settings, event_id: int):
+        super().__init__(timeout=120)
+        self.repo = repo
+        self.settings = settings
+        self.event_id = event_id
+
+    @discord.ui.button(label="Yes, cancel it", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction, button):
+        from n3x_bot.groupfinder import sync
+        now = datetime.now(UTC)
+        result = await events.cancel(
+            self.repo, self.event_id, interaction.user.id,
+            app_is_admin(interaction, self.settings), now)
+        if result == "cancelled":
+            if await sync.remove_event_messages(interaction.client, self.repo,
+                                                self.event_id):
+                await self.repo.gf_update_event(self.event_id, cleaned_at=now)
+            text = "🗑️ Group search cancelled."
+        else:
+            text = {"forbidden": "❌ Only the creator or an admin can cancel.",
+                    "not_cancellable": "❌ This group search can no longer be "
+                                       "cancelled."}.get(result, _GONE)
+        await interaction.response.edit_message(content=text, view=None)
+
+    @discord.ui.button(label="Keep it", style=discord.ButtonStyle.secondary)
+    async def keep(self, interaction, button):
+        await interaction.response.edit_message(content="Nothing changed.",
+                                                view=None)
+
+
+class _CancelButton(discord.ui.Button):
+    """Shown to everyone, effective only for the creator and admins."""
+
+    def __init__(self, repo, settings):
+        super().__init__(label="Cancel group", style=discord.ButtonStyle.secondary,
+                         custom_id=CANCEL_ID)
+        self.repo = repo
+        self.settings = settings
+
+    async def callback(self, interaction):
+        event_id, _zone = await _resolve(self.repo, interaction)
+        event = await self.repo.gf_get_event(event_id) if event_id else None
+        if event is None:
+            await interaction.response.send_message(_GONE, ephemeral=True)
+            return
+        if not events.can_cancel(event, interaction.user.id,
+                                 app_is_admin(interaction, self.settings)):
+            await interaction.response.send_message(
+                "❌ Only the creator or an admin can cancel this group search.",
+                ephemeral=True)
+            return
+        await interaction.response.send_message(
+            f"Cancel **{event['title']}** for everyone? It disappears from "
+            "every timezone channel.",
+            view=_ConfirmCancelView(self.repo, self.settings, event_id),
+            ephemeral=True)
+
+
 class VotingView(discord.ui.View):
     """While times are being voted on: time select + Leave. Without `event`
     this is the startup router."""
@@ -142,6 +205,7 @@ class VotingView(discord.ui.View):
             self.add_item(VoteSelect(repo, settings, event=event, zone=zone,
                                      now=now))
         self.add_item(_LeaveButton(repo, settings))
+        self.add_item(_CancelButton(repo, settings))
 
 
 class FixedView(discord.ui.View):
@@ -153,6 +217,7 @@ class FixedView(discord.ui.View):
         super().__init__(timeout=None)
         self.add_item(_JoinButton(repo, settings, disabled=not joinable))
         self.add_item(_LeaveButton(repo, settings))
+        self.add_item(_CancelButton(repo, settings))
 
 
 def view_for(repo, settings, event: dict, zone: str, now: datetime):

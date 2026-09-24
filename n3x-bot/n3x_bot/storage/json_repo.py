@@ -898,9 +898,11 @@ class JsonRepository(StatsRepository):
 
     # ── group finder: events / votes / roster / messages ──────────────────
     _GF_EVENT_FIELDS = ("status", "scheduled_at", "closed_at",
-                        "time_found_notified_at", "cleanup_at", "cancelled_at")
+                        "time_found_notified_at", "cleanup_at", "cancelled_at",
+                        "cleaned_at")
     _GF_EVENT_DATES = ("scheduled_at", "created_at", "closed_at",
-                       "time_found_notified_at", "cleanup_at", "cancelled_at")
+                       "time_found_notified_at", "cleanup_at", "cancelled_at",
+                       "cleaned_at")
 
     @staticmethod
     def _dt_of(value):
@@ -944,11 +946,12 @@ class JsonRepository(StatsRepository):
         row = self._gf_event(event_id)
         return None if row is None else self._gf_event_row(row)
 
-    async def gf_events_with_status(self, statuses):
+    async def gf_events_with_status(self, statuses, *, uncleaned_only=False):
         wanted = set(statuses)
         return [self._gf_event_row(r) for r in
                 sorted(self._db["gf_events"], key=lambda r: int(r["id"]))
-                if r["status"] in wanted]
+                if r["status"] in wanted
+                and not (uncleaned_only and r.get("cleaned_at"))]
 
     async def gf_update_event(self, event_id, *, expect_status=None, **fields):
         unknown = set(fields) - set(self._GF_EVENT_FIELDS)

@@ -573,18 +573,21 @@ class StatsRepository(ABC):
         """The event with `slots` as a sorted list of tz-aware UTC datetimes,
         or None. Keys: id, creator_id, title, min_players, max_players,
         origin_zone, status, scheduled_at, created_at, closed_at,
-        time_found_notified_at, cleanup_at, cancelled_at, legacy_lfg_id, slots."""
+        time_found_notified_at, cleanup_at, cancelled_at, cleaned_at,
+        legacy_lfg_id, slots."""
         ...
     @abstractmethod
-    async def gf_events_with_status(self, statuses: list[str]) -> list[dict]:
-        """Every event whose status is in `statuses`, by id ascending."""
+    async def gf_events_with_status(self, statuses: list[str], *,
+                                    uncleaned_only: bool = False) -> list[dict]:
+        """Every event whose status is in `statuses`, by id ascending. With
+        `uncleaned_only`, only events whose messages are not yet removed."""
         ...
     @abstractmethod
     async def gf_update_event(self, event_id: int, *,
                               expect_status: str | None = None,
                               **fields) -> bool:
         """Update `fields` (status, scheduled_at, closed_at,
-        time_found_notified_at, cleanup_at, cancelled_at). With
+        time_found_notified_at, cleanup_at, cancelled_at, cleaned_at). With
         `expect_status` this is a compare-and-swap: nothing is written unless
         the current status matches. Returns whether a row was written."""
         ...

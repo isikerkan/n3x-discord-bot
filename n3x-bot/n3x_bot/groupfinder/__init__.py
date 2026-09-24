@@ -3,13 +3,14 @@ timezone. See instructions/Groupfinder Spec 3.md.
 
 Stage 1: zone administration, the hub and member timezones.
 Stage 2: events, voting, time finding (Variant 1), rendering in every zone.
+Stage 3: the lifecycle loop (countdown, closing, start, cleanup) and cancel.
 """
 import logging
 
 from datetime import datetime, timezone
 
 from n3x_bot.activity import now_local
-from n3x_bot.groupfinder import hub, provision, sync, views
+from n3x_bot.groupfinder import hub, lifecycle, provision, sync, views
 from n3x_bot.groupfinder.admin import register_groupfinder_admin
 from n3x_bot.groupfinder.commands import register_lfg_command
 from n3x_bot.groupfinder.hub import register_timezone_command
@@ -48,6 +49,7 @@ async def start_groupfinder(bot, repo, settings) -> None:
         log.info("group finder: deactivated while offline: %s", ", ".join(gone))
     await hub.update_hub(bot, repo, settings)
     await sync.sync_all(bot, repo, settings, datetime.now(timezone.utc))
+    lifecycle.start_lifecycle_loop(bot, repo, settings)
 
 
 __all__ = ["register_groupfinder", "start_groupfinder"]

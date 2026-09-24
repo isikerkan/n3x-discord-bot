@@ -271,6 +271,8 @@ gf_events = Table(
     Column("time_found_notified_at", DateTime(timezone=True), nullable=True),
     Column("cleanup_at", DateTime(timezone=True), nullable=False),
     Column("cancelled_at", DateTime(timezone=True), nullable=True),
+    # set once the event's messages are removed from every zone channel
+    Column("cleaned_at", DateTime(timezone=True), nullable=True),
     Column("legacy_lfg_id", Integer, nullable=True),        # migrated lfg_posts.id
 )
 

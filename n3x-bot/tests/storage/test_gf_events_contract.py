@@ -10,7 +10,7 @@ S1, S2, S3 = (NOW + timedelta(hours=h) for h in (6, 7, 8))
 EVENT_KEYS = {"id", "creator_id", "title", "min_players", "max_players",
               "origin_zone", "status", "scheduled_at", "created_at", "closed_at",
               "time_found_notified_at", "cleanup_at", "cancelled_at",
-              "legacy_lfg_id", "slots"}
+              "cleaned_at", "legacy_lfg_id", "slots"}
 
 
 async def _event(repo, **overrides):
@@ -69,6 +69,15 @@ async def test_events_with_status(repo):
     assert [e["id"] for e in await repo.gf_events_with_status(["VOTING"])] == [a]
     assert [e["id"] for e in await repo.gf_events_with_status(
         ["VOTING", "CANCELLED"])] == [a, b]
+
+
+async def test_events_with_status_uncleaned_only(repo):
+    a = await _event(repo)
+    b = await _event(repo, title="b")
+    await repo.gf_update_event(b, cleaned_at=NOW)
+    assert [e["id"] for e in await repo.gf_events_with_status(
+        ["VOTING"], uncleaned_only=True)] == [a]
+    assert (await repo.gf_get_event(b))["cleaned_at"] == NOW
 
 
 async def test_update_event_fields(repo):

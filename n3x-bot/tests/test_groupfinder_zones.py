@@ -637,6 +637,7 @@ async def test_start_groupfinder_registers_router_and_reconciles():
     bot = _bot_for(guild)
     bot.add_view = MagicMock()
     await start_groupfinder(bot, repo, _settings())
+    bot._gf_lifecycle_loop.cancel()       # started by start_groupfinder
     from n3x_bot.groupfinder import views
     registered = {type(c.args[0]) for c in bot.add_view.call_args_list}
     assert registered == {hub.HubView, views.VotingView, views.FixedView}

@@ -188,3 +188,75 @@ async def participants(repo, event: dict) -> list[tuple[int, str]]:
         return voters(await repo.gf_get_votes(event["id"]))
     return [(p["discord_id"], p["zone"])
             for p in await repo.gf_get_participants(event["id"])]
+
+
+# ── lifecycle (stage 3) ────────────────────────────────────────────────────
+
+CANCELLABLE = (VOTING, SCHEDULED, CLOSED)
+
+
+def next_status(event: dict, now: datetime) -> str | None:
+    """The transition that is due for `event` at `now`, or None.
+
+    VOTING    -> NO_TIME_FOUND  once no proposed time is open any more
+    SCHEDULED -> CLOSED         5 minutes before the start
+    SCHEDULED/CLOSED -> STARTED at the start
+    STARTED   -> EXPIRED        1 hour after the start (cleanup_at)
+    """
+    status = event["status"]
+    if status == VOTING:
+        return NO_TIME_FOUND if not open_slots(event, now) else None
+    start = event["scheduled_at"]
+    if status in (SCHEDULED, CLOSED) and start <= now:
+        return STARTED
+    if status == SCHEDULED and start - VOTE_CLOSE <= now:
+        return CLOSED
+    if status == STARTED and event["cleanup_at"] <= now:
+        return EXPIRED
+    return None
+
+
+async def advance(repo, event: dict, now: datetime) -> dict:
+    """Apply every due transition, one step at a time, so an event that was
+    left behind while the bot was down catches up in a single tick. Each step
+    is a compare-and-swap on the status it came from."""
+    for _ in range(len(ACTIVE_STATUSES) + 1):
+        target = next_status(event, now)
+        if target is None:
+            break
+        fields = {"status": target}
+        if target == CLOSED:
+            fields["closed_at"] = now
+        await repo.gf_update_event(event["id"], expect_status=event["status"],
+                                   **fields)
+        event = await repo.gf_get_event(event["id"])
+    return event
+
+
+def needs_cleanup(event: dict, now: datetime) -> bool:
+    """Messages are removed 1 h after the start, 1 h after the last proposed
+    time when no time was found, and right away when cancelled."""
+    if event["cleaned_at"] is not None:
+        return False
+    if event["status"] in (EXPIRED, CANCELLED):
+        return True
+    return event["status"] == NO_TIME_FOUND and event["cleanup_at"] <= now
+
+
+def can_cancel(event: dict, user_id: int, is_admin: bool) -> bool:
+    return is_admin or user_id == event["creator_id"]
+
+
+async def cancel(repo, event_id: int, user_id: int, is_admin: bool,
+                 now: datetime) -> str:
+    """`cancelled`, `forbidden`, `not_cancellable` or `missing`."""
+    event = await repo.gf_get_event(event_id)
+    if event is None:
+        return "missing"
+    if not can_cancel(event, user_id, is_admin):
+        return "forbidden"
+    if event["status"] not in CANCELLABLE:
+        return "not_cancellable"
+    done = await repo.gf_update_event(event_id, expect_status=event["status"],
+                                      status=CANCELLED, cancelled_at=now)
+    return "cancelled" if done else "not_cancellable"

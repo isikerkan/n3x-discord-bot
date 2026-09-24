@@ -43,8 +43,9 @@ def _signature(embed, view):
 async def sync_event(bot, repo, settings, event_id: int, now: datetime) -> None:
     async with _event_lock(bot, event_id):
         event = await repo.gf_get_event(event_id)
-        if event is None:
-            return
+        if (event is None or event["cleaned_at"] is not None
+                or event["status"] in (events.EXPIRED, events.CANCELLED)):
+            return      # finished: its messages are being / have been removed
         votes = await repo.gf_get_votes(event_id)
         counts = events.vote_counts(event, votes)
         people = await events.participants(repo, event)
@@ -88,6 +89,32 @@ async def sync_event(bot, repo, settings, event_id: int, now: datetime) -> None:
         for zone in existing:
             if zone not in active_zones:
                 await repo.gf_delete_event_message(event_id, zone)
+
+
+async def remove_event_messages(bot, repo, event_id: int) -> bool:
+    """Delete the event's message in every zone channel. A message that is
+    already gone, or whose channel is gone, counts as removed. Returns True
+    once nothing is left; on any other error the row is kept and the next
+    lifecycle tick tries again."""
+    async with _event_lock(bot, event_id):
+        cache = _rendered(bot)
+        all_gone = True
+        for row in await repo.gf_get_event_messages(event_id):
+            channel = bot.get_channel(row["channel_id"])
+            if channel is not None:
+                try:
+                    message = await channel.fetch_message(row["message_id"])
+                    await message.delete()
+                except discord.NotFound:
+                    pass
+                except Exception:
+                    log.exception("group finder: removing event %s in %s failed",
+                                  event_id, row["zone"])
+                    all_gone = False
+                    continue
+            await repo.gf_delete_event_message(event_id, row["zone"])
+            cache.pop(row["message_id"], None)
+        return all_gone
 
 
 async def sync_all(bot, repo, settings, now: datetime) -> None:

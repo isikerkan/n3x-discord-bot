@@ -51,7 +51,9 @@ def countdown(start: datetime, now: datetime) -> str:
 
 
 def started_ago(start: datetime, now: datetime) -> str:
-    minutes = max(0, int((now - start).total_seconds() // 60))
+    """`Started 5m ago`, in 5-minute steps: per-minute text would mean an
+    hour of edits in every zone channel for nothing."""
+    minutes = max(0, int((now - start).total_seconds() // 60)) // 5 * 5
     return "Started just now" if minutes == 0 else f"Started {minutes}m ago"
 
 
