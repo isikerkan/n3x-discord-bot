@@ -340,6 +340,9 @@ async def test_deleted_category_and_hub_are_forgotten():
 
 # ── hub ────────────────────────────────────────────────────────────────────
 
+def _selects(view):
+    return [c for c in view.children if isinstance(c, discord.ui.Select)]
+
 async def test_hub_embed_is_english_and_explains_the_flow():
     embed = hub.build_hub_embed([4242])
     for fragment in ("timezone", "/lfg", "15 minutes", "/timezone",
@@ -352,9 +355,10 @@ async def test_hub_view_chunks_zones_into_selects_of_25():
     repo = await _repo()
     many = list(zones.all_zones())
     view = hub.HubView(repo, _settings(), many[:30], NOW)
-    assert [len(c.options) for c in view.children] == [25, 5]
+    assert [len(c.options) for c in _selects(view)] == [25, 5]
     capped = hub.HubView(repo, _settings(), many[:200], NOW)
-    assert len(capped.children) == hub.MAX_SELECTS
+    assert len(_selects(capped)) == hub.MAX_SELECTS
+    assert len(capped.children) <= 5                  # Discord: max 5 rows
     await repo.close()
 
 
@@ -363,7 +367,7 @@ async def test_hub_router_view_is_persistent_with_fixed_ids():
     router = hub.HubView(repo, _settings())
     assert router.timeout is None
     assert [c.custom_id for c in router.children] == [
-        f"n3x:gf:zone:{i}" for i in range(hub.MAX_SELECTS)]
+        *(f"n3x:gf:zone:{i}" for i in range(hub.MAX_SELECTS)), hub.LEAVE_ZONE_ID]
     await repo.close()
 
 
@@ -381,7 +385,7 @@ async def test_update_hub_posts_and_tracks_the_message():
     await hub.update_hub(_bot_for(guild), repo, _settings())
     hub_channel.send.assert_awaited_once()
     view = hub_channel.send.call_args.kwargs["view"]
-    offered = [o.value for c in view.children for o in c.options]
+    offered = [o.value for c in _selects(view) for o in c.options]
     assert "Europe/Berlin" in offered and "Asia/Tokyo" in offered
     assert (await repo.get_channel_message(hub.HUB_MESSAGE_KEY))[1] == hub_channel.id
     await repo.close()
@@ -429,7 +433,7 @@ async def test_hub_without_zones_still_offers_the_popular_ones():
     hub_channel = await provision.ensure_hub_channel(guild, repo, _settings())
     await hub.update_hub(_bot_for(guild), repo, _settings())
     view = hub_channel.send.call_args.kwargs["view"]
-    offered = {o.value for c in view.children for o in c.options}
+    offered = {o.value for c in _selects(view) for o in c.options}
     assert offered == set(zones.POPULAR_ZONES)
     await repo.close()
 

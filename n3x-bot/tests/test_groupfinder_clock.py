@@ -232,3 +232,66 @@ async def test_deleting_is_still_admin_only():
     assert "Only admins" in _text(interaction)
     assert (await repo.gf_get_zone("Europe/Berlin"))["status"] == zones.ACTIVE
     await repo.close()
+
+
+# ── removing your timezone / the select resets ─────────────────────────────
+
+async def test_member_can_remove_their_timezone():
+    repo, guild = await _repo(), FakeGuild()
+    clan = guild._role("Clan")
+    member = FakeMember(guild, roles=[clan])
+    await hub.join_zone(_bot_for(guild), repo, _settings(), member, "Europe/Zurich")
+    zone_role = guild.get_role((await repo.gf_get_zone("Europe/Zurich"))["role_id"])
+    assert zone_role in member.roles
+
+    reply = await hub.leave_zone(repo, member)
+
+    assert zone_role not in member.roles and clan in member.roles
+    assert await repo.gf_get_member_zone(member.id) is None
+    assert "removed" in reply
+    assert "no timezone set" in await hub.leave_zone(repo, member)
+    # and they can pick one again afterwards
+    await hub.join_zone(_bot_for(guild), repo, _settings(), member, "Europe/Zurich")
+    assert zone_role in member.roles
+    await repo.close()
+
+
+async def test_leave_button_is_in_the_hub_and_works():
+    repo, guild = await _repo(), FakeGuild()
+    member = FakeMember(guild)
+    await hub.join_zone(_bot_for(guild), repo, _settings(), member, "Asia/Karachi")
+    button = next(c for c in hub.HubView(repo, _settings()).children
+                  if getattr(c, "custom_id", None) == hub.LEAVE_ZONE_ID)
+    it = MagicMock()
+    it.user = member
+    it.response = MagicMock()
+    it.response.defer = AsyncMock()
+    it.followup = MagicMock()
+    it.followup.send = AsyncMock()
+    await button.callback(it)
+    assert await repo.gf_get_member_zone(member.id) is None
+    assert it.followup.send.call_args.kwargs["ephemeral"] is True
+    await repo.close()
+
+
+async def test_picking_a_zone_re_renders_the_hub_so_the_select_resets():
+    repo, guild = await _repo(), FakeGuild()
+    select = hub.ZoneSelect(repo, _settings(), 0)       # the startup router
+    select._values = ["Europe/Zurich"]
+    it = MagicMock()
+    it.client = _bot_for(guild)
+    it.user = FakeMember(guild)
+    it.response = MagicMock()
+    it.response.defer = AsyncMock()
+    it.edit_original_response = AsyncMock()
+    it.followup = MagicMock()
+    it.followup.send = AsyncMock()
+
+    await select.callback(it)
+
+    view = it.edit_original_response.call_args.kwargs["view"]
+    offered = {o.value for c in view.children for o in getattr(c, "options", [])}
+    assert "Europe/Zurich" in offered and "—" not in offered   # real options
+    assert "Europe/Zurich" in it.followup.send.call_args.args[0]
+    assert it.followup.send.call_args.kwargs["ephemeral"] is True
+    await repo.close()

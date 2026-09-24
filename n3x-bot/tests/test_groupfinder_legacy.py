@@ -387,6 +387,7 @@ async def test_cutover_from_deploy_to_first_setup():
     assert event_msg.embed.title == "🔎 Satura Gruppen Gate"
     assert "<@1>" in event_msg.embed.description        # the voter carried over
     hub_view = hub_msg[0].view
-    assert "Europe/Berlin" in {o.value for c in hub_view.children for o in c.options}
+    assert "Europe/Berlin" in {o.value for c in hub_view.children
+                               for o in getattr(c, "options", [])}
     assert f"<#{zone_channel.id}>" in hub_msg[0].embed.description  # listed
     await repo.close()

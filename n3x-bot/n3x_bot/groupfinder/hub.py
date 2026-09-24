@@ -23,9 +23,11 @@ from n3x_bot.groupfinder.zones import ACTIVE, SELECT_LIMIT
 log = logging.getLogger("N3X-Bot")
 
 HUB_MESSAGE_KEY = "gf_hub"
-# A message carries at most 5 action rows, one select each -> 125 zones.
-MAX_SELECTS = 5
+# A message carries at most 5 action rows: up to 4 zone selects (100 zones)
+# plus one row for the "Remove my timezone" button.
+MAX_SELECTS = 4
 ZONE_SELECT_ID = "n3x:gf:zone:{index}"
+LEAVE_ZONE_ID = "n3x:gf:zone:leave"
 
 
 def build_hub_embed(channel_ids: list[int]) -> discord.Embed:
@@ -46,7 +48,8 @@ def build_hub_embed(channel_ids: list[int]) -> discord.Embed:
         "**4. You get a DM 15 minutes before the start.**\n"
         "\n"
         "Every search appears in every timezone channel — same group, your "
-        "local time. You can change your timezone at any time.")
+        "local time. You can change your timezone at any time, or remove it "
+        "with the button below.")
     if channel_ids:
         description += "\n\n**Timezone channels:** " + " ".join(
             f"<#{cid}>" for cid in channel_ids)
@@ -80,9 +83,30 @@ class ZoneSelect(discord.ui.Select):
 
     async def callback(self, interaction):
         # Creating a role and a channel can exceed Discord's 3 seconds.
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.defer()
         reply = await join_zone(interaction.client, self.repo, self.settings,
                                 interaction.user, self.values[0])
+        # Re-render the hub: otherwise the member's Discord keeps showing the
+        # pick as selected, and choosing the same entry again sends nothing.
+        try:
+            await interaction.edit_original_response(
+                view=await current_view(self.repo, self.settings))
+        except Exception:
+            log.exception("group finder hub: resetting the select failed")
+        await interaction.followup.send(reply, ephemeral=True)
+
+
+class LeaveZoneButton(discord.ui.Button):
+    def __init__(self, repo, settings):
+        super().__init__(label="Remove my timezone",
+                         style=discord.ButtonStyle.secondary,
+                         custom_id=LEAVE_ZONE_ID)
+        self.repo = repo
+        self.settings = settings
+
+    async def callback(self, interaction):
+        await interaction.response.defer(ephemeral=True)
+        reply = await leave_zone(self.repo, interaction.user)
         await interaction.followup.send(reply, ephemeral=True)
 
 
@@ -95,12 +119,13 @@ class HubView(discord.ui.View):
         if zone_ids is None:
             for i in range(MAX_SELECTS):
                 self.add_item(ZoneSelect(repo, settings, i))
-            return
-        now = now or datetime.now(timezone.utc)
-        chunks = [zone_ids[i:i + SELECT_LIMIT]
-                  for i in range(0, len(zone_ids), SELECT_LIMIT)][:MAX_SELECTS]
-        for i, chunk in enumerate(chunks):
-            self.add_item(ZoneSelect(repo, settings, i, chunk, now))
+        else:
+            now = now or datetime.now(timezone.utc)
+            chunks = [zone_ids[i:i + SELECT_LIMIT]
+                      for i in range(0, len(zone_ids), SELECT_LIMIT)][:MAX_SELECTS]
+            for i, chunk in enumerate(chunks):
+                self.add_item(ZoneSelect(repo, settings, i, chunk, now))
+        self.add_item(LeaveZoneButton(repo, settings))
 
 
 def _zone_lock(bot) -> asyncio.Lock:
@@ -133,6 +158,28 @@ async def assign_member_zone(repo, member, zone: str, now: datetime):
         await member.add_roles(role, reason="Group Finder timezone")
     await repo.gf_set_member_zone(member.id, zone, now)
     return ("unchanged" if already else "set"), row
+
+
+async def leave_zone(repo, member) -> str:
+    """Take away every zone role the member holds and forget their zone. They
+    see no timezone channel any more (admins still see all of them)."""
+    zone_role_ids = {z["role_id"] for z in await repo.gf_all_zones()
+                     if z["role_id"]}
+    held = [r for r in getattr(member, "roles", []) if r.id in zone_role_ids]
+    had = await repo.gf_clear_member_zone(member.id)
+    if held:
+        await member.remove_roles(*held, reason="Group Finder timezone removed")
+    if not held and had is None:
+        return "ℹ️ You have no timezone set."
+    return ("✅ Your timezone is removed — you no longer see a timezone channel. "
+            "Pick one again here any time.")
+
+
+async def current_view(repo, settings):
+    """The hub view as it should look right now."""
+    now = datetime.now(timezone.utc)
+    active = [z["zone"] for z in await provision.active_zones(repo)]
+    return HubView(repo, settings, hub_options(active, now), now)
 
 
 async def join_zone(bot, repo, settings, member, chosen: str) -> str:
@@ -181,11 +228,9 @@ async def update_hub(bot, repo, settings) -> None:
         channel = bot.get_channel(int(raw)) if raw else None
         if channel is None:
             return
-        now = datetime.now(timezone.utc)
         rows = await provision.active_zones(repo)
-        active = [z["zone"] for z in rows]
         embed = build_hub_embed([z["channel_id"] for z in rows])
-        view = HubView(repo, settings, hub_options(active, now), now)
+        view = await current_view(repo, settings)
         stored = await repo.get_channel_message(HUB_MESSAGE_KEY)
         if stored is not None and stored[1] == channel.id:
             try:

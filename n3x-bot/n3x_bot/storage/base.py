@@ -553,6 +553,10 @@ class StatsRepository(ABC):
         """The member's zone, or None."""
         ...
     @abstractmethod
+    async def gf_clear_member_zone(self, discord_id: int) -> str | None:
+        """Remove the member's zone; return the zone they had, or None."""
+        ...
+    @abstractmethod
     async def gf_clear_zone_members(self, zone: str) -> list[int]:
         """Remove every member assignment to `zone`; return their ids."""
         ...

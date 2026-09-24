@@ -1160,6 +1160,16 @@ class SqlRepository(StatsRepository):
                  .where(sc.gf_members.c.discord_id == discord_id))).one_or_none()
             return r.zone if r else None
 
+    async def gf_clear_member_zone(self, discord_id):
+        async with self.engine.begin() as conn:
+            r = (await conn.execute(select(sc.gf_members.c.zone).where(
+                sc.gf_members.c.discord_id == discord_id))).one_or_none()
+            if r is None:
+                return None
+            await conn.execute(delete(sc.gf_members).where(
+                sc.gf_members.c.discord_id == discord_id))
+            return r.zone
+
     async def gf_clear_zone_members(self, zone):
         async with self.engine.begin() as conn:
             ids = [int(r[0]) for r in await conn.execute(

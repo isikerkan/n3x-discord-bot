@@ -888,6 +888,13 @@ class JsonRepository(StatsRepository):
         row = self._db["gf_members"].get(str(discord_id))
         return row["zone"] if row else None
 
+    async def gf_clear_member_zone(self, discord_id):
+        row = self._db["gf_members"].pop(str(discord_id), None)
+        if row is None:
+            return None
+        self._flush()
+        return row["zone"]
+
     async def gf_clear_zone_members(self, zone):
         ids = sorted(int(k) for k, v in self._db["gf_members"].items()
                      if v["zone"] == zone)

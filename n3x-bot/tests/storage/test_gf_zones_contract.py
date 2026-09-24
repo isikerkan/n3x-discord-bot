@@ -104,6 +104,15 @@ async def test_member_has_exactly_one_zone(repo):
     assert await repo.gf_get_member_zone(42) == "Asia/Karachi"
 
 
+async def test_clear_member_zone(repo):
+    await repo.gf_set_member_zone(42, "Europe/Berlin", NOW)
+    await repo.gf_set_member_zone(43, "Europe/Berlin", NOW)
+    assert await repo.gf_clear_member_zone(42) == "Europe/Berlin"
+    assert await repo.gf_get_member_zone(42) is None
+    assert await repo.gf_get_member_zone(43) == "Europe/Berlin"   # others kept
+    assert await repo.gf_clear_member_zone(42) is None
+
+
 async def test_clear_zone_members_removes_only_that_zone(repo):
     await repo.gf_set_member_zone(1, "Europe/Berlin", NOW)
     await repo.gf_set_member_zone(2, "Europe/Berlin", NOW)
