@@ -195,7 +195,7 @@ def register_groupfinder_admin(bot, repo, settings) -> None:
         where = f"<#{row['channel_id']}>" if row["channel_id"] else "its channel"
         await interaction.response.send_message(
             f"⚠️ Delete **{zone}**? This removes {where} with its history and "
-            f"the role `{zones.role_name(zone)}`.",
+            "its role.",
             view=ConfirmDeleteView(repo, settings, zone), ephemeral=True)
 
     bot.tree.add_command(group)

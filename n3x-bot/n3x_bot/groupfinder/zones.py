@@ -46,15 +46,6 @@ def is_valid_zone(zone: str) -> bool:
     return zone in all_zones()
 
 
-def channel_name(zone: str) -> str:
-    """`America/Los_Angeles` -> `gf-america-los-angeles`."""
-    return "gf-" + zone.lower().replace("/", "-").replace("_", "-")
-
-
-def role_name(zone: str) -> str:
-    return f"TZ {zone}"
-
-
 def search_zones(query: str, pool, limit: int = SELECT_LIMIT) -> list[str]:
     """Case-insensitive match for autocomplete. Spaces match underscores, so
     `new york` finds `America/New_York`. Prefix matches of the city come first."""
@@ -100,3 +91,57 @@ def offset_label(zone: str, now: datetime) -> str:
     minutes = int(offset.total_seconds() // 60)
     sign = "+" if minutes >= 0 else "-"
     return f"UTC{sign}{abs(minutes) // 60:02d}:{abs(minutes) % 60:02d}"
+
+
+# ── names follow the current offset ────────────────────────────────────────
+# A channel is named after its clock's offset *right now* and is renamed at
+# every DST switch (gf-utc+2 -> gf-utc+1 on the last Sunday of October).
+# Members never move; only the name changes. When two groups share an offset
+# at the same time (Berlin and Lagos are both UTC+1 in winter), the group
+# created first keeps the plain name and the others get their city appended.
+
+def _offset_minutes(zone: str, now: datetime) -> int:
+    return int(now.astimezone(ZoneInfo(zone)).utcoffset().total_seconds() // 60)
+
+
+def offset_text(zone: str, now: datetime) -> str:
+    """`UTC+2`, `UTC-5`, `UTC+5:30`, `UTC+0` — for roles and labels."""
+    minutes = _offset_minutes(zone, now)
+    sign = "+" if minutes >= 0 else "-"
+    hours, rest = divmod(abs(minutes), 60)
+    return f"UTC{sign}{hours}" + (f":{rest:02d}" if rest else "")
+
+
+def _channel_offset(zone: str, now: datetime, words: bool) -> str:
+    minutes = _offset_minutes(zone, now)
+    hours, rest = divmod(abs(minutes), 60)
+    tail = f"{hours}" + (f"h{rest:02d}" if rest else "")
+    if words:
+        return f"utc-{'plus' if minutes >= 0 else 'minus'}-{tail}"
+    return f"utc{'+' if minutes >= 0 else '-'}{tail}"
+
+
+def city(zone: str) -> str:
+    """`America/Sao_Paulo` -> `Sao Paulo`."""
+    return zone.rsplit("/", 1)[-1].replace("_", " ")
+
+
+def zone_names(rows: list[dict], now: datetime, *, words: bool = False) -> dict:
+    """`{zone: (channel_name, role_name)}` for every row given (the active
+    zones). `rows` need `zone` and `created_at`. `words` selects the
+    `gf-utc-plus-2` spelling for servers that do not keep `+` in names."""
+    by_offset: dict[str, list[dict]] = {}
+    for row in rows:
+        by_offset.setdefault(offset_text(row["zone"], now), []).append(row)
+    names = {}
+    for label, group in by_offset.items():
+        group = sorted(group, key=lambda r: (r["created_at"], r["zone"]))
+        for i, row in enumerate(group):
+            channel = "gf-" + _channel_offset(row["zone"], now, words)
+            role = label
+            if i:                                  # shares the offset right now
+                slug = city(row["zone"]).lower().replace(" ", "-")
+                channel += f"-{slug}"
+                role += f" · {city(row['zone'])}"
+            names[row["zone"]] = (channel, role)
+    return names

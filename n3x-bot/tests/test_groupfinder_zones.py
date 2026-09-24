@@ -172,10 +172,11 @@ async def test_invalid_or_alias_zones_are_rejected(bad):
     assert not zones.is_valid_zone(bad)
 
 
-async def test_naming():
-    assert zones.channel_name("America/Los_Angeles") == "gf-america-los-angeles"
-    assert zones.channel_name("Europe/Berlin") == "gf-europe-berlin"
-    assert zones.role_name("Europe/Berlin") == "TZ Europe/Berlin"
+async def test_naming_follows_the_current_offset():
+    rows = [{"zone": "Europe/Berlin", "created_at": NOW}]
+    assert zones.zone_names(rows, NOW) == {"Europe/Berlin": ("gf-utc+2", "UTC+2")}
+    winter = datetime(2026, 11, 2, tzinfo=timezone.utc)
+    assert zones.zone_names(rows, winter) == {"Europe/Berlin": ("gf-utc+1", "UTC+1")}
 
 
 async def test_search_matches_spaces_as_underscores_and_ranks_city_prefix():
@@ -194,8 +195,8 @@ async def test_activate_creates_category_role_and_channel():
     row = await repo.gf_get_zone("Europe/Berlin")
     assert row["status"] == zones.ACTIVE
     channel = guild.get_channel(row["channel_id"])
-    assert channel.name == "gf-europe-berlin"
-    assert guild.get_role(row["role_id"]).name == "TZ Europe/Berlin"
+    assert channel.name == "gf-utc+2"                 # 24.09.: Berlin is UTC+2
+    assert guild.get_role(row["role_id"]).name == "UTC+2"
     category_id = int(await repo.gf_get_setting(provision.CATEGORY_KEY))
     assert channel.category is guild.get_channel(category_id)
     assert guild.get_channel(category_id).name == "Group Finder"
@@ -340,9 +341,9 @@ async def test_deleted_category_and_hub_are_forgotten():
 # ── hub ────────────────────────────────────────────────────────────────────
 
 async def test_hub_embed_is_english_and_explains_the_flow():
-    embed = hub.build_hub_embed(["Europe/Berlin"])
+    embed = hub.build_hub_embed([4242])
     for fragment in ("timezone", "/lfg", "15 minutes", "/timezone",
-                     "same clock", "`Europe/Berlin`"):
+                     "same clock", "UTC offset", "<#4242>"):
         assert fragment in embed.description
     assert "Timezone channels" not in hub.build_hub_embed([]).description
 

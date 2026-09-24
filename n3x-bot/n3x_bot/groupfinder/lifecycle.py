@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 
 from discord.ext import tasks
 
-from n3x_bot.groupfinder import events, notify, sync
+from n3x_bot.groupfinder import events, notify, provision, sync
 
 log = logging.getLogger("N3X-Bot")
 UTC = timezone.utc
@@ -35,6 +35,9 @@ async def process_event(bot, repo, settings, event: dict, now: datetime) -> None
 
 
 async def tick(bot, repo, settings, now: datetime) -> None:
+    # Channel names follow the current UTC offset (renamed at DST switches).
+    # Background task: a rate-limited rename must never stall this tick.
+    provision.schedule_name_sync(bot, repo, now)
     for event in await repo.gf_events_with_status(list(_TRACKED),
                                                   uncleaned_only=True):
         try:

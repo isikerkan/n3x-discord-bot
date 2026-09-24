@@ -17,6 +17,10 @@ log = logging.getLogger("N3X-Bot")
 
 CATEGORY_KEY = "category_id"
 HUB_CHANNEL_KEY = "hub_channel_id"
+# "plus" (gf-utc+2) until Discord is seen altering such a name, then "words"
+# (gf-utc-plus-2) for good: a stripped "+" would leave gf-utc2, which reads as
+# either sign.
+NAME_STYLE_KEY = "channel_name_style"
 _REASON = "Group Finder"
 
 
@@ -98,6 +102,25 @@ async def ensure_hub_channel(guild, repo, settings):
     return hub
 
 
+async def _words(repo) -> bool:
+    return await repo.gf_get_setting(NAME_STYLE_KEY) == "words"
+
+
+async def _accepted(repo, requested: str, actual: str | None) -> bool:
+    """Did Discord keep `requested`? If it altered a name containing `+`,
+    switch to the words spelling from now on."""
+    if actual is None or actual == requested or "+" not in requested:
+        return True
+    await repo.gf_set_setting(NAME_STYLE_KEY, "words")
+    log.info("group finder: Discord altered %r to %r, using words from now on",
+             requested, actual)
+    return False
+
+
+async def _names_for(repo, rows: list[dict], now: datetime) -> dict:
+    return zones.zone_names(rows, now, words=await _words(repo))
+
+
 async def activate_zone(guild, repo, settings, zone: str,
                         now: datetime) -> tuple[str, str]:
     """Make sure a channel exists for `zone`'s clock.
@@ -125,15 +148,24 @@ async def activate_zone(guild, repo, settings, zone: str,
                                            or zone)
     row = await repo.gf_get_zone(target)
     category = await ensure_category(guild, repo)
+    # Name it after its offset right now, among the channels that stay active.
+    others = [r for r in rows if r["zone"] in live]
+    me = {"zone": target, "created_at": row["created_at"] if row else now}
+    channel_name, role_name = (await _names_for(repo, [*others, me], now))[target]
     role = guild.get_role(row["role_id"]) if row and row["role_id"] else None
     if role is None:
-        role = await guild.create_role(name=zones.role_name(target),
-                                       mentionable=False, reason=_REASON)
+        role = await guild.create_role(name=role_name, mentionable=False,
+                                       reason=_REASON)
     channel = await guild.create_text_channel(
-        zones.channel_name(target), category=category,
+        channel_name, category=category,
         overwrites=zone_overwrites(guild, role, settings),
-        topic=f"Group Finder · {target} and every timezone with the same clock",
+        topic=(f"Group Finder · {target} and every timezone with the same "
+               "clock. The name shows the current UTC offset and changes with "
+               "summer/winter time."),
         reason=_REASON)
+    if not await _accepted(repo, channel_name, getattr(channel, "name", None)):
+        words_name = (await _names_for(repo, [*others, me], now))[target][0]
+        channel = await channel.edit(name=words_name, reason=_REASON) or channel
     await repo.gf_save_zone(target, role_id=role.id, channel_id=channel.id,
                             status=ACTIVE, now=now)
     return ("created" if row is None else "reactivated"), target
@@ -204,3 +236,57 @@ async def reconcile_zones(bot, repo, now: datetime) -> list[str]:
 
 async def active_zones(repo) -> list[dict]:
     return [z for z in await repo.gf_all_zones() if z["status"] == ACTIVE]
+
+
+async def sync_zone_names(bot, repo, now: datetime) -> int:
+    """Rename channels and roles to their current offset. Nothing happens
+    except at a DST switch or when a shared offset appears or disappears.
+    Returns how many channels were renamed."""
+    active = [r for r in await repo.gf_all_zones()
+              if r["status"] == ACTIVE and r["channel_id"]]
+    if not active:
+        return 0
+    names = await _names_for(repo, active, now)
+    renamed = 0
+    for row in active:
+        channel = bot.get_channel(row["channel_id"])
+        if channel is None:
+            continue
+        channel_name, role_name = names[row["zone"]]
+        if channel.name != channel_name:
+            try:
+                updated = await channel.edit(name=channel_name, reason=_REASON)
+                actual = getattr(updated or channel, "name", channel_name)
+                if not await _accepted(repo, channel_name, actual):
+                    words_name = (await _names_for(repo, active, now))[row["zone"]][0]
+                    await channel.edit(name=words_name, reason=_REASON)
+                renamed += 1
+            except Exception:
+                log.exception("group finder: renaming %s failed", row["zone"])
+        guild = getattr(channel, "guild", None)
+        role = guild.get_role(row["role_id"]) if guild and row["role_id"] else None
+        if role is not None and role.name != role_name:
+            try:
+                await role.edit(name=role_name, reason=_REASON)
+            except Exception:
+                log.exception("group finder: renaming role of %s failed",
+                              row["zone"])
+    return renamed
+
+
+def schedule_name_sync(bot, repo, now: datetime) -> None:
+    """Run sync_zone_names in the background, never two at once. Discord
+    allows 2 renames per channel per 10 minutes and discord.py *waits* on a
+    rate limit — inside the lifecycle tick that would stall countdowns and
+    reminders for up to 10 minutes."""
+    import asyncio
+    task = getattr(bot, "_gf_name_task", None)
+    if isinstance(task, asyncio.Task) and not task.done():
+        return
+
+    async def _run():
+        try:
+            await sync_zone_names(bot, repo, now)
+        except Exception:
+            log.exception("group finder: name sync failed")
+    bot._gf_name_task = asyncio.ensure_future(_run())

@@ -28,7 +28,7 @@ MAX_SELECTS = 5
 ZONE_SELECT_ID = "n3x:gf:zone:{index}"
 
 
-def build_hub_embed(active: list[str]) -> discord.Embed:
+def build_hub_embed(channel_ids: list[int]) -> discord.Embed:
     description = (
         "Plan group activities with players around the world — every group "
         "search shows up in **your** local time.\n"
@@ -36,7 +36,8 @@ def build_hub_embed(active: list[str]) -> discord.Embed:
         "**1. Pick your timezone below** (not listed? use `/timezone` with "
         "any city). You get access to your timezone channel — the bot creates "
         "it if it does not exist yet. Timezones with the same clock share one "
-        "channel.\n"
+        "channel, named after its UTC offset; the name changes with "
+        "summer/winter time, you stay in it.\n"
         "**2. Start a search there with `/lfg`** — a title, how many players, "
         "a date and a few possible start times.\n"
         "**3. Vote for the times that work for you.** As soon as one time has "
@@ -46,9 +47,9 @@ def build_hub_embed(active: list[str]) -> discord.Embed:
         "\n"
         "Every search appears in every timezone channel — same group, your "
         "local time. You can change your timezone at any time.")
-    if active:
-        description += "\n\n**Timezone channels:** " + ", ".join(
-            f"`{z}`" for z in active)
+    if channel_ids:
+        description += "\n\n**Timezone channels:** " + " ".join(
+            f"<#{cid}>" for cid in channel_ids)
     return discord.Embed(title="🌍 Group Finder", description=description,
                          color=discord.Color.blurple())
 
@@ -181,8 +182,9 @@ async def update_hub(bot, repo, settings) -> None:
         if channel is None:
             return
         now = datetime.now(timezone.utc)
-        active = [z["zone"] for z in await provision.active_zones(repo)]
-        embed = build_hub_embed(active)
+        rows = await provision.active_zones(repo)
+        active = [z["zone"] for z in rows]
+        embed = build_hub_embed([z["channel_id"] for z in rows])
         view = HubView(repo, settings, hub_options(active, now), now)
         stored = await repo.get_channel_message(HUB_MESSAGE_KEY)
         if stored is not None and stored[1] == channel.id:

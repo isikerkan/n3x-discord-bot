@@ -548,8 +548,9 @@ _GROUPFINDER_ADMIN_GUIDE = (
     "`/groupfinder setup` legst du beliebte vorab an, weitere mit "
     "`/groupfinder timezone-add`.\n"
     "Zeitzonen mit gleicher Uhrzeit (z. B. Berlin, Zürich, Wien) teilen sich "
-    "einen Channel in der Kategorie „Group Finder\u201c. Den Channel sehen nur "
-    "Mitglieder mit der Rolle und Admins.\n"
+    "einen Channel in der Kategorie „Group Finder\u201c, benannt nach der "
+    "aktuellen UTC-Verschiebung; bei der Zeitumstellung benennt der Bot Channel "
+    "und Rolle um. Den Channel sehen nur Mitglieder mit der Rolle und Admins.\n"
     "Entfernen nur mit `/groupfinder timezone-delete`. Wird ein Zeitzonen-Channel "
     "von Hand gelöscht, gilt die Zeitzone als deaktiviert, bis ein Mitglied sie "
     "wieder wählt.")
@@ -562,7 +563,9 @@ def _groupfinder_guide(hub_channel_id: int | None) -> str:
     return (
         f"**1.** Wähle {where} deine Zeitzone (oder mit `/timezone` und deiner "
         "Stadt). Gibt es noch keinen Channel dafür, legt der Bot ihn an; "
-        "Zeitzonen mit gleicher Uhrzeit teilen sich einen Channel.\n"
+        "Zeitzonen mit gleicher Uhrzeit teilen sich einen Channel. Er heißt "
+        "nach der aktuellen UTC-Verschiebung (z. B. `gf-utc+2`) und wird bei "
+        "der Sommer-/Winterzeit-Umstellung umbenannt – du bleibst drin.\n"
         "**2.** Starte dort mit `/lfg` eine Gruppensuche: Titel, Spieler als "
         "`min-max`, Datum und mögliche Startzeiten in deiner Ortszeit.\n"
         "**3.** Die Suche erscheint in allen Zeitzonen-Channels, jeweils in der "
