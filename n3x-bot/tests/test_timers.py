@@ -84,14 +84,29 @@ def _now() -> datetime:
     return datetime(2026, 7, 14, 12, 0, 0, tzinfo=TZ)
 
 
+OVERVIEW_CHANNEL_ID = 222
+OVERVIEW_MESSAGE_ID = 333
+
+
 def _overview_channel():
     """Fake overview channel: get_channel -> channel -> fetch_message -> msg,
-    with msg.edit an AsyncMock so we can assert the self-edit happened."""
-    msg = SimpleNamespace(edit=AsyncMock(), add_reaction=AsyncMock())
+    with msg.edit an AsyncMock so we can assert the self-edit happened.
+    `send` returns the same msg, so a (re)post is observable too."""
+    msg = SimpleNamespace(id=OVERVIEW_MESSAGE_ID, edit=AsyncMock(),
+                          add_reaction=AsyncMock())
     channel = MagicMock()
+    channel.id = OVERVIEW_CHANNEL_ID
     channel.fetch_message = AsyncMock(return_value=msg)
+    channel.send = AsyncMock(return_value=msg)
     channel._msg = msg
     return channel
+
+
+async def _track_overview(repo, message_id=OVERVIEW_MESSAGE_ID,
+                          channel_id=OVERVIEW_CHANNEL_ID):
+    """The overview message is DB-tracked (channel_messages), not configured."""
+    from n3x_bot.timers import TIMER_OVERVIEW_KEY
+    await repo.set_channel_message(TIMER_OVERVIEW_KEY, message_id, channel_id)
 
 
 def _fake_interaction(user, guild=None):
@@ -346,8 +361,8 @@ async def test_start_base_timer_rejects_map_outside_allowed_list():
 async def test_update_timer_overview_edits_the_fixed_message():
     from n3x_bot import timers
     repo = await _flatfile_repo()
-    settings = _settings(timer_overview_channel_id=222,
-                         timer_overview_message_id=333)
+    await _track_overview(repo)
+    settings = _settings(timer_overview_channel_id=222)
     now = _now()
     await repo.set_base_timer("4-1", now + timedelta(minutes=30))
 
@@ -368,8 +383,8 @@ async def test_update_timer_overview_edits_the_fixed_message():
 async def test_update_timer_overview_purges_expired_before_rendering():
     from n3x_bot import timers
     repo = await _flatfile_repo()
-    settings = _settings(timer_overview_channel_id=222,
-                         timer_overview_message_id=333)
+    await _track_overview(repo)
+    settings = _settings(timer_overview_channel_id=222)
     now = _now()
     await repo.set_base_timer("4-1", now - timedelta(minutes=5))   # expired
     await repo.set_base_timer("1-5", now + timedelta(minutes=10))  # active
@@ -392,8 +407,8 @@ async def test_update_timer_overview_purges_expired_before_rendering():
 async def test_update_timer_overview_noop_when_channel_missing():
     from n3x_bot import timers
     repo = await _flatfile_repo()
-    settings = _settings(timer_overview_channel_id=222,
-                         timer_overview_message_id=333)
+    await _track_overview(repo)
+    settings = _settings(timer_overview_channel_id=222)
     bot = MagicMock()
     bot.get_channel = MagicMock(return_value=None)
 
@@ -405,8 +420,8 @@ async def test_update_timer_overview_noop_when_channel_missing():
 async def test_update_timer_overview_swallows_fetch_failure():
     from n3x_bot import timers
     repo = await _flatfile_repo()
-    settings = _settings(timer_overview_channel_id=222,
-                         timer_overview_message_id=333)
+    await _track_overview(repo)
+    settings = _settings(timer_overview_channel_id=222)
     channel = MagicMock()
     channel.fetch_message = AsyncMock(side_effect=RuntimeError("gone"))
     bot = MagicMock()
@@ -420,8 +435,8 @@ async def test_update_timer_overview_swallows_fetch_failure():
 async def test_update_timer_overview_swallows_edit_failure():
     from n3x_bot import timers
     repo = await _flatfile_repo()
-    settings = _settings(timer_overview_channel_id=222,
-                         timer_overview_message_id=333)
+    await _track_overview(repo)
+    settings = _settings(timer_overview_channel_id=222)
     channel = _overview_channel()
     channel._msg.edit = AsyncMock(side_effect=RuntimeError("forbidden"))
     channel.fetch_message = AsyncMock(return_value=channel._msg)
@@ -468,8 +483,8 @@ async def test_update_timer_overview_skips_edit_when_nothing_changed():
     # overview. Two passes at the same `now` must produce exactly one edit.
     from n3x_bot import timers
     repo = await _flatfile_repo()
-    settings = _settings(timer_overview_channel_id=222,
-                         timer_overview_message_id=333)
+    await _track_overview(repo)
+    settings = _settings(timer_overview_channel_id=222)
     now = _now()
     channel = _overview_channel()
     bot = MagicMock()
@@ -485,8 +500,8 @@ async def test_update_timer_overview_skips_edit_when_nothing_changed():
 async def test_update_timer_overview_repaints_when_the_countdown_ticks():
     from n3x_bot import timers
     repo = await _flatfile_repo()
-    settings = _settings(timer_overview_channel_id=222,
-                         timer_overview_message_id=333)
+    await _track_overview(repo)
+    settings = _settings(timer_overview_channel_id=222)
     now = _now()
     await repo.set_base_timer("4-1", now + timedelta(minutes=30))
     channel = _overview_channel()
@@ -511,8 +526,8 @@ async def test_update_timer_overview_seeds_reload_reaction_only_once():
     # rate limiter; at 1 tick/s it must not fire on every pass.
     from n3x_bot import timers
     repo = await _flatfile_repo()
-    settings = _settings(timer_overview_channel_id=222,
-                         timer_overview_message_id=333)
+    await _track_overview(repo)
+    settings = _settings(timer_overview_channel_id=222)
     now = _now()
     await repo.set_base_timer("4-1", now + timedelta(minutes=30))
     channel = _overview_channel()
@@ -535,8 +550,8 @@ async def test_update_timer_overview_skips_write_transaction_when_none_expired()
     # second for nothing; purge only when something actually expired.
     from n3x_bot import timers
     repo = await _flatfile_repo()
-    settings = _settings(timer_overview_channel_id=222,
-                         timer_overview_message_id=333)
+    await _track_overview(repo)
+    settings = _settings(timer_overview_channel_id=222)
     now = _now()
     await repo.set_base_timer("4-1", now + timedelta(minutes=30))
     bot = MagicMock()
@@ -553,6 +568,228 @@ async def test_update_timer_overview_skips_write_transaction_when_none_expired()
     repo.purge_expired_base_timers.assert_awaited_once()
     assert set(await repo.list_base_timers()) == {"4-1"}
     await repo.close()
+
+
+# ── overview message: DB-tracked, self-healing ──────────────────────────────
+
+def _not_found():
+    import discord
+    return discord.NotFound(MagicMock(status=404, reason="Not Found"),
+                            "Unknown Message")
+
+
+def _overview_bot(channel):
+    bot = MagicMock()
+    bot.get_channel = MagicMock(return_value=channel)
+    return bot
+
+
+async def test_overview_is_posted_and_tracked_when_none_is_tracked():
+    from n3x_bot import timers
+    repo = await _flatfile_repo()
+    settings = _settings(timer_overview_channel_id=OVERVIEW_CHANNEL_ID)
+    channel = _overview_channel()
+
+    await timers.update_timer_overview(_overview_bot(channel), repo, settings,
+                                       _now())
+
+    channel.send.assert_awaited_once()
+    channel.fetch_message.assert_not_awaited()
+    assert await repo.get_channel_message(timers.TIMER_OVERVIEW_KEY) == (
+        OVERVIEW_MESSAGE_ID, OVERVIEW_CHANNEL_ID)
+    await repo.close()
+
+
+async def test_deleted_overview_is_reposted_and_the_new_id_tracked():
+    # The production failure: the channel was purged, the tracked message is
+    # gone. The next pass must post a replacement, not edit into the void.
+    from n3x_bot import timers
+    repo = await _flatfile_repo()
+    await _track_overview(repo, message_id=111)
+    settings = _settings(timer_overview_channel_id=OVERVIEW_CHANNEL_ID)
+    channel = _overview_channel()
+    channel.fetch_message = AsyncMock(side_effect=_not_found())
+
+    await timers.update_timer_overview(_overview_bot(channel), repo, settings,
+                                       _now())
+
+    channel.send.assert_awaited_once()
+    assert (await repo.get_channel_message(timers.TIMER_OVERVIEW_KEY))[0] == \
+        OVERVIEW_MESSAGE_ID
+    await repo.close()
+
+
+async def test_non_notfound_error_never_reposts():
+    # Permissions / 5xx / rate limit are not proof the message is gone. At one
+    # pass per second, reposting on them would spam a message every second.
+    from n3x_bot import timers
+    repo = await _flatfile_repo()
+    await _track_overview(repo)
+    settings = _settings(timer_overview_channel_id=OVERVIEW_CHANNEL_ID)
+    channel = _overview_channel()
+    channel.fetch_message = AsyncMock(side_effect=RuntimeError("503"))
+
+    await timers.update_timer_overview(_overview_bot(channel), repo, settings,
+                                       _now())
+
+    channel.send.assert_not_awaited()
+    assert (await repo.get_channel_message(timers.TIMER_OVERVIEW_KEY))[0] == \
+        OVERVIEW_MESSAGE_ID
+    await repo.close()
+
+
+async def test_edit_hitting_notfound_also_reposts():
+    # Deleted between fetch and edit.
+    from n3x_bot import timers
+    repo = await _flatfile_repo()
+    await _track_overview(repo, message_id=111)
+    settings = _settings(timer_overview_channel_id=OVERVIEW_CHANNEL_ID)
+    channel = _overview_channel()
+    stale = SimpleNamespace(id=111, edit=AsyncMock(side_effect=_not_found()),
+                            add_reaction=AsyncMock())
+    channel.fetch_message = AsyncMock(return_value=stale)
+
+    await timers.update_timer_overview(_overview_bot(channel), repo, settings,
+                                       _now())
+
+    channel.send.assert_awaited_once()
+    await repo.close()
+
+
+async def test_idle_overview_is_not_fetched_again_within_verify_interval():
+    from n3x_bot import timers
+    repo = await _flatfile_repo()
+    await _track_overview(repo)
+    settings = _settings(timer_overview_channel_id=OVERVIEW_CHANNEL_ID)
+    channel = _overview_channel()
+    bot = _overview_bot(channel)
+    now = _now()
+
+    await timers.update_timer_overview(bot, repo, settings, now)
+    await timers.update_timer_overview(bot, repo, settings,
+                                       now + timedelta(seconds=30))
+
+    assert channel.fetch_message.await_count == 1   # second pass: no API call
+    await repo.close()
+
+
+async def test_idle_overview_deletion_is_detected_after_verify_interval():
+    # Idle text never changes, so without the periodic check a purge while no
+    # timer runs would go unnoticed until the next /base.
+    from n3x_bot import timers
+    repo = await _flatfile_repo()
+    await _track_overview(repo)
+    settings = _settings(timer_overview_channel_id=OVERVIEW_CHANNEL_ID)
+    channel = _overview_channel()
+    bot = _overview_bot(channel)
+    now = _now()
+
+    await timers.update_timer_overview(bot, repo, settings, now)
+    channel.send.assert_not_awaited()
+    channel.fetch_message = AsyncMock(side_effect=_not_found())   # purged
+    await timers.update_timer_overview(
+        bot, repo, settings, now + timers.VERIFY_INTERVAL + timedelta(seconds=1))
+
+    channel.send.assert_awaited_once()
+    await repo.close()
+
+
+async def test_idle_verification_does_not_edit_unchanged_text():
+    from n3x_bot import timers
+    repo = await _flatfile_repo()
+    await _track_overview(repo)
+    settings = _settings(timer_overview_channel_id=OVERVIEW_CHANNEL_ID)
+    channel = _overview_channel()
+    bot = _overview_bot(channel)
+    now = _now()
+
+    await timers.update_timer_overview(bot, repo, settings, now)
+    await timers.update_timer_overview(
+        bot, repo, settings, now + timers.VERIFY_INTERVAL + timedelta(seconds=1))
+
+    assert channel.fetch_message.await_count == 2   # verified twice
+    assert channel._msg.edit.await_count == 1       # but painted only once
+    await repo.close()
+
+
+async def test_message_tracked_in_another_channel_is_replaced():
+    # The channel was reconfigured in .env: post into the configured one.
+    from n3x_bot import timers
+    repo = await _flatfile_repo()
+    await _track_overview(repo, message_id=999, channel_id=12345)
+    settings = _settings(timer_overview_channel_id=OVERVIEW_CHANNEL_ID)
+    channel = _overview_channel()
+
+    await timers.update_timer_overview(_overview_bot(channel), repo, settings,
+                                       _now())
+
+    channel.fetch_message.assert_not_awaited()
+    channel.send.assert_awaited_once()
+    assert await repo.get_channel_message(timers.TIMER_OVERVIEW_KEY) == (
+        OVERVIEW_MESSAGE_ID, OVERVIEW_CHANNEL_ID)
+    await repo.close()
+
+
+async def test_concurrent_updates_post_only_one_overview():
+    # The 1s loop and a /base can run update_timer_overview at the same time;
+    # both would see "nothing tracked" and each post one. The lock prevents it.
+    import asyncio
+    from n3x_bot import timers
+    repo = await _flatfile_repo()
+    settings = _settings(timer_overview_channel_id=OVERVIEW_CHANNEL_ID)
+    channel = _overview_channel()
+    gate = asyncio.Event()
+
+    async def _slow_send(*args, **kwargs):
+        await gate.wait()
+        return channel._msg
+    channel.send = AsyncMock(side_effect=_slow_send)
+    bot = _overview_bot(channel)
+    now = _now()
+
+    first = asyncio.ensure_future(
+        timers.update_timer_overview(bot, repo, settings, now))
+    second = asyncio.ensure_future(
+        timers.update_timer_overview(bot, repo, settings, now))
+    await asyncio.wait({first, second}, timeout=0.2)   # both parked
+    gate.set()
+    await asyncio.gather(first, second)
+
+    assert channel.send.await_count == 1
+    await repo.close()
+
+
+async def test_timer_loop_survives_a_failing_tick():
+    # The production outage: a Postgres restart made one tick raise
+    # InterfaceError and tasks.loop stopped for good. The body must swallow it.
+    from n3x_bot import timers
+    repo = await _flatfile_repo()
+    repo.list_base_timers = AsyncMock(side_effect=RuntimeError("connection is closed"))
+    bot = MagicMock()
+    bot.get_channel = MagicMock(return_value=None)
+    loop = timers.start_timer_overview_loop(bot, repo, _settings())
+    try:
+        await loop.coro()           # must not raise
+        assert loop.is_running() is True
+    finally:
+        loop.cancel()
+    await repo.close()
+
+
+async def test_sql_engine_pings_pooled_connections():
+    # Root cause of the outage: without pre-ping a Postgres restart leaves dead
+    # connections in the pool and the next checkout raises InterfaceError.
+    import tempfile
+    from n3x_bot.storage.sql_repo import SqlRepository
+    fd, path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    repo = SqlRepository(f"sqlite+aiosqlite:///{path}")
+    await repo.connect()
+    try:
+        assert repo.engine.sync_engine.pool._pre_ping is True
+    finally:
+        await repo.close()
+        os.remove(path)
 
 
 # ── register_timer_commands (Phase 5: slash-ONLY /base + /basestop) ──────────
@@ -642,9 +879,9 @@ async def test_base_map_autocomplete_filters_by_current_input():
 async def test_base_slash_stores_timer_and_refreshes_overview_for_role_holder():
     from n3x_bot import timers
     repo = await _flatfile_repo()
+    await _track_overview(repo)
     settings = _settings(base_timer_role_id=555,
-                         timer_overview_channel_id=222,
-                         timer_overview_message_id=333)
+                         timer_overview_channel_id=222)
     bot = build_bot(settings, repo)
     channel = _overview_channel()
     bot.get_channel = MagicMock(return_value=channel)
@@ -667,9 +904,9 @@ async def test_base_slash_stores_timer_and_refreshes_overview_for_role_holder():
 async def test_base_slash_refused_for_non_role_holder_does_no_work():
     from n3x_bot import timers
     repo = await _flatfile_repo()
+    await _track_overview(repo)
     settings = _settings(base_timer_role_id=555,
-                         timer_overview_channel_id=222,
-                         timer_overview_message_id=333)
+                         timer_overview_channel_id=222)
     bot = build_bot(settings, repo)
     channel = _overview_channel()
     bot.get_channel = MagicMock(return_value=channel)
@@ -688,9 +925,9 @@ async def test_base_slash_refused_for_non_role_holder_does_no_work():
 async def test_base_slash_rejects_invalid_map_and_names_allowed_maps():
     from n3x_bot import timers
     repo = await _flatfile_repo()
+    await _track_overview(repo)
     settings = _settings(base_timer_role_id=555,
-                         timer_overview_channel_id=222,
-                         timer_overview_message_id=333)
+                         timer_overview_channel_id=222)
     bot = build_bot(settings, repo)
     timers.register_timer_commands(bot, repo, settings)
 
@@ -729,9 +966,9 @@ async def test_basestop_map_autocomplete_lists_only_active_timers():
 async def test_basestop_slash_removes_timer_and_refreshes_overview():
     from n3x_bot import timers
     repo = await _flatfile_repo()
+    await _track_overview(repo)
     settings = _settings(base_timer_role_id=555,
-                         timer_overview_channel_id=222,
-                         timer_overview_message_id=333)
+                         timer_overview_channel_id=222)
     bot = build_bot(settings, repo)
     channel = _overview_channel()
     bot.get_channel = MagicMock(return_value=channel)
@@ -752,9 +989,9 @@ async def test_basestop_slash_removes_timer_and_refreshes_overview():
 async def test_basestop_slash_on_unknown_map_reports_no_active_timer():
     from n3x_bot import timers
     repo = await _flatfile_repo()
+    await _track_overview(repo)
     settings = _settings(base_timer_role_id=555,
-                         timer_overview_channel_id=222,
-                         timer_overview_message_id=333)
+                         timer_overview_channel_id=222)
     bot = build_bot(settings, repo)
     bot.get_channel = MagicMock(return_value=_overview_channel())
     timers.register_timer_commands(bot, repo, settings)

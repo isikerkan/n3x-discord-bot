@@ -61,8 +61,8 @@ async def test_gate_reload_reaction_refreshes_gate_embed(monkeypatch):
 async def test_timer_reload_reaction_refreshes_overview(monkeypatch):
     repo = await _repo()
     bot = build_bot(_settings(), repo)
-    await repo.set_runtime_config("timer_overview_message_id", "6002")
-    await bot.runtime_config.refresh(repo)
+    from n3x_bot.timers import TIMER_OVERVIEW_KEY
+    await repo.set_channel_message(TIMER_OVERVIEW_KEY, 6002, 222)
     called = {}
     async def _fake_timer(b, r, s, now):
         called["timer"] = True

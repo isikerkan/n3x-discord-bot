@@ -187,10 +187,13 @@ async def test_config_group_exposes_expected_subcommands():
     bot = await _bot(_settings(), repo)
 
     names = {c.name for c in _config_group(bot).commands}
-    expected = {"channel", "role", "message", "gate-rewards", "allowed-maps",
+    expected = {"channel", "role", "gate-rewards", "allowed-maps",
                 "voice-roles", "reminder-time", "gate-delete-delay", "show",
                 "reset"}
     assert expected <= names
+    # The base-timer overview message is DB-tracked now; the static-id
+    # `/config message` subcommand (its only purpose) is gone.
+    assert "message" not in names
 
     await _cleanup(repo)
 
@@ -344,56 +347,6 @@ async def test_config_role_non_admin_refused_no_write():
     # MIGRATED for multi-role: the field is now a str; compare the list accessors
     # (with no override, the resolver mirrors the .env base).
     assert bot.runtime_config.target_role_ids == settings.target_role_ids
-
-    await _cleanup(repo)
-
-
-# ── 3. /config message purpose:<Choice> message_id:<str> ────────────────────
-
-
-async def test_config_message_writes_id_and_refreshes():
-    repo = await _flatfile_repo()
-    settings = _settings()
-    bot = await _bot(settings, repo)
-    interaction = _fake_interaction()
-
-    await _config_sub(bot, "message").callback(
-        interaction, purpose="timer_overview", message_id="555")
-
-    assert await repo.get_runtime_config("timer_overview_message_id") == "555"
-    assert bot.runtime_config.timer_overview_message_id == 555
-    assert _last_send(interaction).kwargs.get("ephemeral") is True
-
-    await _cleanup(repo)
-
-
-async def test_config_message_non_numeric_id_rejected_no_write():
-    repo = await _flatfile_repo()
-    settings = _settings()
-    bot = await _bot(settings, repo)
-    interaction = _fake_interaction()
-
-    await _config_sub(bot, "message").callback(
-        interaction, purpose="timer_overview", message_id="55x")
-
-    interaction.response.send_message.assert_awaited()
-    assert await repo.get_runtime_config("timer_overview_message_id") is None
-    assert _last_send(interaction).kwargs.get("ephemeral") is True
-
-    await _cleanup(repo)
-
-
-async def test_config_message_non_admin_refused():
-    repo = await _flatfile_repo()
-    settings = _settings()
-    bot = await _bot(settings, repo)
-    interaction = _fake_interaction(user=_non_admin())
-
-    await _config_sub(bot, "message").callback(
-        interaction, purpose="timer_overview", message_id="555")
-
-    assert "Berechtigung" in _sent_text(interaction)
-    assert await repo.all_runtime_config() == {}
 
     await _cleanup(repo)
 

@@ -40,9 +40,6 @@ ROLE_PURPOSES: dict[str, str] = {
     "base_timer": "base_timer_role_id",
     "event": "event_role_id",
 }
-MESSAGE_PURPOSES: dict[str, str] = {
-    "timer_overview": "timer_overview_message_id",
-}
 
 
 def register_config_commands(bot, repo: StatsRepository, settings: Settings) -> None:
@@ -84,20 +81,6 @@ def register_config_commands(bot, repo: StatsRepository, settings: Settings) -> 
         if not await _require_admin(interaction):
             return
         await _write(interaction, ROLE_PURPOSES[purpose], str(role.id))
-
-    @config_group.command(name="message",
-                          description="Setzt eine Nachrichten-ID für einen Zweck.")
-    @app_commands.describe(purpose="Zweck", message_id="Nachrichten-ID")
-    @app_commands.choices(purpose=[app_commands.Choice(name=k, value=k)
-                                   for k in MESSAGE_PURPOSES])
-    async def message(interaction, purpose: str, message_id: str):
-        if not await _require_admin(interaction):
-            return
-        if not message_id.isdigit():
-            await interaction.response.send_message(
-                f"❌ Ungültige ID `{message_id}`.", ephemeral=True)
-            return
-        await _write(interaction, MESSAGE_PURPOSES[purpose], message_id)
 
     @config_group.command(name="gate-rewards",
                           description="Setzt die Gate-Belohnungen.")

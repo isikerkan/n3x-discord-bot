@@ -200,21 +200,12 @@ def test_timer_overview_channel_id_read_from_env(monkeypatch):
     assert s.timer_overview_channel_id == 112233
 
 
-def test_timer_overview_message_id_defaults_to_zero():
-    s = Settings(**BASE)
-    assert s.timer_overview_message_id == 0
-
-
-def test_timer_overview_message_id_read_from_env(monkeypatch):
+def test_stale_timer_overview_message_id_env_is_ignored(monkeypatch):
+    # The overview message is DB-tracked now; a leftover
+    # TIMER_OVERVIEW_MESSAGE_ID in an old .env must not break startup.
     monkeypatch.setenv("TIMER_OVERVIEW_MESSAGE_ID", "445566")
-    s = Settings(
-        discord_token="tok",
-        target_role_id=1,
-        welcome_channel_id=2,
-        reminder_channel_id=3,
-        _env_file=None,
-    )
-    assert s.timer_overview_message_id == 445566
+    s = Settings(**BASE)
+    assert not hasattr(s, "timer_overview_message_id")
 
 
 def test_allowed_maps_defaults_to_the_v3_map_list():
@@ -264,7 +255,6 @@ def test_blank_env_string_falls_back_to_default(monkeypatch):
     monkeypatch.setenv("GATE_REWARDS", "")
     s = Settings(_env_file=None)
     assert s.timezone == "Europe/Berlin"
-    assert s.timer_overview_message_id == 0
     assert s.allowed_maps.startswith("4-1")
     assert s.gate_rewards.startswith("a:")
 

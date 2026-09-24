@@ -58,7 +58,8 @@ from n3x_bot.nicknames import enforce_nick
 from n3x_bot.runtime_config import RuntimeConfig
 from n3x_bot.storage.base import GATE_TYPES, StatsRepository
 from n3x_bot.timers import (
-    register_timer_commands, start_timer_overview_loop, update_timer_overview,
+    TIMER_OVERVIEW_KEY, register_timer_commands, start_timer_overview_loop,
+    update_timer_overview,
 )
 from n3x_bot.lfg import (
     register_lfg_commands, restore_lfg_views, start_lfg_cleanup_loop,
@@ -1217,10 +1218,11 @@ async def handle_reload_reaction(bot, repo: StatsRepository, settings: Settings,
             payload.message_id == bot._gate_embed_msg_id:
         await update_gate_stats_embed(bot, repo, settings)
         handled = True
-    elif rc.timer_overview_message_id and \
-            payload.message_id == rc.timer_overview_message_id:
-        await update_timer_overview(bot, repo, rc, now_local(settings))
-        handled = True
+    else:
+        stored = await repo.get_channel_message(TIMER_OVERVIEW_KEY)
+        if stored is not None and payload.message_id == stored[0]:
+            await update_timer_overview(bot, repo, rc, now_local(settings))
+            handled = True
     if not handled:
         return
     try:

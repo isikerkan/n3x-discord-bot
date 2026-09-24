@@ -18,7 +18,7 @@ Pinned API (to be implemented downstream in `n3x_bot/runtime_config.py`):
     welcome_channel_id, reminder_channel_id, gate_input_channel_id,
     gate_stats_channel_id, milestone_channel_id, overview_channel_id,
     kodex_check_channel_id, timer_overview_channel_id,
-    timer_overview_message_id, target_role_id, gate_delete_role_id,
+    target_role_id, gate_delete_role_id,
     base_timer_role_id
 
     # derived getters mirroring Settings (parse the override string if set):
@@ -76,7 +76,7 @@ _INT_FIELDS = [
     "welcome_channel_id", "reminder_channel_id", "gate_input_channel_id",
     "gate_stats_channel_id", "milestone_channel_id", "overview_channel_id",
     "kodex_check_channel_id", "timer_overview_channel_id",
-    "timer_overview_message_id", "target_role_id", "gate_delete_role_id",
+    "target_role_id", "gate_delete_role_id",
     "base_timer_role_id",
 ]
 
@@ -85,7 +85,7 @@ async def test_int_fields_pass_through_to_settings_when_no_overrides():
     from n3x_bot.runtime_config import RuntimeConfig
     settings = _settings(
         gate_stats_channel_id=555, milestone_channel_id=42,
-        base_timer_role_id=13, timer_overview_message_id=88,
+        base_timer_role_id=13,
     )
     rc = RuntimeConfig(settings)
     for field in _INT_FIELDS:

@@ -43,7 +43,10 @@ class SqlRepository(StatsRepository):
         self.engine = None
 
     async def connect(self) -> None:
-        self.engine = create_async_engine(self.database_url)
+        # pool_pre_ping: a Postgres restart (e.g. by unattended-upgrades) kills
+        # every pooled connection; without a ping the next checkout hands out a
+        # dead one and raises InterfaceError. The ping replaces it transparently.
+        self.engine = create_async_engine(self.database_url, pool_pre_ping=True)
         async with self.engine.begin() as conn:
             await conn.run_sync(sc.metadata.create_all)
 

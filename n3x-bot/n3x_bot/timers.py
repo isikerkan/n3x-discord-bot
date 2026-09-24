@@ -21,6 +21,8 @@ the message-edit bucket). discord.py's HTTPClient absorbs any 429 by sleeping,
 and `tasks.loop` waits for a slow body before scheduling the next tick, so the
 worst case is a countdown that lags rather than a crash or a ban.
 """
+import asyncio
+import logging
 import math
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -31,6 +33,19 @@ from discord.ext import tasks
 
 from n3x_bot.config import Settings
 from n3x_bot.storage.base import StatsRepository
+
+log = logging.getLogger("N3X-Bot")
+
+# The overview message is tracked in `channel_messages` under this key (like
+# the gate-input and LFG guides) instead of a static configured message id: if
+# the message is deleted, the next pass posts a fresh one rather than silently
+# editing nothing forever.
+TIMER_OVERVIEW_KEY = "timer_overview"
+# While the overview is idle its text never changes, so the skip-if-unchanged
+# guard would never notice a deletion (an admin channel purge is a bulk delete,
+# which per-message delete events don't cover either). Verify it still exists
+# at most this often.
+VERIFY_INTERVAL = timedelta(seconds=60)
 
 OVERVIEW_TITLE = "🛰️ BASE TIMER OVERVIEW"
 NO_TIMERS_TEXT = "No active base timers."
@@ -90,8 +105,36 @@ async def start_base_timer(repo: StatsRepository, settings: Settings,
     return end_time
 
 
+def _overview_lock(bot) -> asyncio.Lock:
+    """One lock per bot so the 1s loop and a concurrent /base can't both see
+    the message missing and each post a replacement."""
+    lock = getattr(bot, "_timer_overview_lock", None)
+    if not isinstance(lock, asyncio.Lock):
+        lock = asyncio.Lock()
+        bot._timer_overview_lock = lock
+    return lock
+
+
+async def _seed_reload_reaction(bot, msg) -> None:
+    """Seed the 🔄 reload control ONCE per message per process (Discord dedups
+    the bot's own reaction, but the request still costs a slot on the rate
+    limiter every tick)."""
+    if getattr(bot, "_timer_overview_reaction_seeded", None) == msg.id:
+        return
+    try:
+        await msg.add_reaction("🔄")
+        bot._timer_overview_reaction_seeded = msg.id
+    except Exception:
+        pass
+
+
 async def update_timer_overview(bot, repo: StatsRepository, settings: Settings,
                                 now: datetime) -> None:
+    async with _overview_lock(bot):
+        await _update_timer_overview(bot, repo, settings, now)
+
+
+async def _update_timer_overview(bot, repo, settings, now) -> None:
     # List first, then purge only when something actually expired: at one tick
     # per second an unconditional purge would open a write transaction every
     # second for nothing.
@@ -104,27 +147,45 @@ async def update_timer_overview(bot, repo: StatsRepository, settings: Settings,
     channel = bot.get_channel(settings.timer_overview_channel_id)
     if channel is None:
         return
-    # Skip the API call when the paint would be a no-op. Guards the idle case:
-    # with no timers the description never changes, so the loop goes quiet.
-    if getattr(bot, "_timer_overview_last", None) == embed.description:
-        return
+
+    stored = await repo.get_channel_message(TIMER_OVERVIEW_KEY)
+    # A tracked message in a DIFFERENT channel means the channel was
+    # reconfigured: treat it as missing and post into the new one.
+    tracked_id = stored[0] if stored and stored[1] == channel.id else None
+
+    if tracked_id is not None:
+        unchanged = getattr(bot, "_timer_overview_last", None) == embed.description
+        verified = getattr(bot, "_timer_overview_verified_at", None)
+        recently_verified = (isinstance(verified, datetime)
+                             and now - verified < VERIFY_INTERVAL)
+        # Nothing to repaint and existence checked recently -> no API call.
+        if unchanged and recently_verified:
+            return
+        try:
+            msg = await channel.fetch_message(tracked_id)
+            if not unchanged:
+                await msg.edit(content=None, embed=embed)
+                bot._timer_overview_last = embed.description
+            bot._timer_overview_verified_at = now
+            await _seed_reload_reaction(bot, msg)
+            return
+        except discord.NotFound:
+            pass  # deleted -> fall through and post a replacement
+        except Exception:
+            # Anything else (permissions, 5xx, rate limit) is not proof the
+            # message is gone. Reposting here would spam a new message every
+            # second, so skip this pass instead.
+            return
+
     try:
-        msg = await channel.fetch_message(settings.timer_overview_message_id)
-        await msg.edit(content=None, embed=embed)
-        bot._timer_overview_last = embed.description
-        # Seed the 🔄 reload control ONCE per message per process (Discord
-        # dedups the bot's own reaction, but the request still costs a slot on
-        # the rate limiter every tick). A user clicking it forces a refresh.
-        seeded = getattr(bot, "_timer_overview_reaction_seeded", None)
-        if seeded != settings.timer_overview_message_id:
-            try:
-                await msg.add_reaction("🔄")
-                bot._timer_overview_reaction_seeded = \
-                    settings.timer_overview_message_id
-            except Exception:
-                pass
+        msg = await channel.send(embed=embed)
     except Exception:
-        pass
+        log.exception("timer overview: posting a new overview message failed")
+        return
+    await repo.set_channel_message(TIMER_OVERVIEW_KEY, msg.id, channel.id)
+    bot._timer_overview_last = embed.description
+    bot._timer_overview_verified_at = now
+    await _seed_reload_reaction(bot, msg)
 
 
 def register_timer_commands(bot, repo: StatsRepository,
@@ -201,8 +262,15 @@ def start_timer_overview_loop(bot, repo: StatsRepository,
     # no-ops when the text is unchanged, so an idle overview sends nothing.
     @tasks.loop(seconds=1)
     async def _timer_overview_loop():
-        await update_timer_overview(
-            bot, repo, bot.runtime_config, datetime.now(ZoneInfo(settings.timezone)))
+        # tasks.loop only retries network-type errors; anything else (e.g. the
+        # InterfaceError from a Postgres restart) would stop the loop for the
+        # rest of the process. Log and carry on with the next tick instead.
+        try:
+            await update_timer_overview(
+                bot, repo, bot.runtime_config,
+                datetime.now(ZoneInfo(settings.timezone)))
+        except Exception:
+            log.exception("timer overview loop tick failed")
 
     bot._timer_overview_loop = _timer_overview_loop
     if not _timer_overview_loop.is_running():
