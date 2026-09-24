@@ -536,23 +536,70 @@ def _render_command_embed(bot, title: str, category_keys, color, footer=None
     return embed
 
 
-def build_command_list(bot) -> discord.Embed:
+_BOT_INTRO = (
+    "Der N3X-Bot führt die Gate-Statistiken, vergibt Achievements, zählt "
+    "Aktivität, verwaltet Base-Timer und organisiert Gruppen über den "
+    "**Group Finder**.\n"
+    "Alle Befehle sind Slash-Befehle: tippe `/` in einen Channel und wähle den "
+    "Befehl aus der Liste.")
+
+_GROUPFINDER_ADMIN_GUIDE = (
+    "`/groupfinder setup` zeigt die aktiven Zeitzonen und bietet die 25 "
+    "beliebtesten zum Hinzufügen an; weitere mit `/groupfinder timezone-add`.\n"
+    "Pro Zeitzone legt der Bot eine Rolle und einen Channel in der Kategorie "
+    "„Group Finder\u201c an. Den Channel sehen nur Mitglieder mit der Rolle und "
+    "Admins.\n"
+    "Entfernen nur mit `/groupfinder timezone-delete`. Wird ein Zeitzonen-Channel "
+    "von Hand gelöscht, gilt die Zeitzone als deaktiviert und wird nicht neu "
+    "angelegt.")
+
+
+def _groupfinder_guide(hub_channel_id: int | None) -> str:
+    """How the Group Finder works, for the public command list. The Group
+    Finder UI itself is English; this overview is German like the rest."""
+    where = f"in <#{hub_channel_id}>" if hub_channel_id else "im Group-Finder-Hub"
+    return (
+        f"**1.** Wähle {where} deine Zeitzone (oder mit `/timezone`). Danach "
+        "siehst du deinen Zeitzonen-Channel.\n"
+        "**2.** Starte dort mit `/lfg` eine Gruppensuche: Titel, Spieler als "
+        "`min-max`, Datum und mögliche Startzeiten in deiner Ortszeit.\n"
+        "**3.** Die Suche erscheint in allen Zeitzonen-Channels, jeweils in der "
+        "dortigen Ortszeit. Wähle alle Zeiten, die dir passen.\n"
+        "**4.** Sobald eine Zeit genug Stimmen hat, steht der Termin, und alle, "
+        "die dafür gestimmt haben, werden gepingt. Wer eine andere Zeit gewählt "
+        "hat, fällt raus, kann aber per **Join** beitreten, solange Plätze frei "
+        "sind.\n"
+        "**5.** 15 Minuten vor Start bekommst du eine DM. 1 Stunde nach dem "
+        "Start verschwindet die Suche.\n"
+        "Absagen können nur der Ersteller und Admins. Der Group Finder selbst "
+        "ist auf Englisch.")
+
+
+def build_command_list(bot, hub_channel_id: int | None = None) -> discord.Embed:
     """PUBLIC command-list embed — every category EXCEPT the admin block.
 
     Admin/config/content are hidden here; a footer points to the ephemeral
-    "Admin-Befehle" button, which only admins can use.
+    "Admin-Befehle" button, which only admins can use. A short intro and a
+    Group Finder walkthrough make it the bot's documentation, not just a list.
     """
     public_keys = [k for k, _, _ in _COMMAND_CATEGORIES
                    if k not in _ADMIN_CATEGORY_KEYS]
-    return _render_command_embed(
+    embed = _render_command_embed(
         bot, "📋 Befehlsübersicht", public_keys, discord.Color.blurple(),
         footer="🔧 Admin-Befehle: Button unten (nur für Admins sichtbar).")
+    embed.description = _BOT_INTRO
+    embed.add_field(name="ℹ️ Group Finder – so funktioniert's",
+                    value=_groupfinder_guide(hub_channel_id), inline=False)
+    return embed
 
 
 def build_admin_command_list(bot) -> discord.Embed:
     """ADMIN-only command-list embed — solely the admin categories."""
-    return _render_command_embed(
+    embed = _render_command_embed(
         bot, "⚙️ Admin-Befehle", _ADMIN_CATEGORY_KEYS, discord.Color.dark_grey())
+    embed.add_field(name="ℹ️ Group Finder einrichten",
+                    value=_GROUPFINDER_ADMIN_GUIDE, inline=False)
+    return embed
 
 
 class CommandListView(discord.ui.View):
@@ -593,7 +640,8 @@ async def update_command_list(bot, repo: StatsRepository, settings: Settings):
     channel = bot.get_channel(bot.runtime_config.command_list_channel_id)
     if channel is None:
         return
-    embed = build_command_list(bot)
+    hub = await repo.gf_get_setting("hub_channel_id")
+    embed = build_command_list(bot, hub_channel_id=int(hub) if hub else None)
     view = CommandListView(bot, settings)
 
     stored = await repo.get_channel_message(COMMAND_LIST_KEY)

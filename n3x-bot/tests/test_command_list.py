@@ -513,3 +513,72 @@ async def test_on_ready_posts_command_list_when_channel_configured():
 
     assert await repo.get_channel_message(COMMAND_LIST_KEY) == (7, 777)
     await _cleanup(repo)
+
+
+# ── documentation in the command post ─────────────────────────────────────
+
+async def test_public_list_opens_with_a_bot_introduction():
+    from n3x_bot.bot import build_command_list
+    repo = await _flatfile_repo()
+    bot = await _populated_bot(_settings(), repo)
+    embed = build_command_list(bot)
+    assert "Slash-Befehle" in embed.description
+    assert "Group Finder" in embed.description
+    await _cleanup(repo)
+
+
+async def test_public_list_explains_the_group_finder_with_a_hub_link():
+    from n3x_bot.bot import build_command_list
+    repo = await _flatfile_repo()
+    bot = await _populated_bot(_settings(), repo)
+    guide = build_command_list(bot, hub_channel_id=4242).fields[-1]
+    assert guide.name.startswith("ℹ️ Group Finder")
+    for fragment in ("<#4242>", "`/timezone`", "`/lfg`", "min-max", "Join",
+                     "15 Minuten", "Ersteller und Admins"):
+        assert fragment in guide.value
+    assert len(guide.value) <= 1024                         # Discord field limit
+    await _cleanup(repo)
+
+
+async def test_group_finder_guide_without_a_hub_yet():
+    from n3x_bot.bot import build_command_list
+    repo = await _flatfile_repo()
+    bot = await _populated_bot(_settings(), repo)
+    guide = build_command_list(bot).fields[-1].value
+    assert "im Group-Finder-Hub" in guide and "<#" not in guide
+    await _cleanup(repo)
+
+
+async def test_admin_list_explains_group_finder_setup():
+    from n3x_bot.bot import build_admin_command_list
+    repo = await _flatfile_repo()
+    bot = await _populated_bot(_settings(), repo)
+    guide = build_admin_command_list(bot).fields[-1]
+    assert guide.name == "ℹ️ Group Finder einrichten"
+    for fragment in ("/groupfinder setup", "timezone-add", "timezone-delete",
+                     "deaktiviert"):
+        assert fragment in guide.value
+    await _cleanup(repo)
+
+
+async def test_both_lists_stay_within_the_embed_limit():
+    from n3x_bot.bot import build_admin_command_list, build_command_list
+    repo = await _flatfile_repo()
+    bot = await _populated_bot(_settings(), repo)
+    assert len(build_command_list(bot, hub_channel_id=4242)) <= 6000
+    assert len(build_admin_command_list(bot)) <= 6000
+    await _cleanup(repo)
+
+
+async def test_update_command_list_links_the_tracked_hub():
+    from n3x_bot.bot import update_command_list
+    repo = await _flatfile_repo()
+    settings = _settings(command_list_channel_id=777)
+    bot = await _populated_bot(settings, repo)
+    await repo.gf_set_setting("hub_channel_id", "1531288209730830447")
+    channel, _ = _fake_channel()
+    bot.get_channel = MagicMock(return_value=channel)
+    await update_command_list(bot, repo, settings)
+    embed = channel.send.call_args.kwargs["embed"]
+    assert "<#1531288209730830447>" in embed.fields[-1].value
+    await _cleanup(repo)
