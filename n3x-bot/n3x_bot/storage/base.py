@@ -647,6 +647,28 @@ class StatsRepository(ABC):
         finds its event. None for an unknown message."""
         ...
 
+    # group finder: one-time notifications
+    @abstractmethod
+    async def gf_claim_time_found(self, event_id: int, now: datetime) -> bool:
+        """Set time_found_notified_at if it is still empty. True for exactly
+        one caller — the one that may send the "time found" ping."""
+        ...
+    @abstractmethod
+    async def gf_claim_reminder(self, event_id: int, discord_id: int,
+                                kind: str, now: datetime) -> bool:
+        """Insert a CLAIMED reminder row unless one exists. True for exactly
+        one caller — the one that may send the DM."""
+        ...
+    @abstractmethod
+    async def gf_mark_reminder(self, event_id: int, discord_id: int, kind: str,
+                               status: str, now: datetime) -> None:
+        """Record the outcome (SENT / FAILED) of a claimed reminder."""
+        ...
+    @abstractmethod
+    async def gf_get_reminders(self, event_id: int) -> list[dict]:
+        """Dicts (discord_id, kind, status, claimed_at, sent_at)."""
+        ...
+
     # bulk export / import
     @abstractmethod
     async def export_all(self) -> dict:

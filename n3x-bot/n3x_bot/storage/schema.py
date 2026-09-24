@@ -314,3 +314,16 @@ gf_messages = Table(
     Column("message_id", BigInteger, nullable=False),
     Column("posted_at", DateTime(timezone=True), nullable=False),
 )
+
+# One row per member and notification kind (REMINDER_15M / CANCELLED). The row
+# is claimed *before* the DM is sent, so a DM can never go out twice — even
+# across restarts and retries.
+gf_reminders = Table(
+    "gf_reminders", metadata,
+    Column("event_id", Integer, ForeignKey("gf_events.id"), primary_key=True),
+    Column("discord_id", BigInteger, primary_key=True),
+    Column("kind", String(20), primary_key=True),
+    Column("status", String(10), nullable=False),           # CLAIMED/SENT/FAILED
+    Column("claimed_at", DateTime(timezone=True), nullable=False),
+    Column("sent_at", DateTime(timezone=True), nullable=True),
+)

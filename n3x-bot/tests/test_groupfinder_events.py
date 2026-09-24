@@ -531,6 +531,7 @@ class FakeChannel:
     async def _send(self, embed=None, view=None, **kw):
         msg = SimpleNamespace(id=next(_ids), embed=embed, view=view)
         msg.edit = AsyncMock(side_effect=lambda **k: setattr(msg, "embed", k["embed"]))
+        msg.delete = AsyncMock(side_effect=lambda: self.messages.pop(msg.id, None))
         self.messages[msg.id] = msg
         return msg
 

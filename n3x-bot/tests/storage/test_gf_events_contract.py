@@ -227,12 +227,54 @@ async def test_delete_event_message(repo):
     assert await repo.gf_get_event_messages(eid) == []
 
 
+# ── one-time notifications ──────────────────────────────────────────────────
+
+async def test_time_found_claim_succeeds_exactly_once(repo):
+    eid = await _event(repo)
+    assert await repo.gf_claim_time_found(eid, NOW) is True
+    assert await repo.gf_claim_time_found(eid, NOW + timedelta(minutes=1)) is False
+    assert (await repo.gf_get_event(eid))["time_found_notified_at"] == NOW
+
+
+async def test_reminder_claim_succeeds_exactly_once_per_kind(repo):
+    eid = await _event(repo)
+    assert await repo.gf_claim_reminder(eid, 1, "REMINDER_15M", NOW) is True
+    assert await repo.gf_claim_reminder(eid, 1, "REMINDER_15M", NOW) is False
+    assert await repo.gf_claim_reminder(eid, 1, "CANCELLED", NOW) is True
+    assert await repo.gf_claim_reminder(eid, 2, "REMINDER_15M", NOW) is True
+
+
+async def test_reminder_outcome_is_recorded(repo):
+    eid = await _event(repo)
+    await repo.gf_claim_reminder(eid, 1, "REMINDER_15M", NOW)
+    await repo.gf_claim_reminder(eid, 2, "REMINDER_15M", NOW)
+    await repo.gf_mark_reminder(eid, 1, "REMINDER_15M", "SENT", NOW)
+    await repo.gf_mark_reminder(eid, 2, "REMINDER_15M", "FAILED", NOW)
+    rows = await repo.gf_get_reminders(eid)
+    assert [(r["discord_id"], r["status"]) for r in rows] == [(1, "SENT"), (2, "FAILED")]
+    assert rows[0]["sent_at"] == NOW and rows[1]["sent_at"] is None
+
+
+async def test_reminders_survive_export_import(repo, make_repo):
+    eid = await _event(repo)
+    await repo.gf_claim_reminder(eid, 1, "REMINDER_15M", NOW)
+    await repo.gf_mark_reminder(eid, 1, "REMINDER_15M", "SENT", NOW)
+    snapshot = await repo.export_all()
+    dest = await make_repo()
+    try:
+        await dest.import_all(snapshot)
+        # a restart on the imported data must not send it again
+        assert await dest.gf_claim_reminder(eid, 1, "REMINDER_15M", NOW) is False
+    finally:
+        await dest.close()
+
+
 # ── migration fidelity ──────────────────────────────────────────────────────
 
 async def test_event_tables_in_migrate_data_tables():
     from n3x_bot import migrate
     for t in ("gf_events", "gf_slots", "gf_votes", "gf_participants",
-              "gf_messages"):
+              "gf_messages", "gf_reminders"):
         assert t in migrate._DATA_TABLES
 
 

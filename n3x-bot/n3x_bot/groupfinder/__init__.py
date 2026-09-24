@@ -4,6 +4,7 @@ timezone. See instructions/Groupfinder Spec 3.md.
 Stage 1: zone administration, the hub and member timezones.
 Stage 2: events, voting, time finding (Variant 1), rendering in every zone.
 Stage 3: the lifecycle loop (countdown, closing, start, cleanup) and cancel.
+Stage 4: notifications — the "time found" ping, the 15-minute DM, cancel DMs.
 """
 import logging
 

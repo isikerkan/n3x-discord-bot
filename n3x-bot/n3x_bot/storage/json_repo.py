@@ -71,6 +71,7 @@ class JsonRepository(StatsRepository):
             "gf_votes": [],
             "gf_participants": [],
             "gf_messages": [],
+            "gf_reminders": [],
         }
 
     async def connect(self) -> None:
@@ -1072,6 +1073,48 @@ class JsonRepository(StatsRepository):
                         "channel_id": int(m["channel_id"])}
         return None
 
+    # ── group finder: one-time notifications ──────────────────────────────
+    async def gf_claim_time_found(self, event_id, now):
+        row = self._gf_event(event_id)
+        if row is None or row.get("time_found_notified_at"):
+            return False
+        row["time_found_notified_at"] = _iso(now)
+        self._flush()
+        return True
+
+    def _gf_reminder(self, event_id, discord_id, kind):
+        for r in self._db["gf_reminders"]:
+            if (int(r["event_id"]) == int(event_id)
+                    and int(r["discord_id"]) == int(discord_id)
+                    and r["kind"] == kind):
+                return r
+        return None
+
+    async def gf_claim_reminder(self, event_id, discord_id, kind, now):
+        if self._gf_reminder(event_id, discord_id, kind) is not None:
+            return False
+        self._db["gf_reminders"].append(
+            {"event_id": int(event_id), "discord_id": int(discord_id),
+             "kind": kind, "status": "CLAIMED", "claimed_at": _iso(now),
+             "sent_at": None})
+        self._flush()
+        return True
+
+    async def gf_mark_reminder(self, event_id, discord_id, kind, status, now):
+        row = self._gf_reminder(event_id, discord_id, kind)
+        if row is not None:
+            row["status"] = status
+            row["sent_at"] = _iso(now) if status == "SENT" else None
+            self._flush()
+
+    async def gf_get_reminders(self, event_id):
+        out = [{"discord_id": int(r["discord_id"]), "kind": r["kind"],
+                "status": r["status"], "claimed_at": self._dt_of(r["claimed_at"]),
+                "sent_at": self._dt_of(r.get("sent_at"))}
+               for r in self._db["gf_reminders"]
+               if int(r["event_id"]) == int(event_id)]
+        return sorted(out, key=lambda r: (r["kind"], r["discord_id"]))
+
     @staticmethod
     def _max_id(rows) -> int:
         return max((r["id"] for r in rows), default=0)
@@ -1127,6 +1170,7 @@ class JsonRepository(StatsRepository):
             "gf_votes": copy.deepcopy(self._db["gf_votes"]),
             "gf_participants": copy.deepcopy(self._db["gf_participants"]),
             "gf_messages": copy.deepcopy(self._db["gf_messages"]),
+            "gf_reminders": copy.deepcopy(self._db["gf_reminders"]),
             "seq": {
                 "user": self._max_id(users),
                 "message": self._max_id(messages),
@@ -1186,6 +1230,7 @@ class JsonRepository(StatsRepository):
         self._db["gf_participants"] = copy.deepcopy(
             snapshot.get("gf_participants", []))
         self._db["gf_messages"] = copy.deepcopy(snapshot.get("gf_messages", []))
+        self._db["gf_reminders"] = copy.deepcopy(snapshot.get("gf_reminders", []))
         self._db["seq"] = dict(snapshot["seq"])
         self._flush()
 

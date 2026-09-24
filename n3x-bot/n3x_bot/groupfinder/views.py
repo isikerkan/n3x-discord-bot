@@ -43,10 +43,13 @@ async def _resolve(repo, interaction):
 async def _after_change(interaction, repo, settings, event_id) -> None:
     """Acknowledge the click, then re-render the event in every zone channel.
     Deferring first: editing N channels can take longer than Discord's 3 s."""
-    from n3x_bot.groupfinder import sync      # sync imports this module
+    from n3x_bot.groupfinder import notify, sync   # sync imports this module
     await interaction.response.defer()
-    await sync.sync_event(interaction.client, repo, settings, event_id,
-                          datetime.now(UTC))
+    now = datetime.now(UTC)
+    await sync.sync_event(interaction.client, repo, settings, event_id, now)
+    # A member joining inside the 15-minute window gets the reminder now,
+    # not up to a minute later from the loop.
+    await notify.send_due_reminders(interaction.client, repo, event_id, now)
 
 
 class VoteSelect(discord.ui.Select):
@@ -145,8 +148,12 @@ class _ConfirmCancelView(discord.ui.View):
 
     @discord.ui.button(label="Yes, cancel it", style=discord.ButtonStyle.danger)
     async def confirm(self, interaction, button):
-        from n3x_bot.groupfinder import sync
+        from n3x_bot.groupfinder import notify, sync
+        # Removing the messages and DMing everyone can exceed Discord's 3 s.
+        await interaction.response.edit_message(content="Cancelling…", view=None)
         now = datetime.now(UTC)
+        event = await self.repo.gf_get_event(self.event_id)
+        people = await events.participants(self.repo, event) if event else []
         result = await events.cancel(
             self.repo, self.event_id, interaction.user.id,
             app_is_admin(interaction, self.settings), now)
@@ -154,12 +161,15 @@ class _ConfirmCancelView(discord.ui.View):
             if await sync.remove_event_messages(interaction.client, self.repo,
                                                 self.event_id):
                 await self.repo.gf_update_event(self.event_id, cleaned_at=now)
+            await notify.send_cancel_notices(interaction.client, self.repo,
+                                             event, people, interaction.user.id,
+                                             now)
             text = "🗑️ Group search cancelled."
         else:
             text = {"forbidden": "❌ Only the creator or an admin can cancel.",
                     "not_cancellable": "❌ This group search can no longer be "
                                        "cancelled."}.get(result, _GONE)
-        await interaction.response.edit_message(content=text, view=None)
+        await interaction.edit_original_response(content=text)
 
     @discord.ui.button(label="Keep it", style=discord.ButtonStyle.secondary)
     async def keep(self, interaction, button):

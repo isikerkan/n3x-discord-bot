@@ -34,6 +34,7 @@ _DATA_TABLES = (
     "lfg_posts", "lfg_availability", "lfg_participants",
     "gf_settings", "gf_zones", "gf_members",
     "gf_events", "gf_slots", "gf_votes", "gf_participants", "gf_messages",
+    "gf_reminders",
 )
 
 

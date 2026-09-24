@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 
 from discord.ext import tasks
 
-from n3x_bot.groupfinder import events, sync
+from n3x_bot.groupfinder import events, notify, sync
 
 log = logging.getLogger("N3X-Bot")
 UTC = timezone.utc
@@ -28,8 +28,10 @@ async def process_event(bot, repo, settings, event: dict, now: datetime) -> None
             await repo.gf_update_event(event["id"], cleaned_at=now)
         return
     # Re-render: the countdown text, a closed Join button, "Started", "No time
-    # found". sync_event skips every channel whose render did not change.
+    # found" — and the one-time "time found" announcement if it is still due.
+    # sync_event skips every channel whose render did not change.
     await sync.sync_event(bot, repo, settings, event["id"], now)
+    await notify.send_due_reminders(bot, repo, event["id"], now)
 
 
 async def tick(bot, repo, settings, now: datetime) -> None:

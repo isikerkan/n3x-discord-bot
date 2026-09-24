@@ -1356,6 +1356,41 @@ class SqlRepository(StatsRepository):
             return {"event_id": int(r.event_id), "zone": r.zone,
                     "channel_id": int(r.channel_id)}
 
+    # ── group finder: one-time notifications ──────────────────────────────
+    async def gf_claim_time_found(self, event_id, now):
+        async with self.engine.begin() as conn:
+            result = await conn.execute(
+                update(sc.gf_events)
+                .where(and_(sc.gf_events.c.id == event_id,
+                            sc.gf_events.c.time_found_notified_at.is_(None)))
+                .values(time_found_notified_at=self._utc(now)))
+            return result.rowcount == 1
+
+    async def gf_claim_reminder(self, event_id, discord_id, kind, now):
+        async with self.engine.begin() as conn:
+            return await self._insert_ignore(conn, sc.gf_reminders, {
+                "event_id": event_id, "discord_id": discord_id, "kind": kind,
+                "status": "CLAIMED", "claimed_at": self._utc(now)})
+
+    async def gf_mark_reminder(self, event_id, discord_id, kind, status, now):
+        async with self.engine.begin() as conn:
+            await conn.execute(
+                update(sc.gf_reminders)
+                .where(and_(sc.gf_reminders.c.event_id == event_id,
+                            sc.gf_reminders.c.discord_id == discord_id,
+                            sc.gf_reminders.c.kind == kind))
+                .values(status=status,
+                        sent_at=self._utc(now) if status == "SENT" else None))
+
+    async def gf_get_reminders(self, event_id):
+        async with self.engine.connect() as conn:
+            rows = await conn.execute(select(sc.gf_reminders).where(
+                sc.gf_reminders.c.event_id == event_id))
+            out = [{"discord_id": int(r.discord_id), "kind": r.kind,
+                    "status": r.status, "claimed_at": self._utc(r.claimed_at),
+                    "sent_at": self._utc(r.sent_at)} for r in rows]
+        return sorted(out, key=lambda r: (r["kind"], r["discord_id"]))
+
     # ── bulk export / import ───────────────────────────────────────────────
     @staticmethod
     def _dt(dt: datetime | None) -> str | None:
@@ -1544,6 +1579,12 @@ class SqlRepository(StatsRepository):
                             "message_id": int(r.message_id),
                             "posted_at": self._dt(r.posted_at)}
                            for r in await conn.execute(select(sc.gf_messages))]
+            gf_reminders = [{"event_id": int(r.event_id),
+                             "discord_id": int(r.discord_id), "kind": r.kind,
+                             "status": r.status,
+                             "claimed_at": self._dt(r.claimed_at),
+                             "sent_at": self._dt(r.sent_at)}
+                            for r in await conn.execute(select(sc.gf_reminders))]
             seq = {}
             for key, table in (("user", sc.users), ("message", sc.messages),
                                ("stat", sc.stats), ("gate", sc.gate_entries),
@@ -1576,6 +1617,7 @@ class SqlRepository(StatsRepository):
             "gf_votes": gf_votes,
             "gf_participants": gf_participants,
             "gf_messages": gf_messages,
+            "gf_reminders": gf_reminders,
             "seq": seq,
         }
 
@@ -1729,6 +1771,12 @@ class SqlRepository(StatsRepository):
                     event_id=r["event_id"], zone=r["zone"],
                     channel_id=r["channel_id"], message_id=r["message_id"],
                     posted_at=self._utc(_parse_dt(r["posted_at"]))))
+            for r in snapshot.get("gf_reminders", []):
+                await conn.execute(insert(sc.gf_reminders).values(
+                    event_id=r["event_id"], discord_id=r["discord_id"],
+                    kind=r["kind"], status=r["status"],
+                    claimed_at=self._utc(_parse_dt(r["claimed_at"])),
+                    sent_at=self._utc(_parse_dt(r.get("sent_at")))))
             if self.engine.dialect.name == "postgresql":
                 for tbl, key in (("users", "user"), ("messages", "message"),
                                  ("stats", "stat"), ("gate_entries", "gate"),
@@ -1751,6 +1799,7 @@ class SqlRepository(StatsRepository):
                           sc.lfg_availability, sc.lfg_participants,
                           sc.lfg_posts,
                           sc.gf_settings, sc.gf_zones, sc.gf_members,
+                          sc.gf_reminders,
                           sc.gf_votes, sc.gf_participants, sc.gf_messages,
                           sc.gf_slots, sc.gf_events,
                           sc.runtime_config, sc.content_texts,

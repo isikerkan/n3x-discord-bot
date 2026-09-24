@@ -185,7 +185,10 @@ async def test_countdown_is_edited_only_when_its_text_changes():
     repo = await _repo()
     bot, chans = await _world(repo, BERLIN, TOKYO)
     eid = await _scheduled(repo)
-    await sync.sync_event(bot, repo, _settings(), eid, NOW)
+    await sync.sync_event(bot, repo, _settings(), eid, NOW)     # announcement
+    await _tick(bot, repo, NOW)          # the one edit that drops the mentions
+    for ch in chans.values():
+        ch.only.edit.reset_mock()
     for minute in range(1, 15):                 # 8h away: 15-minute steps
         await _tick(bot, repo, NOW + timedelta(minutes=minute))
     for ch in chans.values():
@@ -348,6 +351,7 @@ def _interaction(bot, message_id, user_id, *, admin=False):
     it.response.send_message = AsyncMock()
     it.response.edit_message = AsyncMock()
     it.response.defer = AsyncMock()
+    it.edit_original_response = AsyncMock()
     return it
 
 
@@ -384,7 +388,7 @@ async def test_cancel_asks_then_removes_the_event_everywhere():
     e = await repo.gf_get_event(eid)
     assert e["status"] == events.CANCELLED and e["cleaned_at"] is not None
     assert not any(ch.messages for ch in chans.values())
-    assert "cancelled" in it2.response.edit_message.call_args.kwargs["content"]
+    assert "cancelled" in it2.edit_original_response.call_args.kwargs["content"]
     await repo.close()
 
 
