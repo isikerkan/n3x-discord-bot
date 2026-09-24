@@ -189,7 +189,8 @@ async def test_search_matches_spaces_as_underscores_and_ranks_city_prefix():
 async def test_activate_creates_category_role_and_channel():
     repo, guild = await _repo(), FakeGuild()
     assert await provision.activate_zone(guild, repo, _settings(),
-                                         "Europe/Berlin", NOW) == "created"
+                                         "Europe/Berlin", NOW) == (
+        "created", "Europe/Berlin")
     row = await repo.gf_get_zone("Europe/Berlin")
     assert row["status"] == zones.ACTIVE
     channel = guild.get_channel(row["channel_id"])
@@ -221,7 +222,8 @@ async def test_activate_twice_creates_nothing_new():
     await provision.activate_zone(guild, repo, _settings(), "Europe/Berlin", NOW)
     before = (len(guild.roles), len(guild.channels))
     assert await provision.activate_zone(guild, repo, _settings(),
-                                         "Europe/Berlin", NOW) == "exists"
+                                         "Europe/Berlin", NOW) == (
+        "exists", "Europe/Berlin")
     assert (len(guild.roles), len(guild.channels)) == before
     await repo.close()
 
@@ -266,7 +268,8 @@ async def test_reactivation_reuses_the_role():
     await provision.deactivate_for_deleted_channel(repo, row["channel_id"], NOW)
 
     assert await provision.activate_zone(guild, repo, _settings(),
-                                         "Europe/Berlin", NOW) == "reactivated"
+                                         "Europe/Berlin", NOW) == (
+        "reactivated", "Europe/Berlin")
     again = await repo.gf_get_zone("Europe/Berlin")
     assert again["role_id"] == row["role_id"]
     assert guild.create_role.await_count == 1                    # no duplicate role
@@ -338,16 +341,18 @@ async def test_deleted_category_and_hub_are_forgotten():
 
 async def test_hub_embed_is_english_and_explains_the_flow():
     embed = hub.build_hub_embed(["Europe/Berlin"])
-    for fragment in ("timezone", "/lfg", "15 minutes", "/timezone"):
+    for fragment in ("timezone", "/lfg", "15 minutes", "/timezone",
+                     "same clock", "`Europe/Berlin`"):
         assert fragment in embed.description
-    assert "No timezones" in hub.build_hub_embed([]).description
+    assert "Timezone channels" not in hub.build_hub_embed([]).description
 
 
 async def test_hub_view_chunks_zones_into_selects_of_25():
     repo = await _repo()
-    view = hub.HubView(repo, _settings(), [f"Z/{i}" for i in range(30)])
+    many = list(zones.all_zones())
+    view = hub.HubView(repo, _settings(), many[:30], NOW)
     assert [len(c.options) for c in view.children] == [25, 5]
-    capped = hub.HubView(repo, _settings(), [f"Z/{i}" for i in range(200)])
+    capped = hub.HubView(repo, _settings(), many[:200], NOW)
     assert len(capped.children) == hub.MAX_SELECTS
     await repo.close()
 
@@ -375,7 +380,8 @@ async def test_update_hub_posts_and_tracks_the_message():
     await hub.update_hub(_bot_for(guild), repo, _settings())
     hub_channel.send.assert_awaited_once()
     view = hub_channel.send.call_args.kwargs["view"]
-    assert [o.value for o in view.children[0].options] == ["Europe/Berlin"]
+    offered = [o.value for c in view.children for o in c.options]
+    assert "Europe/Berlin" in offered and "Asia/Tokyo" in offered
     assert (await repo.get_channel_message(hub.HUB_MESSAGE_KEY))[1] == hub_channel.id
     await repo.close()
 
@@ -416,11 +422,14 @@ async def test_update_hub_without_hub_channel_is_a_noop():
     await repo.close()
 
 
-async def test_hub_without_zones_has_no_select():
+async def test_hub_without_zones_still_offers_the_popular_ones():
+    # members create zones themselves, so there is always something to pick
     repo, guild = await _repo(), FakeGuild()
     hub_channel = await provision.ensure_hub_channel(guild, repo, _settings())
     await hub.update_hub(_bot_for(guild), repo, _settings())
-    assert hub_channel.send.call_args.kwargs["view"] is None
+    view = hub_channel.send.call_args.kwargs["view"]
+    offered = {o.value for c in view.children for o in c.options}
+    assert offered == set(zones.POPULAR_ZONES)
     await repo.close()
 
 
@@ -518,7 +527,9 @@ async def test_setup_offers_only_popular_zones_not_yet_active():
     embed, view = await gf_admin._setup_payload(repo, _settings())
     offered = [o.value for o in view.children[0].options]
     assert "Europe/Berlin" not in offered
-    assert len(offered) == len(zones.POPULAR_ZONES) - 1
+    # nor anything with Berlin's clock: it would not create a channel
+    assert not {"Europe/Zurich", "Europe/Paris", "Europe/Vienna"} & set(offered)
+    assert "Europe/London" in offered
     assert "Europe/Berlin" in embed.description                  # shown as active
     await repo.close()
 
@@ -598,12 +609,25 @@ async def test_timezone_delete_unknown_zone():
     await repo.close()
 
 
-async def test_timezone_command_only_accepts_active_zones():
+async def test_timezone_command_lets_a_member_create_a_zone():
     repo, guild = await _repo(), FakeGuild()
     bot = build_bot(_settings(), repo)
-    interaction = _interaction(guild, admin=False)
+    bot.get_channel = guild.get_channel
+    interaction = _interaction(guild, admin=False, bot=bot)
     await bot.tree.get_command("timezone").callback(interaction, zone="Asia/Tokyo")
-    assert "not available" in _text(interaction)
+    assert (await repo.gf_get_zone("Asia/Tokyo"))["status"] == zones.ACTIVE
+    assert await repo.gf_get_member_zone(interaction.user.id) == "Asia/Tokyo"
+    assert "channel is new" in _text(interaction)
+    await repo.close()
+
+
+async def test_timezone_command_rejects_non_timezones():
+    repo, guild = await _repo(), FakeGuild()
+    bot = build_bot(_settings(), repo)
+    interaction = _interaction(guild, admin=False, bot=bot)
+    await bot.tree.get_command("timezone").callback(interaction, zone="UTC+1")
+    assert "is not a timezone" in _text(interaction)
+    guild.create_text_channel.assert_not_awaited()
     await repo.close()
 
 

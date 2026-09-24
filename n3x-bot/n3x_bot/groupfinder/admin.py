@@ -28,16 +28,20 @@ def build_setup_embed(active: list[dict]) -> discord.Embed:
     else:
         body = "**No timezones are active yet.**"
     body += ("\n\nPick timezones below to **add** them — each gets its own "
-             "role and channel. Zones that are not in the list can be added "
-             "with `/groupfinder timezone-add`.")
+             "role and channel; timezones with the same clock share one. "
+             "Members can also create timezones themselves by picking theirs "
+             "in the hub. Others can be added with `/groupfinder timezone-add`.")
     return discord.Embed(title="🛠️ Group Finder setup", description=body,
                          color=discord.Color.blurple())
 
 
 async def _setup_payload(repo, settings):
     active = await provision.active_zones(repo)
-    active_ids = {z["zone"] for z in active}
-    offer = [z for z in zones.POPULAR_ZONES if z not in active_ids]
+    active_ids = [z["zone"] for z in active]
+    # Only what would create a new channel: Zurich is not offered once Berlin
+    # (same clock) has one.
+    offer = [z for z in zones.POPULAR_ZONES
+             if zones.find_same_clock(z, active_ids) is None]
     view = SetupView(repo, settings, offer) if offer else None
     return build_setup_embed(active), view
 
@@ -47,12 +51,13 @@ async def _activate_many(interaction, repo, settings, zone_ids) -> list[str]:
     results = []
     for zone in zone_ids:
         try:
-            outcome = await provision.activate_zone(
+            outcome, channel_zone = await provision.activate_zone(
                 interaction.guild, repo, settings, zone, now)
         except Exception:
             log.exception("group finder: activating %s failed", zone)
-            outcome = "failed"
-        results.append(f"{zone}: {outcome}")
+            outcome, channel_zone = "failed", zone
+        results.append(f"{zone}: {outcome}" if channel_zone == zone
+                       else f"{zone}: {outcome} by {channel_zone}")
     return results
 
 
@@ -160,16 +165,18 @@ def register_groupfinder_admin(bot, repo, settings) -> None:
             return
         await interaction.response.defer(ephemeral=True)
         await provision.ensure_hub_channel(interaction.guild, repo, settings)
-        outcome = await provision.activate_zone(interaction.guild, repo, settings,
-                                                zone, now_local(settings))
+        outcome, channel_zone = await provision.activate_zone(
+            interaction.guild, repo, settings, zone, now_local(settings))
         now = datetime.now(timezone.utc)
         await legacy.migrate_legacy_lfgs(bot, repo, settings, now)
         await hub.update_hub(bot, repo, settings)
         await sync.sync_all(bot, repo, settings, now)
         await interaction.followup.send(
             {"exists": f"ℹ️ **{zone}** is already active.",
+             "covered": f"ℹ️ **{zone}** has the same clock as **{channel_zone}**, "
+                        "which already has a channel.",
              "created": f"✅ **{zone}** added.",
-             "reactivated": f"✅ **{zone}** re-activated."}[outcome],
+             "reactivated": f"✅ **{channel_zone}** re-activated."}[outcome],
             ephemeral=True)
 
     @group.command(name="timezone-delete",

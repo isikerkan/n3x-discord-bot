@@ -98,31 +98,45 @@ async def ensure_hub_channel(guild, repo, settings):
     return hub
 
 
-async def activate_zone(guild, repo, settings, zone: str, now: datetime) -> str:
-    """Make `zone` active: role + channel in the category.
+async def activate_zone(guild, repo, settings, zone: str,
+                        now: datetime) -> tuple[str, str]:
+    """Make sure a channel exists for `zone`'s clock.
 
-    Returns `"exists"` (already active, nothing done), `"created"` (new zone)
-    or `"reactivated"` (was deactivated; its channel is recreated and its role
-    reused). Raises ValueError for an unknown IANA id.
+    Returns `(outcome, channel_zone)`:
+      * `exists`      — `zone` itself already has an active channel
+      * `covered`     — another zone with the same clock has one (Zurich when
+                        Berlin exists); `channel_zone` is that zone
+      * `created`     — a new role and channel were made for `zone`
+      * `reactivated` — a deactivated zone with this clock got its channel
+                        back, reusing its role instead of creating a duplicate
+    Raises ValueError for an unknown IANA id.
     """
     if not zones.is_valid_zone(zone):
         raise ValueError(f"Unknown timezone: {zone}")
-    row = await repo.gf_get_zone(zone)
-    if (row is not None and row["status"] == ACTIVE and row["channel_id"]
-            and guild.get_channel(row["channel_id"]) is not None):
-        return "exists"
+    rows = await repo.gf_all_zones()
+    live = [r["zone"] for r in rows
+            if r["status"] == ACTIVE and r["channel_id"]
+            and guild.get_channel(r["channel_id"]) is not None]
+    hit = zone if zone in live else zones.find_same_clock(zone, live)
+    if hit is not None:
+        return ("exists" if hit == zone else "covered"), hit
+    tracked = [r["zone"] for r in rows]
+    target = zone if zone in tracked else (zones.find_same_clock(zone, tracked)
+                                           or zone)
+    row = await repo.gf_get_zone(target)
     category = await ensure_category(guild, repo)
     role = guild.get_role(row["role_id"]) if row and row["role_id"] else None
     if role is None:
-        role = await guild.create_role(name=zones.role_name(zone),
+        role = await guild.create_role(name=zones.role_name(target),
                                        mentionable=False, reason=_REASON)
     channel = await guild.create_text_channel(
-        zones.channel_name(zone), category=category,
+        zones.channel_name(target), category=category,
         overwrites=zone_overwrites(guild, role, settings),
-        topic=f"Group Finder · {zone}", reason=_REASON)
-    await repo.gf_save_zone(zone, role_id=role.id, channel_id=channel.id,
+        topic=f"Group Finder · {target} and every timezone with the same clock",
+        reason=_REASON)
+    await repo.gf_save_zone(target, role_id=role.id, channel_id=channel.id,
                             status=ACTIVE, now=now)
-    return "created" if row is None else "reactivated"
+    return ("created" if row is None else "reactivated"), target
 
 
 async def delete_zone(guild, repo, zone: str, now: datetime) -> bool:

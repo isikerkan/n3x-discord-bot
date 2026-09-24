@@ -10,7 +10,7 @@ import logging
 import math
 from datetime import datetime, timedelta
 
-from n3x_bot.groupfinder import events
+from n3x_bot.groupfinder import events, zones
 
 log = logging.getLogger("N3X-Bot")
 
@@ -33,10 +33,10 @@ def _minutes_left(start: datetime, now: datetime) -> str:
 
 
 async def _jump_url(bot, repo, event_id: int, zone: str) -> str | None:
-    """Link to the event message in the member's zone channel (any zone as a
-    fallback, e.g. when their zone was removed in the meantime)."""
+    """Link to the event message in the channel of the member's clock (any
+    channel as a fallback, e.g. when theirs was removed in the meantime)."""
     rows = await repo.gf_get_event_messages(event_id)
-    rows.sort(key=lambda r: r["zone"] != zone)
+    rows.sort(key=lambda r: not (zone and zones.same_clock(r["zone"], zone)))
     for row in rows:
         channel = bot.get_channel(row["channel_id"])
         guild = getattr(channel, "guild", None)

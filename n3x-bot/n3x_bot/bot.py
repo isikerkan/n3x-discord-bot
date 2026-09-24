@@ -544,14 +544,15 @@ _BOT_INTRO = (
     "Befehl aus der Liste.")
 
 _GROUPFINDER_ADMIN_GUIDE = (
-    "`/groupfinder setup` zeigt die aktiven Zeitzonen und bietet die 25 "
-    "beliebtesten zum Hinzufügen an; weitere mit `/groupfinder timezone-add`.\n"
-    "Pro Zeitzone legt der Bot eine Rolle und einen Channel in der Kategorie "
-    "„Group Finder\u201c an. Den Channel sehen nur Mitglieder mit der Rolle und "
-    "Admins.\n"
+    "Mitglieder legen Zeitzonen selbst an, indem sie ihre im Hub wählen. Mit "
+    "`/groupfinder setup` legst du beliebte vorab an, weitere mit "
+    "`/groupfinder timezone-add`.\n"
+    "Zeitzonen mit gleicher Uhrzeit (z. B. Berlin, Zürich, Wien) teilen sich "
+    "einen Channel in der Kategorie „Group Finder\u201c. Den Channel sehen nur "
+    "Mitglieder mit der Rolle und Admins.\n"
     "Entfernen nur mit `/groupfinder timezone-delete`. Wird ein Zeitzonen-Channel "
-    "von Hand gelöscht, gilt die Zeitzone als deaktiviert und wird nicht neu "
-    "angelegt.")
+    "von Hand gelöscht, gilt die Zeitzone als deaktiviert, bis ein Mitglied sie "
+    "wieder wählt.")
 
 
 def _groupfinder_guide(hub_channel_id: int | None) -> str:
@@ -559,8 +560,9 @@ def _groupfinder_guide(hub_channel_id: int | None) -> str:
     Finder UI itself is English; this overview is German like the rest."""
     where = f"in <#{hub_channel_id}>" if hub_channel_id else "im Group-Finder-Hub"
     return (
-        f"**1.** Wähle {where} deine Zeitzone (oder mit `/timezone`). Danach "
-        "siehst du deinen Zeitzonen-Channel.\n"
+        f"**1.** Wähle {where} deine Zeitzone (oder mit `/timezone` und deiner "
+        "Stadt). Gibt es noch keinen Channel dafür, legt der Bot ihn an; "
+        "Zeitzonen mit gleicher Uhrzeit teilen sich einen Channel.\n"
         "**2.** Starte dort mit `/lfg` eine Gruppensuche: Titel, Spieler als "
         "`min-max`, Datum und mögliche Startzeiten in deiner Ortszeit.\n"
         "**3.** Die Suche erscheint in allen Zeitzonen-Channels, jeweils in der "

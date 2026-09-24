@@ -14,7 +14,7 @@ from datetime import datetime
 
 import discord
 
-from n3x_bot.groupfinder import events, provision, render, views
+from n3x_bot.groupfinder import events, provision, render, views, zones
 
 log = logging.getLogger("N3X-Bot")
 
@@ -127,9 +127,11 @@ async def _announce(bot, repo, settings, event, now) -> None:
     deleted and posted again in every zone channel.
 
     The text is the same in every channel and mentions every participant, but
-    each message only *allows* the mentions of that channel's zone. Everyone
+    each message only *allows* the mentions of that channel's clock. Everyone
     sees the full list, and each member is notified exactly once — admins who
-    see every zone channel are not pinged once per channel.
+    see every zone channel are not pinged once per channel. Matching is by
+    clock, not by name: a member stored as Europe/Berlin is pinged in the
+    Europe/Zurich channel when that is the one their clock maps to.
     """
     event_id = event["id"]
     people = await events.participants(repo, event)
@@ -158,7 +160,8 @@ async def _announce(bot, repo, settings, event, now) -> None:
         view = views.view_for(repo, settings, event, zone, now)
         allowed = discord.AllowedMentions(
             everyone=False, roles=False, replied_user=False,
-            users=[discord.Object(id=uid) for uid, z in people if z == zone])
+            users=[discord.Object(id=uid) for uid, z in people
+                   if z and zones.same_clock(z, zone)])
         try:
             message = await channel.send(content=content, embed=embed,
                                          view=view, allowed_mentions=allowed)

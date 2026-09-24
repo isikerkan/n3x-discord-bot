@@ -4,8 +4,9 @@ No Discord and no repo imports. Everything the admin and member flows need to
 decide *which* zone and *what it is called* lives here and is testable without
 a bot.
 """
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
-from zoneinfo import available_timezones
+from zoneinfo import ZoneInfo, available_timezones
 
 ACTIVE = "ACTIVE"
 DEACTIVATED = "DEACTIVATED"
@@ -63,3 +64,39 @@ def search_zones(query: str, pool, limit: int = SELECT_LIMIT) -> list[str]:
     hits = [z for z in pool if needle in z.lower()]
     hits.sort(key=lambda z: (not z.lower().split("/")[-1].startswith(needle), z))
     return hits[:limit]
+
+
+# ── one channel per clock ──────────────────────────────────────────────────
+# Zones whose clocks always show the same time share one channel (Berlin,
+# Zurich, Vienna, Paris, ...). "Same hour right now" is not enough: Berlin and
+# Lagos are both UTC+1 in winter but an hour apart in summer, so grouping them
+# would show wrong local times half the year. The clock is sampled every
+# 6 hours over two years, which catches every DST rule difference.
+_SAMPLE_START = datetime(datetime.now(timezone.utc).year, 1, 1, tzinfo=timezone.utc)
+_SAMPLES = tuple(_SAMPLE_START + timedelta(hours=6 * i) for i in range(4 * 730))
+
+
+@lru_cache(maxsize=None)
+def clock_signature(zone: str) -> tuple:
+    tz = ZoneInfo(zone)
+    return tuple(t.astimezone(tz).utcoffset() for t in _SAMPLES)
+
+
+def same_clock(a: str, b: str) -> bool:
+    return a == b or clock_signature(a) == clock_signature(b)
+
+
+def find_same_clock(zone: str, candidates) -> str | None:
+    """The first candidate (in the given order) whose clock matches `zone`."""
+    for candidate in candidates:
+        if same_clock(zone, candidate):
+            return candidate
+    return None
+
+
+def offset_label(zone: str, now: datetime) -> str:
+    """`UTC+02:00` — the offset *now* (it changes with DST)."""
+    offset = now.astimezone(ZoneInfo(zone)).utcoffset()
+    minutes = int(offset.total_seconds() // 60)
+    sign = "+" if minutes >= 0 else "-"
+    return f"UTC{sign}{abs(minutes) // 60:02d}:{abs(minutes) % 60:02d}"

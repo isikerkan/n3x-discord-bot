@@ -1,12 +1,17 @@
 """The hub: the one Group Finder channel everyone can see, where members pick
-their zone. Also `/timezone`, which does the same thing as the hub select.
+their timezone. Also `/timezone`, which does the same for any IANA zone.
+
+Members create zones themselves: picking a timezone that has no channel yet
+creates one; picking one whose clock matches an existing channel (Zurich when
+Berlin exists) joins that channel. One channel per clock, one zone per member.
 
 The hub message is tracked in `channel_messages` and self-heals like the base
 timer overview: reposted only when Discord says it is gone (`NotFound`).
 """
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 import discord
 from discord import app_commands
@@ -28,8 +33,10 @@ def build_hub_embed(active: list[str]) -> discord.Embed:
         "Plan group activities with players around the world — every group "
         "search shows up in **your** local time.\n"
         "\n"
-        "**1. Pick your timezone below.** You get access to your timezone "
-        "channel; that is where group searches appear.\n"
+        "**1. Pick your timezone below** (not listed? use `/timezone` with "
+        "any city). You get access to your timezone channel — the bot creates "
+        "it if it does not exist yet. Timezones with the same clock share one "
+        "channel.\n"
         "**2. Start a search there with `/lfg`** — a title, how many players, "
         "a date and a few possible start times.\n"
         "**3. Vote for the times that work for you.** As soon as one time has "
@@ -38,65 +45,75 @@ def build_hub_embed(active: list[str]) -> discord.Embed:
         "**4. You get a DM 15 minutes before the start.**\n"
         "\n"
         "Every search appears in every timezone channel — same group, your "
-        "local time. You can change your timezone at any time here or with "
-        "`/timezone`.")
-    if not active:
-        description += "\n\n_No timezones are set up yet — ask an admin._"
+        "local time. You can change your timezone at any time.")
+    if active:
+        description += "\n\n**Timezone channels:** " + ", ".join(
+            f"`{z}`" for z in active)
     return discord.Embed(title="🌍 Group Finder", description=description,
                          color=discord.Color.blurple())
 
 
+def hub_options(active: list[str], now: datetime) -> list[str]:
+    """What the hub offers: the popular zones plus every zone that has a
+    channel, sorted by their current offset so the list reads west to east."""
+    offered = list(dict.fromkeys([*zones.POPULAR_ZONES, *active]))
+
+    def _key(zone):
+        return (now.astimezone(ZoneInfo(zone)).utcoffset(), zone)
+    return sorted(offered, key=_key)[:SELECT_LIMIT * MAX_SELECTS]
+
+
 class ZoneSelect(discord.ui.Select):
-    def __init__(self, repo, settings, index: int, zone_ids=None):
+    def __init__(self, repo, settings, index: int, zone_ids=None, now=None):
         self.repo = repo
         self.settings = settings
         # The router instance registered on startup has no zones; Discord needs
         # at least one option, and routing only uses the custom_id anyway.
-        options = [discord.SelectOption(label=z, value=z) for z in zone_ids or []]
+        options = [discord.SelectOption(
+            label=z, value=z, description=zones.offset_label(z, now))
+            for z in zone_ids or []]
         options = options or [discord.SelectOption(label="—", value="—")]
         super().__init__(custom_id=ZONE_SELECT_ID.format(index=index),
                          placeholder="Pick your timezone",
                          min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction):
-        result, zone_row = await assign_member_zone(
-            self.repo, interaction.user, self.values[0],
-            now_local(self.settings))
-        await interaction.response.send_message(
-            _assign_reply(result, self.values[0], zone_row), ephemeral=True)
+        # Creating a role and a channel can exceed Discord's 3 seconds.
+        await interaction.response.defer(ephemeral=True)
+        reply = await join_zone(interaction.client, self.repo, self.settings,
+                                interaction.user, self.values[0])
+        await interaction.followup.send(reply, ephemeral=True)
 
 
 class HubView(discord.ui.View):
     """Persistent. With `zone_ids=None` it is the startup router: all five
     custom_ids, so a click on any select of the live hub message is routed."""
 
-    def __init__(self, repo, settings, zone_ids=None):
+    def __init__(self, repo, settings, zone_ids=None, now=None):
         super().__init__(timeout=None)
         if zone_ids is None:
             for i in range(MAX_SELECTS):
                 self.add_item(ZoneSelect(repo, settings, i))
             return
+        now = now or datetime.now(timezone.utc)
         chunks = [zone_ids[i:i + SELECT_LIMIT]
                   for i in range(0, len(zone_ids), SELECT_LIMIT)][:MAX_SELECTS]
         for i, chunk in enumerate(chunks):
-            self.add_item(ZoneSelect(repo, settings, i, chunk))
+            self.add_item(ZoneSelect(repo, settings, i, chunk, now))
 
 
-def _assign_reply(result: str, zone: str, zone_row) -> str:
-    if result == "inactive":
-        return f"❌ {zone} is not available."
-    if result == "missing_role":
-        return "❌ This timezone is misconfigured — please tell an admin."
-    channel = f"<#{zone_row['channel_id']}>" if zone_row else "your channel"
-    if result == "unchanged":
-        return f"✅ Your timezone already is **{zone}** — see {channel}."
-    return f"✅ Your timezone is now **{zone}** — group searches are in {channel}."
+def _zone_lock(bot) -> asyncio.Lock:
+    lock = getattr(bot, "_gf_zone_lock", None)
+    if not isinstance(lock, asyncio.Lock):
+        lock = asyncio.Lock()
+        bot._gf_zone_lock = lock
+    return lock
 
 
 async def assign_member_zone(repo, member, zone: str, now: datetime):
-    """Give `member` the role of `zone` and remove every other zone role (one
-    zone per member). Returns `(result, zone_row)` with result one of `set`,
-    `unchanged`, `inactive`, `missing_role`."""
+    """Give `member` the role of the active zone `zone` and remove every other
+    zone role (one zone per member). Returns `(result, zone_row)` with result
+    one of `set`, `unchanged`, `inactive`, `missing_role`."""
     row = await repo.gf_get_zone(zone)
     if row is None or row["status"] != ACTIVE:
         return "inactive", None
@@ -117,6 +134,36 @@ async def assign_member_zone(repo, member, zone: str, now: datetime):
     return ("unchanged" if already else "set"), row
 
 
+async def join_zone(bot, repo, settings, member, chosen: str) -> str:
+    """A member picks a timezone: find or create its channel, give the role,
+    and return the reply for the member."""
+    if not zones.is_valid_zone(chosen):
+        return f"❌ `{chosen}` is not a timezone. Try a city, e.g. `Europe/Berlin`."
+    now = now_local(settings)
+    async with _zone_lock(bot):
+        outcome, channel_zone = await provision.activate_zone(
+            member.guild, repo, settings, chosen, now)
+        result, row = await assign_member_zone(repo, member, channel_zone, now)
+    if outcome in ("created", "reactivated"):
+        # A new channel: list it in the hub and show every running search there.
+        from n3x_bot.groupfinder import sync
+        await update_hub(bot, repo, settings)
+        await sync.sync_all(bot, repo, settings, datetime.now(timezone.utc))
+    if result == "missing_role":
+        return "❌ This timezone is misconfigured — please tell an admin."
+    if result == "inactive":
+        return "❌ That did not work — please try again."
+    channel = f"<#{row['channel_id']}>"
+    if result == "unchanged":
+        return f"✅ You are already in {channel}."
+    reply = f"✅ Your timezone is now **{chosen}** — group searches are in {channel}."
+    if channel_zone != chosen:
+        reply += f"\n{chosen} has the same clock as {channel_zone}, so you share its channel."
+    if outcome == "created":
+        reply += "\nThis channel is new — you are the first one here."
+    return reply
+
+
 def _hub_lock(bot) -> asyncio.Lock:
     lock = getattr(bot, "_gf_hub_lock", None)
     if not isinstance(lock, asyncio.Lock):
@@ -133,9 +180,10 @@ async def update_hub(bot, repo, settings) -> None:
         channel = bot.get_channel(int(raw)) if raw else None
         if channel is None:
             return
+        now = datetime.now(timezone.utc)
         active = [z["zone"] for z in await provision.active_zones(repo)]
         embed = build_hub_embed(active)
-        view = HubView(repo, settings, active) if active else None
+        view = HubView(repo, settings, hub_options(active, now), now)
         stored = await repo.get_channel_message(HUB_MESSAGE_KEY)
         if stored is not None and stored[1] == channel.id:
             try:
@@ -159,17 +207,15 @@ def register_timezone_command(bot, repo, settings) -> None:
     if bot.tree.get_command("timezone") is not None:
         return
 
-    async def _active_autocomplete(interaction, current: str):
-        pool = [z["zone"] for z in await provision.active_zones(repo)]
+    async def _any_zone(interaction, current: str):
         return [app_commands.Choice(name=z, value=z)
-                for z in zones.search_zones(current, pool)]
+                for z in zones.search_zones(current, zones.all_zones())]
 
     @bot.tree.command(name="timezone",
                       description="Set your Group Finder timezone.")
-    @app_commands.describe(zone="Your timezone")
-    @app_commands.autocomplete(zone=_active_autocomplete)
+    @app_commands.describe(zone="Your timezone — type your city")
+    @app_commands.autocomplete(zone=_any_zone)
     async def timezone_cmd(interaction, zone: str):
-        result, row = await assign_member_zone(repo, interaction.user, zone,
-                                               now_local(settings))
-        await interaction.response.send_message(
-            _assign_reply(result, zone, row), ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
+        reply = await join_zone(bot, repo, settings, interaction.user, zone)
+        await interaction.followup.send(reply, ephemeral=True)
