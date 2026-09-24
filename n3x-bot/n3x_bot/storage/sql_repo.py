@@ -1169,6 +1169,189 @@ class SqlRepository(StatsRepository):
                                .where(sc.gf_members.c.zone == zone))
             return sorted(ids)
 
+    # ── group finder: events / votes / roster / messages ──────────────────
+    _GF_EVENT_FIELDS = ("status", "scheduled_at", "closed_at",
+                        "time_found_notified_at", "cleanup_at", "cancelled_at")
+    _GF_EVENT_DATES = ("scheduled_at", "created_at", "closed_at",
+                       "time_found_notified_at", "cleanup_at", "cancelled_at")
+
+    @staticmethod
+    def _utc(dt):
+        aware = _as_aware_utc(dt)
+        return aware.astimezone(timezone.utc) if aware is not None else None
+
+    def _gf_event_row(self, r, slots) -> dict:
+        row = {"id": int(r.id), "creator_id": int(r.creator_id),
+               "title": r.title, "min_players": int(r.min_players),
+               "max_players": int(r.max_players), "origin_zone": r.origin_zone,
+               "status": r.status,
+               "legacy_lfg_id": int(r.legacy_lfg_id) if r.legacy_lfg_id else None,
+               "slots": sorted(self._utc(x) for x in slots)}
+        for key in self._GF_EVENT_DATES:
+            row[key] = self._utc(getattr(r, key))
+        return row
+
+    async def gf_create_event(self, *, creator_id, title, min_players,
+                              max_players, origin_zone, slots, status,
+                              created_at, cleanup_at, legacy_lfg_id=None):
+        async with self.engine.begin() as conn:
+            result = await conn.execute(insert(sc.gf_events).values(
+                creator_id=creator_id, title=title, min_players=min_players,
+                max_players=max_players, origin_zone=origin_zone, status=status,
+                created_at=self._utc(created_at), cleanup_at=self._utc(cleanup_at),
+                legacy_lfg_id=legacy_lfg_id))
+            event_id = int(result.inserted_primary_key[0])
+            for starts_at in sorted({self._utc(x) for x in slots}):
+                await conn.execute(insert(sc.gf_slots).values(
+                    event_id=event_id, starts_at=starts_at))
+            return event_id
+
+    async def _gf_slots(self, conn, event_id):
+        return [r.starts_at for r in await conn.execute(
+            select(sc.gf_slots.c.starts_at)
+            .where(sc.gf_slots.c.event_id == event_id))]
+
+    async def gf_get_event(self, event_id):
+        async with self.engine.connect() as conn:
+            r = (await conn.execute(select(sc.gf_events)
+                 .where(sc.gf_events.c.id == event_id))).one_or_none()
+            if r is None:
+                return None
+            return self._gf_event_row(r, await self._gf_slots(conn, event_id))
+
+    async def gf_events_with_status(self, statuses):
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                select(sc.gf_events)
+                .where(sc.gf_events.c.status.in_(list(statuses)))
+                .order_by(sc.gf_events.c.id.asc()))).all()
+            return [self._gf_event_row(r, await self._gf_slots(conn, r.id))
+                    for r in rows]
+
+    async def gf_update_event(self, event_id, *, expect_status=None, **fields):
+        unknown = set(fields) - set(self._GF_EVENT_FIELDS)
+        if unknown:
+            raise ValueError(f"not updatable: {sorted(unknown)}")
+        values = {k: (self._utc(v) if k != "status" else v)
+                  for k, v in fields.items()}
+        where = sc.gf_events.c.id == event_id
+        if expect_status is not None:
+            where = and_(where, sc.gf_events.c.status == expect_status)
+        async with self.engine.begin() as conn:
+            result = await conn.execute(update(sc.gf_events).where(where)
+                                        .values(**values))
+            return result.rowcount == 1
+
+    async def gf_set_votes(self, event_id, discord_id, starts_at, zone, now):
+        async with self.engine.begin() as conn:
+            await conn.execute(delete(sc.gf_votes).where(and_(
+                sc.gf_votes.c.event_id == event_id,
+                sc.gf_votes.c.discord_id == discord_id)))
+            for slot in sorted({self._utc(x) for x in starts_at}):
+                await conn.execute(insert(sc.gf_votes).values(
+                    event_id=event_id, discord_id=discord_id, starts_at=slot,
+                    zone=zone, voted_at=self._utc(now)))
+
+    async def gf_get_votes(self, event_id):
+        async with self.engine.connect() as conn:
+            rows = await conn.execute(select(sc.gf_votes)
+                                      .where(sc.gf_votes.c.event_id == event_id))
+            out = [{"discord_id": int(r.discord_id),
+                    "starts_at": self._utc(r.starts_at), "zone": r.zone,
+                    "voted_at": self._utc(r.voted_at)} for r in rows]
+        out.sort(key=lambda v: (v["voted_at"], v["discord_id"], v["starts_at"]))
+        return out
+
+    async def gf_schedule_event(self, event_id, *, starts_at, status,
+                                cleanup_at, closed_at, participants, joined_at,
+                                expect_status):
+        async with self.engine.begin() as conn:
+            result = await conn.execute(
+                update(sc.gf_events)
+                .where(and_(sc.gf_events.c.id == event_id,
+                            sc.gf_events.c.status == expect_status))
+                .values(status=status, scheduled_at=self._utc(starts_at),
+                        cleanup_at=self._utc(cleanup_at),
+                        closed_at=self._utc(closed_at)))
+            if result.rowcount != 1:
+                return False
+            seen = set()
+            for discord_id, zone in participants:
+                if discord_id in seen:
+                    continue
+                seen.add(discord_id)
+                await conn.execute(insert(sc.gf_participants).values(
+                    event_id=event_id, discord_id=discord_id, zone=zone,
+                    joined_at=self._utc(joined_at), source="VOTE"))
+            return True
+
+    async def gf_add_participant(self, event_id, discord_id, zone, joined_at, *,
+                                 max_players, source):
+        async with self.engine.begin() as conn:
+            ids = {int(r[0]) for r in await conn.execute(
+                select(sc.gf_participants.c.discord_id)
+                .where(sc.gf_participants.c.event_id == event_id))}
+            if discord_id in ids:
+                return "already"
+            if len(ids) >= max_players:
+                return "full"
+            await conn.execute(insert(sc.gf_participants).values(
+                event_id=event_id, discord_id=discord_id, zone=zone,
+                joined_at=self._utc(joined_at), source=source))
+            return "added"
+
+    async def gf_remove_participant(self, event_id, discord_id):
+        async with self.engine.begin() as conn:
+            result = await conn.execute(delete(sc.gf_participants).where(and_(
+                sc.gf_participants.c.event_id == event_id,
+                sc.gf_participants.c.discord_id == discord_id)))
+            return result.rowcount == 1
+
+    async def gf_get_participants(self, event_id):
+        async with self.engine.connect() as conn:
+            rows = await conn.execute(
+                select(sc.gf_participants)
+                .where(sc.gf_participants.c.event_id == event_id))
+            out = [{"discord_id": int(r.discord_id), "zone": r.zone,
+                    "joined_at": self._utc(r.joined_at), "source": r.source}
+                   for r in rows]
+        out.sort(key=lambda p: (p["joined_at"], p["discord_id"]))
+        return out
+
+    async def gf_set_event_message(self, event_id, zone, channel_id, message_id,
+                                   now):
+        async with self.engine.begin() as conn:
+            await self._upsert(conn, sc.gf_messages,
+                               {"event_id": event_id, "zone": zone},
+                               {"channel_id": channel_id,
+                                "message_id": message_id,
+                                "posted_at": self._utc(now)})
+
+    async def gf_get_event_messages(self, event_id):
+        async with self.engine.connect() as conn:
+            rows = await conn.execute(
+                select(sc.gf_messages)
+                .where(sc.gf_messages.c.event_id == event_id)
+                .order_by(sc.gf_messages.c.zone.asc()))
+            return [{"zone": r.zone, "channel_id": int(r.channel_id),
+                     "message_id": int(r.message_id),
+                     "posted_at": self._utc(r.posted_at)} for r in rows]
+
+    async def gf_delete_event_message(self, event_id, zone):
+        async with self.engine.begin() as conn:
+            await conn.execute(delete(sc.gf_messages).where(and_(
+                sc.gf_messages.c.event_id == event_id,
+                sc.gf_messages.c.zone == zone)))
+
+    async def gf_message_lookup(self, message_id):
+        async with self.engine.connect() as conn:
+            r = (await conn.execute(select(sc.gf_messages)
+                 .where(sc.gf_messages.c.message_id == message_id))).first()
+            if r is None:
+                return None
+            return {"event_id": int(r.event_id), "zone": r.zone,
+                    "channel_id": int(r.channel_id)}
+
     # ── bulk export / import ───────────────────────────────────────────────
     @staticmethod
     def _dt(dt: datetime | None) -> str | None:
@@ -1329,10 +1512,38 @@ class SqlRepository(StatsRepository):
                                     "updated_at": self._dt(r.updated_at)}
                 for r in await conn.execute(select(sc.gf_members))
             }
+            gf_events = [
+                {"id": int(r.id), "creator_id": int(r.creator_id),
+                 "title": r.title, "min_players": int(r.min_players),
+                 "max_players": int(r.max_players), "origin_zone": r.origin_zone,
+                 "status": r.status,
+                 "legacy_lfg_id": int(r.legacy_lfg_id) if r.legacy_lfg_id else None,
+                 **{k: self._dt(getattr(r, k)) for k in self._GF_EVENT_DATES}}
+                for r in await conn.execute(
+                    select(sc.gf_events).order_by(sc.gf_events.c.id.asc()))
+            ]
+            gf_slots = [{"event_id": int(r.event_id),
+                         "starts_at": self._dt(r.starts_at)}
+                        for r in await conn.execute(select(sc.gf_slots))]
+            gf_votes = [{"event_id": int(r.event_id),
+                         "discord_id": int(r.discord_id),
+                         "starts_at": self._dt(r.starts_at), "zone": r.zone,
+                         "voted_at": self._dt(r.voted_at)}
+                        for r in await conn.execute(select(sc.gf_votes))]
+            gf_participants = [{"event_id": int(r.event_id),
+                                "discord_id": int(r.discord_id), "zone": r.zone,
+                                "joined_at": self._dt(r.joined_at),
+                                "source": r.source}
+                               for r in await conn.execute(select(sc.gf_participants))]
+            gf_messages = [{"event_id": int(r.event_id), "zone": r.zone,
+                            "channel_id": int(r.channel_id),
+                            "message_id": int(r.message_id),
+                            "posted_at": self._dt(r.posted_at)}
+                           for r in await conn.execute(select(sc.gf_messages))]
             seq = {}
             for key, table in (("user", sc.users), ("message", sc.messages),
                                ("stat", sc.stats), ("gate", sc.gate_entries),
-                               ("lfg", sc.lfg_posts)):
+                               ("lfg", sc.lfg_posts), ("gf_event", sc.gf_events)):
                 m = (await conn.execute(select(func.max(table.c.id)))).scalar()
                 seq[key] = m or 0
         return {
@@ -1356,6 +1567,11 @@ class SqlRepository(StatsRepository):
             "gf_settings": gf_settings,
             "gf_zones": gf_zones,
             "gf_members": gf_members,
+            "gf_events": gf_events,
+            "gf_slots": gf_slots,
+            "gf_votes": gf_votes,
+            "gf_participants": gf_participants,
+            "gf_messages": gf_messages,
             "seq": seq,
         }
 
@@ -1482,10 +1698,37 @@ class SqlRepository(StatsRepository):
                 await conn.execute(insert(sc.gf_members).values(
                     discord_id=int(did), zone=v["zone"],
                     updated_at=_as_aware_utc(_parse_dt(v["updated_at"]))))
+            for r in snapshot.get("gf_events", []):
+                await conn.execute(insert(sc.gf_events).values(
+                    id=r["id"], creator_id=r["creator_id"], title=r["title"],
+                    min_players=r["min_players"], max_players=r["max_players"],
+                    origin_zone=r["origin_zone"], status=r["status"],
+                    legacy_lfg_id=r.get("legacy_lfg_id"),
+                    **{k: self._utc(_parse_dt(r.get(k)))
+                       for k in self._GF_EVENT_DATES}))
+            for r in snapshot.get("gf_slots", []):
+                await conn.execute(insert(sc.gf_slots).values(
+                    event_id=r["event_id"],
+                    starts_at=self._utc(_parse_dt(r["starts_at"]))))
+            for r in snapshot.get("gf_votes", []):
+                await conn.execute(insert(sc.gf_votes).values(
+                    event_id=r["event_id"], discord_id=r["discord_id"],
+                    starts_at=self._utc(_parse_dt(r["starts_at"])),
+                    zone=r["zone"], voted_at=self._utc(_parse_dt(r["voted_at"]))))
+            for r in snapshot.get("gf_participants", []):
+                await conn.execute(insert(sc.gf_participants).values(
+                    event_id=r["event_id"], discord_id=r["discord_id"],
+                    zone=r["zone"], joined_at=self._utc(_parse_dt(r["joined_at"])),
+                    source=r["source"]))
+            for r in snapshot.get("gf_messages", []):
+                await conn.execute(insert(sc.gf_messages).values(
+                    event_id=r["event_id"], zone=r["zone"],
+                    channel_id=r["channel_id"], message_id=r["message_id"],
+                    posted_at=self._utc(_parse_dt(r["posted_at"]))))
             if self.engine.dialect.name == "postgresql":
                 for tbl, key in (("users", "user"), ("messages", "message"),
                                  ("stats", "stat"), ("gate_entries", "gate"),
-                                 ("lfg_posts", "lfg")):
+                                 ("lfg_posts", "lfg"), ("gf_events", "gf_event")):
                     if snapshot["seq"].get(key, 0) > 0:
                         await conn.execute(
                             text("SELECT setval(pg_get_serial_sequence(:t, 'id'), :v)"),
@@ -1504,6 +1747,8 @@ class SqlRepository(StatsRepository):
                           sc.lfg_availability, sc.lfg_participants,
                           sc.lfg_posts,
                           sc.gf_settings, sc.gf_zones, sc.gf_members,
+                          sc.gf_votes, sc.gf_participants, sc.gf_messages,
+                          sc.gf_slots, sc.gf_events,
                           sc.runtime_config, sc.content_texts,
                           sc.color_config,
                           sc.achievement_defs):

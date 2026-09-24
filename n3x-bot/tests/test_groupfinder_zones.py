@@ -637,7 +637,9 @@ async def test_start_groupfinder_registers_router_and_reconciles():
     bot = _bot_for(guild)
     bot.add_view = MagicMock()
     await start_groupfinder(bot, repo, _settings())
-    assert isinstance(bot.add_view.call_args.args[0], hub.HubView)
+    from n3x_bot.groupfinder import views
+    registered = {type(c.args[0]) for c in bot.add_view.call_args_list}
+    assert registered == {hub.HubView, views.VotingView, views.FixedView}
     assert (await repo.gf_get_zone("Asia/Tokyo"))["status"] == zones.DEACTIVATED
     await repo.close()
 

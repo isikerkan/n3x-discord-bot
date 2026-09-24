@@ -254,3 +254,61 @@ gf_members = Table(
     Column("zone", String(64), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
 )
+
+# One row per global event. All times are UTC; zone channels are only views.
+gf_events = Table(
+    "gf_events", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("creator_id", BigInteger, nullable=False),
+    Column("title", String(100), nullable=False),
+    Column("min_players", Integer, nullable=False),
+    Column("max_players", Integer, nullable=False),
+    Column("origin_zone", String(64), nullable=False),     # where it was created
+    Column("status", String(20), nullable=False),
+    Column("scheduled_at", DateTime(timezone=True), nullable=True),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("closed_at", DateTime(timezone=True), nullable=True),
+    Column("time_found_notified_at", DateTime(timezone=True), nullable=True),
+    Column("cleanup_at", DateTime(timezone=True), nullable=False),
+    Column("cancelled_at", DateTime(timezone=True), nullable=True),
+    Column("legacy_lfg_id", Integer, nullable=True),        # migrated lfg_posts.id
+)
+
+# The proposed start times.
+gf_slots = Table(
+    "gf_slots", metadata,
+    Column("event_id", Integer, ForeignKey("gf_events.id"), primary_key=True),
+    Column("starts_at", DateTime(timezone=True), primary_key=True),
+)
+
+# Availability. Kept separate from the final time and never overwritten by it.
+# `zone` is the zone of the channel the vote came from — it decides where the
+# member is pinged.
+gf_votes = Table(
+    "gf_votes", metadata,
+    Column("event_id", Integer, ForeignKey("gf_events.id"), primary_key=True),
+    Column("discord_id", BigInteger, primary_key=True),
+    Column("starts_at", DateTime(timezone=True), primary_key=True),
+    Column("zone", String(64), nullable=False),
+    Column("voted_at", DateTime(timezone=True), nullable=False),
+)
+
+# The roster once a time is found (before that, participants are the voters).
+gf_participants = Table(
+    "gf_participants", metadata,
+    Column("event_id", Integer, ForeignKey("gf_events.id"), primary_key=True),
+    Column("discord_id", BigInteger, primary_key=True),
+    Column("zone", String(64), nullable=False),
+    Column("joined_at", DateTime(timezone=True), nullable=False),
+    Column("source", String(10), nullable=False),           # VOTE / JOIN
+)
+
+# One message per event per zone channel.
+gf_messages = Table(
+    "gf_messages", metadata,
+    Column("event_id", Integer, ForeignKey("gf_events.id"), primary_key=True),
+    Column("zone", String(64), primary_key=True),
+    Column("channel_id", BigInteger, nullable=False),
+    Column("message_id", BigInteger, nullable=False),
+    Column("posted_at", DateTime(timezone=True), nullable=False),
+)

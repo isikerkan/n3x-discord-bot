@@ -62,10 +62,6 @@ from n3x_bot.timers import (
     update_timer_overview,
 )
 from n3x_bot.groupfinder import register_groupfinder, start_groupfinder
-from n3x_bot.lfg import (
-    register_lfg_commands, restore_lfg_views, start_lfg_cleanup_loop,
-    update_lfg_help,
-)
 from n3x_bot.welcome import register_welcome_commands, send_welcome_card
 
 log = logging.getLogger("N3X-Bot")
@@ -153,7 +149,6 @@ def build_bot(settings: Settings, repo: StatsRepository) -> commands.Bot:
     register_event_commands(bot, repo, settings)
     register_welcome_commands(bot, settings)
     register_timer_commands(bot, repo, settings)
-    register_lfg_commands(bot, repo, settings)
     register_groupfinder(bot, repo, settings)
     return bot
 
@@ -417,7 +412,7 @@ _COMMAND_DESCRIPTIONS: dict[str, str] = {
     "del": "Löscht einen Gate-Eintrag (Rolle erforderlich).",
     "gate verlauf": "Zeigt den Gate-Kostenverlauf als Diagramm.",
     "base": "Startet einen Base-Timer.",
-    "lfg": "Erstellt eine LFG-Gruppensuche (nur im LFG-Channel).",
+    "lfg": "Erstellt eine Gruppensuche (im Zeitzonen-Channel).",
     "timezone": "Setzt deine Group-Finder-Zeitzone.",
     "groupfinder setup": "Richtet die Group-Finder-Zeitzonen ein (Admin).",
     "groupfinder timezone-add": "Fügt eine beliebige Zeitzone hinzu (Admin).",
@@ -443,7 +438,7 @@ _COMMAND_CATEGORIES: list[tuple[str, str, str]] = [
     ("achievements", "🏆", "Achievements"),
     ("activity", "🎙️", "Aktivität"),
     ("timers", "⏱️", "Base Timers"),
-    ("lfg", "🔎", "LFG"),
+    ("lfg", "🔎", "Group Finder"),
     ("fun", "🎮", "Fun & Zähler"),
     ("admin", "⚙️", "Admin & Verwaltung"),
 ]
@@ -1384,15 +1379,6 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
         if not voice_flush_task.is_running():
             voice_flush_task.start()
         start_timer_overview_loop(bot, repo, settings)
-        try:
-            await restore_lfg_views(bot, repo, settings)
-        except Exception:
-            log.exception("lfg view restore failed")
-        try:
-            await update_lfg_help(bot, repo, settings)
-        except Exception:
-            log.exception("lfg help update failed")
-        start_lfg_cleanup_loop(bot, repo, settings)
         try:
             await start_groupfinder(bot, repo, settings)
         except Exception:

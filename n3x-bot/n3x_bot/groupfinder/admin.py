@@ -12,7 +12,9 @@ from discord import app_commands
 
 from n3x_bot.activity import now_local
 from n3x_bot.admin import app_is_admin
-from n3x_bot.groupfinder import hub, provision, zones
+from datetime import datetime, timezone
+
+from n3x_bot.groupfinder import hub, provision, sync, zones
 
 log = logging.getLogger("N3X-Bot")
 
@@ -74,6 +76,8 @@ class SetupSelect(discord.ui.Select):
         results = await _activate_many(interaction, self.repo, self.settings,
                                        self.values)
         await hub.update_hub(interaction.client, self.repo, self.settings)
+        await sync.sync_all(interaction.client, self.repo, self.settings,
+                            datetime.now(timezone.utc))
         embed, view = await _setup_payload(self.repo, self.settings)
         try:
             await interaction.edit_original_response(embed=embed, view=view)
@@ -156,6 +160,7 @@ def register_groupfinder_admin(bot, repo, settings) -> None:
         outcome = await provision.activate_zone(interaction.guild, repo, settings,
                                                 zone, now_local(settings))
         await hub.update_hub(bot, repo, settings)
+        await sync.sync_all(bot, repo, settings, datetime.now(timezone.utc))
         await interaction.followup.send(
             {"exists": f"ℹ️ **{zone}** is already active.",
              "created": f"✅ **{zone}** added.",

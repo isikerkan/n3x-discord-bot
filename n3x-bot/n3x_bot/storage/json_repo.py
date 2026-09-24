@@ -45,7 +45,8 @@ class JsonRepository(StatsRepository):
     # ── lifecycle / persistence ────────────────────────────────────────────
     def _empty(self) -> dict:
         return {
-            "seq": {"user": 0, "message": 0, "stat": 0, "gate": 0, "lfg": 0},
+            "seq": {"user": 0, "message": 0, "stat": 0, "gate": 0, "lfg": 0,
+                    "gf_event": 0},
             "users": [], "messages": [], "stats": [],
             "user_stats": {}, "stat_totals": {}, "stat_last_post": {},
             "target_stats": {}, "gate_entries": [],
@@ -66,6 +67,10 @@ class JsonRepository(StatsRepository):
             "gf_settings": {},
             "gf_zones": {},
             "gf_members": {},
+            "gf_events": [],
+            "gf_votes": [],
+            "gf_participants": [],
+            "gf_messages": [],
         }
 
     async def connect(self) -> None:
@@ -891,6 +896,179 @@ class JsonRepository(StatsRepository):
             self._flush()
         return ids
 
+    # ── group finder: events / votes / roster / messages ──────────────────
+    _GF_EVENT_FIELDS = ("status", "scheduled_at", "closed_at",
+                        "time_found_notified_at", "cleanup_at", "cancelled_at")
+    _GF_EVENT_DATES = ("scheduled_at", "created_at", "closed_at",
+                       "time_found_notified_at", "cleanup_at", "cancelled_at")
+
+    @staticmethod
+    def _dt_of(value):
+        parsed = _as_aware_utc(_parse_dt(value))
+        return parsed.astimezone(timezone.utc) if parsed else None
+
+    def _gf_event(self, event_id):
+        for row in self._db["gf_events"]:
+            if int(row["id"]) == int(event_id):
+                return row
+        return None
+
+    def _gf_event_row(self, row) -> dict:
+        out = {k: row[k] for k in ("id", "creator_id", "title", "min_players",
+                                   "max_players", "origin_zone", "status",
+                                   "legacy_lfg_id")}
+        for key in self._GF_EVENT_DATES:
+            out[key] = self._dt_of(row.get(key))
+        out["slots"] = sorted(self._dt_of(x) for x in row["slots"])
+        return out
+
+    async def gf_create_event(self, *, creator_id, title, min_players,
+                              max_players, origin_zone, slots, status,
+                              created_at, cleanup_at, legacy_lfg_id=None):
+        self._db["seq"]["gf_event"] = self._db["seq"].get("gf_event", 0) + 1
+        event_id = self._db["seq"]["gf_event"]
+        row = {"id": event_id, "creator_id": creator_id, "title": title,
+               "min_players": min_players, "max_players": max_players,
+               "origin_zone": origin_zone, "status": status,
+               "legacy_lfg_id": legacy_lfg_id,
+               "slots": sorted({_iso(x) for x in slots})}
+        for key in self._GF_EVENT_DATES:
+            row[key] = None
+        row["created_at"] = _iso(created_at)
+        row["cleanup_at"] = _iso(cleanup_at)
+        self._db["gf_events"].append(row)
+        self._flush()
+        return event_id
+
+    async def gf_get_event(self, event_id):
+        row = self._gf_event(event_id)
+        return None if row is None else self._gf_event_row(row)
+
+    async def gf_events_with_status(self, statuses):
+        wanted = set(statuses)
+        return [self._gf_event_row(r) for r in
+                sorted(self._db["gf_events"], key=lambda r: int(r["id"]))
+                if r["status"] in wanted]
+
+    async def gf_update_event(self, event_id, *, expect_status=None, **fields):
+        unknown = set(fields) - set(self._GF_EVENT_FIELDS)
+        if unknown:
+            raise ValueError(f"not updatable: {sorted(unknown)}")
+        row = self._gf_event(event_id)
+        # No await between check and write: atomic on single-threaded asyncio.
+        if row is None or (expect_status is not None
+                           and row["status"] != expect_status):
+            return False
+        for key, value in fields.items():
+            row[key] = value if key == "status" else _iso(value)
+        self._flush()
+        return True
+
+    async def gf_set_votes(self, event_id, discord_id, starts_at, zone, now):
+        self._db["gf_votes"] = [
+            v for v in self._db["gf_votes"]
+            if not (int(v["event_id"]) == int(event_id)
+                    and int(v["discord_id"]) == int(discord_id))]
+        for slot in sorted({_iso(x) for x in starts_at}):
+            self._db["gf_votes"].append(
+                {"event_id": int(event_id), "discord_id": int(discord_id),
+                 "starts_at": slot, "zone": zone, "voted_at": _iso(now)})
+        self._flush()
+
+    async def gf_get_votes(self, event_id):
+        out = [{"discord_id": int(v["discord_id"]),
+                "starts_at": self._dt_of(v["starts_at"]), "zone": v["zone"],
+                "voted_at": self._dt_of(v["voted_at"])}
+               for v in self._db["gf_votes"] if int(v["event_id"]) == int(event_id)]
+        out.sort(key=lambda v: (v["voted_at"], v["discord_id"], v["starts_at"]))
+        return out
+
+    async def gf_schedule_event(self, event_id, *, starts_at, status,
+                                cleanup_at, closed_at, participants, joined_at,
+                                expect_status):
+        row = self._gf_event(event_id)
+        if row is None or row["status"] != expect_status:
+            return False
+        row.update(status=status, scheduled_at=_iso(starts_at),
+                   cleanup_at=_iso(cleanup_at), closed_at=_iso(closed_at))
+        seen = set()
+        for discord_id, zone in participants:
+            if discord_id in seen:
+                continue
+            seen.add(discord_id)
+            self._db["gf_participants"].append(
+                {"event_id": int(event_id), "discord_id": int(discord_id),
+                 "zone": zone, "joined_at": _iso(joined_at), "source": "VOTE"})
+        self._flush()
+        return True
+
+    def _gf_roster(self, event_id):
+        return [p for p in self._db["gf_participants"]
+                if int(p["event_id"]) == int(event_id)]
+
+    async def gf_add_participant(self, event_id, discord_id, zone, joined_at, *,
+                                 max_players, source):
+        roster = self._gf_roster(event_id)
+        if any(int(p["discord_id"]) == int(discord_id) for p in roster):
+            return "already"
+        if len(roster) >= max_players:
+            return "full"
+        self._db["gf_participants"].append(
+            {"event_id": int(event_id), "discord_id": int(discord_id),
+             "zone": zone, "joined_at": _iso(joined_at), "source": source})
+        self._flush()
+        return "added"
+
+    async def gf_remove_participant(self, event_id, discord_id):
+        before = len(self._db["gf_participants"])
+        self._db["gf_participants"] = [
+            p for p in self._db["gf_participants"]
+            if not (int(p["event_id"]) == int(event_id)
+                    and int(p["discord_id"]) == int(discord_id))]
+        removed = len(self._db["gf_participants"]) != before
+        if removed:
+            self._flush()
+        return removed
+
+    async def gf_get_participants(self, event_id):
+        out = [{"discord_id": int(p["discord_id"]), "zone": p["zone"],
+                "joined_at": self._dt_of(p["joined_at"]), "source": p["source"]}
+               for p in self._gf_roster(event_id)]
+        out.sort(key=lambda p: (p["joined_at"], p["discord_id"]))
+        return out
+
+    async def gf_set_event_message(self, event_id, zone, channel_id, message_id,
+                                   now):
+        self._db["gf_messages"] = [
+            m for m in self._db["gf_messages"]
+            if not (int(m["event_id"]) == int(event_id) and m["zone"] == zone)]
+        self._db["gf_messages"].append(
+            {"event_id": int(event_id), "zone": zone,
+             "channel_id": int(channel_id), "message_id": int(message_id),
+             "posted_at": _iso(now)})
+        self._flush()
+
+    async def gf_get_event_messages(self, event_id):
+        rows = [m for m in self._db["gf_messages"]
+                if int(m["event_id"]) == int(event_id)]
+        return [{"zone": m["zone"], "channel_id": int(m["channel_id"]),
+                 "message_id": int(m["message_id"]),
+                 "posted_at": self._dt_of(m["posted_at"])}
+                for m in sorted(rows, key=lambda m: m["zone"])]
+
+    async def gf_delete_event_message(self, event_id, zone):
+        self._db["gf_messages"] = [
+            m for m in self._db["gf_messages"]
+            if not (int(m["event_id"]) == int(event_id) and m["zone"] == zone)]
+        self._flush()
+
+    async def gf_message_lookup(self, message_id):
+        for m in self._db["gf_messages"]:
+            if int(m["message_id"]) == int(message_id):
+                return {"event_id": int(m["event_id"]), "zone": m["zone"],
+                        "channel_id": int(m["channel_id"])}
+        return None
+
     @staticmethod
     def _max_id(rows) -> int:
         return max((r["id"] for r in rows), default=0)
@@ -939,12 +1117,20 @@ class JsonRepository(StatsRepository):
             "gf_settings": copy.deepcopy(self._db["gf_settings"]),
             "gf_zones": copy.deepcopy(self._db["gf_zones"]),
             "gf_members": copy.deepcopy(self._db["gf_members"]),
+            "gf_events": [{k: v for k, v in e.items() if k != "slots"}
+                          for e in copy.deepcopy(self._db["gf_events"])],
+            "gf_slots": [{"event_id": int(e["id"]), "starts_at": slot}
+                         for e in self._db["gf_events"] for slot in e["slots"]],
+            "gf_votes": copy.deepcopy(self._db["gf_votes"]),
+            "gf_participants": copy.deepcopy(self._db["gf_participants"]),
+            "gf_messages": copy.deepcopy(self._db["gf_messages"]),
             "seq": {
                 "user": self._max_id(users),
                 "message": self._max_id(messages),
                 "stat": self._max_id(stats),
                 "gate": self._max_id(gate_entries),
                 "lfg": self._max_id(self._db["lfg_posts"]),
+                "gf_event": self._max_id(self._db["gf_events"]),
             },
         }
 
@@ -986,6 +1172,17 @@ class JsonRepository(StatsRepository):
         self._db["gf_settings"] = copy.deepcopy(snapshot.get("gf_settings", {}))
         self._db["gf_zones"] = copy.deepcopy(snapshot.get("gf_zones", {}))
         self._db["gf_members"] = copy.deepcopy(snapshot.get("gf_members", {}))
+        events = copy.deepcopy(snapshot.get("gf_events", []))
+        slots = {}
+        for r in snapshot.get("gf_slots", []):
+            slots.setdefault(int(r["event_id"]), []).append(r["starts_at"])
+        for e in events:
+            e["slots"] = sorted(slots.get(int(e["id"]), []))
+        self._db["gf_events"] = events
+        self._db["gf_votes"] = copy.deepcopy(snapshot.get("gf_votes", []))
+        self._db["gf_participants"] = copy.deepcopy(
+            snapshot.get("gf_participants", []))
+        self._db["gf_messages"] = copy.deepcopy(snapshot.get("gf_messages", []))
         self._db["seq"] = dict(snapshot["seq"])
         self._flush()
 

@@ -557,6 +557,93 @@ class StatsRepository(ABC):
         """Remove every member assignment to `zone`; return their ids."""
         ...
 
+    # group finder: events / votes / roster / messages
+    @abstractmethod
+    async def gf_create_event(self, *, creator_id: int, title: str,
+                              min_players: int, max_players: int,
+                              origin_zone: str, slots: list[datetime],
+                              status: str, created_at: datetime,
+                              cleanup_at: datetime,
+                              legacy_lfg_id: int | None = None) -> int:
+        """Insert an event with its proposed start times (UTC); return its id.
+        No votes and no participants are created."""
+        ...
+    @abstractmethod
+    async def gf_get_event(self, event_id: int) -> dict | None:
+        """The event with `slots` as a sorted list of tz-aware UTC datetimes,
+        or None. Keys: id, creator_id, title, min_players, max_players,
+        origin_zone, status, scheduled_at, created_at, closed_at,
+        time_found_notified_at, cleanup_at, cancelled_at, legacy_lfg_id, slots."""
+        ...
+    @abstractmethod
+    async def gf_events_with_status(self, statuses: list[str]) -> list[dict]:
+        """Every event whose status is in `statuses`, by id ascending."""
+        ...
+    @abstractmethod
+    async def gf_update_event(self, event_id: int, *,
+                              expect_status: str | None = None,
+                              **fields) -> bool:
+        """Update `fields` (status, scheduled_at, closed_at,
+        time_found_notified_at, cleanup_at, cancelled_at). With
+        `expect_status` this is a compare-and-swap: nothing is written unless
+        the current status matches. Returns whether a row was written."""
+        ...
+    @abstractmethod
+    async def gf_set_votes(self, event_id: int, discord_id: int,
+                           starts_at: list[datetime], zone: str,
+                           now: datetime) -> None:
+        """Replace this member's votes. An empty list removes them all."""
+        ...
+    @abstractmethod
+    async def gf_get_votes(self, event_id: int) -> list[dict]:
+        """All votes as dicts (discord_id, starts_at, zone, voted_at), ordered
+        by voted_at, then discord_id, then starts_at."""
+        ...
+    @abstractmethod
+    async def gf_schedule_event(self, event_id: int, *, starts_at: datetime,
+                                status: str, cleanup_at: datetime,
+                                closed_at: datetime | None,
+                                participants: list[tuple[int, str]],
+                                joined_at: datetime,
+                                expect_status: str) -> bool:
+        """Atomically fix the start time and write the roster, but only while
+        the event is at `expect_status` (compare-and-swap). Exactly one of any
+        number of concurrent callers wins. `participants` is a list of
+        (discord_id, zone); they are stored with source VOTE."""
+        ...
+    @abstractmethod
+    async def gf_add_participant(self, event_id: int, discord_id: int,
+                                 zone: str, joined_at: datetime, *,
+                                 max_players: int, source: str) -> str:
+        """`added`, `already` or `full` — capacity enforced in the transaction."""
+        ...
+    @abstractmethod
+    async def gf_remove_participant(self, event_id: int, discord_id: int) -> bool:
+        """True if the member was on the roster."""
+        ...
+    @abstractmethod
+    async def gf_get_participants(self, event_id: int) -> list[dict]:
+        """Roster as dicts (discord_id, zone, joined_at, source), join order."""
+        ...
+    @abstractmethod
+    async def gf_set_event_message(self, event_id: int, zone: str,
+                                   channel_id: int, message_id: int,
+                                   now: datetime) -> None:
+        """Upsert the message that shows `event_id` in `zone`'s channel."""
+        ...
+    @abstractmethod
+    async def gf_get_event_messages(self, event_id: int) -> list[dict]:
+        """Dicts (zone, channel_id, message_id, posted_at), by zone."""
+        ...
+    @abstractmethod
+    async def gf_delete_event_message(self, event_id: int, zone: str) -> None:
+        ...
+    @abstractmethod
+    async def gf_message_lookup(self, message_id: int) -> dict | None:
+        """(event_id, zone, channel_id) for a message — how a persistent view
+        finds its event. None for an unknown message."""
+        ...
+
     # bulk export / import
     @abstractmethod
     async def export_all(self) -> dict:
