@@ -14,7 +14,7 @@ from n3x_bot.activity import now_local
 from n3x_bot.admin import app_is_admin
 from datetime import datetime, timezone
 
-from n3x_bot.groupfinder import hub, provision, sync, zones
+from n3x_bot.groupfinder import hub, legacy, provision, sync, zones
 
 log = logging.getLogger("N3X-Bot")
 
@@ -75,9 +75,12 @@ class SetupSelect(discord.ui.Select):
                                            self.settings)
         results = await _activate_many(interaction, self.repo, self.settings,
                                        self.values)
+        now = datetime.now(timezone.utc)
+        # The first zone is what lets the running legacy LFGs move over.
+        await legacy.migrate_legacy_lfgs(interaction.client, self.repo,
+                                         self.settings, now)
         await hub.update_hub(interaction.client, self.repo, self.settings)
-        await sync.sync_all(interaction.client, self.repo, self.settings,
-                            datetime.now(timezone.utc))
+        await sync.sync_all(interaction.client, self.repo, self.settings, now)
         embed, view = await _setup_payload(self.repo, self.settings)
         try:
             await interaction.edit_original_response(embed=embed, view=view)
@@ -159,8 +162,10 @@ def register_groupfinder_admin(bot, repo, settings) -> None:
         await provision.ensure_hub_channel(interaction.guild, repo, settings)
         outcome = await provision.activate_zone(interaction.guild, repo, settings,
                                                 zone, now_local(settings))
+        now = datetime.now(timezone.utc)
+        await legacy.migrate_legacy_lfgs(bot, repo, settings, now)
         await hub.update_hub(bot, repo, settings)
-        await sync.sync_all(bot, repo, settings, datetime.now(timezone.utc))
+        await sync.sync_all(bot, repo, settings, now)
         await interaction.followup.send(
             {"exists": f"ℹ️ **{zone}** is already active.",
              "created": f"✅ **{zone}** added.",

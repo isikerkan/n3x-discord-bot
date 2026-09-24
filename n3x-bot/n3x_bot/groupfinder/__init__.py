@@ -5,13 +5,14 @@ Stage 1: zone administration, the hub and member timezones.
 Stage 2: events, voting, time finding (Variant 1), rendering in every zone.
 Stage 3: the lifecycle loop (countdown, closing, start, cleanup) and cancel.
 Stage 4: notifications — the "time found" ping, the 15-minute DM, cancel DMs.
+Stage 5: cutover — adopt the old LFG channel as the hub, import running LFGs.
 """
 import logging
 
 from datetime import datetime, timezone
 
 from n3x_bot.activity import now_local
-from n3x_bot.groupfinder import hub, lifecycle, provision, sync, views
+from n3x_bot.groupfinder import hub, legacy, lifecycle, provision, sync, views
 from n3x_bot.groupfinder.admin import register_groupfinder_admin
 from n3x_bot.groupfinder.commands import register_lfg_command
 from n3x_bot.groupfinder.hub import register_timezone_command
@@ -45,11 +46,14 @@ async def start_groupfinder(bot, repo, settings) -> None:
     bot.add_view(hub.HubView(repo, settings))
     bot.add_view(views.VotingView(repo, settings))
     bot.add_view(views.FixedView(repo, settings))
+    await legacy.adopt_legacy_hub(bot, repo, settings)
     gone = await provision.reconcile_zones(bot, repo, now_local(settings))
     if gone:
         log.info("group finder: deactivated while offline: %s", ", ".join(gone))
+    now = datetime.now(timezone.utc)
+    await legacy.migrate_legacy_lfgs(bot, repo, settings, now)
     await hub.update_hub(bot, repo, settings)
-    await sync.sync_all(bot, repo, settings, datetime.now(timezone.utc))
+    await sync.sync_all(bot, repo, settings, now)
     lifecycle.start_lifecycle_loop(bot, repo, settings)
 
 
