@@ -9,6 +9,10 @@ log, gate posts, etc.).
 On startup the freshly-launched process kills any OTHER live ``n3x_bot``
 process before it connects. Newest-wins matches the deploy model (the new
 process is always the newest code). Pure ``/proc`` scan — no psutil.
+
+Only processes started from the same working directory count: every AMP
+instance runs the bot from its own directory, so several instances (each with
+its own token) can run on one host without killing each other.
 """
 import logging
 import os
@@ -32,8 +36,16 @@ def _read_cmdline(pid: str) -> list[str]:
     return [a.decode("utf-8", "replace") for a in raw.split(b"\x00") if a]
 
 
+def _read_cwd(pid) -> str | None:
+    try:
+        return os.readlink(f"/proc/{pid}/cwd")
+    except OSError:
+        return None
+
+
 def _iter_proc_cmdlines():
-    """Yield ``(pid:int, argv:list[str])`` for every numeric ``/proc`` entry."""
+    """Yield ``(pid:int, argv:list[str], cwd:str|None)`` for every numeric
+    ``/proc`` entry."""
     try:
         entries = os.listdir("/proc")
     except OSError:
@@ -43,7 +55,7 @@ def _iter_proc_cmdlines():
             continue
         argv = _read_cmdline(name)
         if argv:
-            yield int(name), argv
+            yield int(name), argv, _read_cwd(name)
 
 
 def _is_our_process(argv: list[str]) -> bool:
@@ -51,14 +63,18 @@ def _is_our_process(argv: list[str]) -> bool:
     return _MODULE_FLAG in argv and _MODULE_MARKER in argv
 
 
-def stale_pids(entries, self_pid: int) -> list[int]:
-    """Pure: from ``(pid, argv)`` pairs, the OTHER n3x_bot pids to kill.
+def stale_pids(entries, self_pid: int, self_cwd: str | None) -> list[int]:
+    """Pure: from ``(pid, argv, cwd)`` entries, the OTHER n3x_bot pids of this
+    instance to kill.
 
-    Excludes ``self_pid`` so a process never kills itself. Testable without
+    Excludes ``self_pid`` so a process never kills itself, and every process
+    whose cwd differs (another instance) or is unknown. Testable without
     touching ``/proc``.
     """
-    return [pid for pid, argv in entries
-            if pid != self_pid and _is_our_process(argv)]
+    if self_cwd is None:
+        return []
+    return [pid for pid, argv, cwd in entries
+            if pid != self_pid and cwd == self_cwd and _is_our_process(argv)]
 
 
 def kill_stale_instances() -> list[int]:
@@ -66,7 +82,7 @@ def kill_stale_instances() -> list[int]:
     pids signalled. Runs before the gateway connect so the old process releases
     its Discord session."""
     self_pid = os.getpid()
-    victims = stale_pids(_iter_proc_cmdlines(), self_pid)
+    victims = stale_pids(_iter_proc_cmdlines(), self_pid, _read_cwd(self_pid))
     for pid in victims:
         try:
             os.kill(pid, signal.SIGTERM)
