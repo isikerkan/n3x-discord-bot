@@ -265,6 +265,7 @@ async def test_non_overridable_field_passes_through_to_settings():
     assert rc.admin_role_id == 7
     assert rc.command_prefix == settings.command_prefix
     assert rc.prefix_str == settings.prefix_str
+    assert rc.nickname_enforcement is True
 
 
 async def test_override_for_non_overridable_key_is_ignored():

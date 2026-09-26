@@ -102,6 +102,9 @@ class Settings(BaseSettings):
     timezone: str = "Europe/Berlin"
 
     prefix_str: str = "[N3X]"
+    # Add/remove PREFIX_STR on members' nicknames by TARGET_ROLE_ID. Turn off
+    # on servers where another bot manages nickname tags.
+    nickname_enforcement: bool = True
     command_prefix: str = "!"
     reminder_time: str = "19:30"
 

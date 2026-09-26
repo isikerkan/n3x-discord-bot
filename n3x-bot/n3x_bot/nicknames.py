@@ -33,6 +33,8 @@ def desired_nick(display_name: str, has_role: bool, prefix_str: str) -> str | No
 
 
 async def enforce_nick(member, settings: Settings) -> bool:
+    if not getattr(settings, "nickname_enforcement", True):
+        return False
     if member.bot or member == member.guild.owner:
         return False
     if not member.guild.me.guild_permissions.manage_nicknames:

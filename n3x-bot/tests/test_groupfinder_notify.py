@@ -249,7 +249,17 @@ async def test_no_announcement_after_the_start():
     await repo.close()
 
 
-async def test_vote_click_that_finds_the_time_announces_it():
+class _FrozenDatetime(datetime):
+    """The click callbacks read the real clock; pin it to NOW so the voted slot
+    stays in the future whatever day the suite runs."""
+
+    @classmethod
+    def now(cls, tz=None):
+        return NOW if tz is None else NOW.astimezone(tz)
+
+
+async def test_vote_click_that_finds_the_time_announces_it(monkeypatch):
+    monkeypatch.setattr(views, "datetime", _FrozenDatetime)
     repo = await _repo()
     bot, chans = await _world(repo, BERLIN, KARACHI)
     eid = await _create(repo, players="1-8")

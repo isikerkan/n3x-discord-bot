@@ -234,6 +234,10 @@ class RuntimeConfig:
         return self._settings.prefix_str
 
     @property
+    def nickname_enforcement(self) -> bool:
+        return self._settings.nickname_enforcement
+
+    @property
     def timezone(self) -> str:
         return self._settings.timezone
 

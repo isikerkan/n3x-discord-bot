@@ -673,7 +673,17 @@ async def _message_id(repo, eid, zone):
                 if m["zone"] == zone)
 
 
-async def test_vote_click_records_zone_and_updates_all_channels():
+class _FrozenDatetime(datetime):
+    """The click callbacks read the real clock; pin it to NOW so the voted slot
+    stays in the future whatever day the suite runs."""
+
+    @classmethod
+    def now(cls, tz=None):
+        return NOW if tz is None else NOW.astimezone(tz)
+
+
+async def test_vote_click_records_zone_and_updates_all_channels(monkeypatch):
+    monkeypatch.setattr(views, "datetime", _FrozenDatetime)
     repo = await _repo()
     bot, chans = await _zones(repo, BERLIN, KARACHI)
     eid = await _create(repo, players="1-8")

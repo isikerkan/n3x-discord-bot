@@ -273,3 +273,26 @@ async def test_enforce_nick_swallows_edit_failure_and_returns_false():
 
     member.edit.assert_awaited_once()
     assert result is False
+
+
+# ── NICKNAME_ENFORCEMENT=false turns the feature off entirely ─────────────────
+
+async def test_enforce_nick_does_nothing_when_disabled():
+    from n3x_bot.nicknames import enforce_nick
+    settings = SimpleNamespace(prefix_str=PREFIX, target_role_id=1,
+                               target_role_ids=[1], nickname_enforcement=False)
+    added = _member(display_name="Player", roles=[_FakeRole(1)])
+    stripped = _member(display_name=f"{PREFIX} Player", roles=[])
+
+    assert await enforce_nick(added, settings) is False
+    assert await enforce_nick(stripped, settings) is False
+    added.edit.assert_not_awaited()
+    stripped.edit.assert_not_awaited()
+
+
+def test_nickname_enforcement_reads_from_env(monkeypatch):
+    from n3x_bot.config import Settings
+    monkeypatch.setenv("NICKNAME_ENFORCEMENT", "false")
+    settings = Settings(_env_file=None, discord_token="x",
+                        welcome_channel_id=1, reminder_channel_id=1)
+    assert settings.nickname_enforcement is False
