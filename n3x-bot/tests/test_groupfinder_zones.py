@@ -92,9 +92,10 @@ class FakeGuild:
     def _channel(self, name, kind, category=None, overwrites=None, topic=None):
         cid = next(_ids)
         channel = SimpleNamespace(id=cid, name=name, kind=kind, category=category,
-                                  overwrites=overwrites or {}, topic=topic)
+                                  overwrites=overwrites or {}, topic=topic,
+                                  guild=self)
         channel.delete = AsyncMock(side_effect=lambda **kw: self.channels.pop(cid, None))
-        channel.send = AsyncMock(side_effect=lambda **kw: SimpleNamespace(id=next(_ids)))
+        channel.send = AsyncMock(side_effect=lambda *a, **kw: SimpleNamespace(id=next(_ids)))
         channel.fetch_message = AsyncMock(side_effect=_not_found())
         self.channels[cid] = channel
         return channel
@@ -211,7 +212,7 @@ async def test_zone_channel_permissions():
     role = guild.get_role(row["role_id"])
     assert ow[guild.default_role].view_channel is False          # hidden
     assert ow[role].view_channel is True                         # zone sees it
-    assert ow[role].send_messages is False                       # bot-only posts
+    assert ow[role].send_messages is True    # else Discord locks the box, /lfg too
     assert ow[role].use_application_commands is True             # /lfg works
     assert ow[guild.roles[ADMIN_ROLE]].view_channel is True      # admins see all
     assert ow[guild.me].send_messages is True                    # bot posts
@@ -742,3 +743,67 @@ def test_command_list_omits_the_guide_when_disabled():
                    for n in names(build_command_list(bot, groupfinder=False)))
     assert not any("Group Finder" in n
                    for n in names(build_admin_command_list(bot, groupfinder=False)))
+
+
+
+# ── typing in zone channels: Send Messages on, typed messages removed ─────────
+
+def _typed(channel, author_roles=(), bot_author=False):
+    msg = MagicMock()
+    msg.guild = object()
+    msg.channel = channel
+    msg.author = SimpleNamespace(bot=bot_author, roles=list(author_roles),
+                                 mention="<@42>")
+    msg.delete = AsyncMock()
+    return msg
+
+
+async def _zone_channel(repo, guild):
+    await provision.activate_zone(guild, repo, _settings(), "Europe/Berlin", NOW)
+    row = await repo.gf_get_zone("Europe/Berlin")
+    return guild.get_channel(row["channel_id"])
+
+
+async def test_member_message_in_zone_channel_is_removed_with_a_hint():
+    from n3x_bot.groupfinder.commands import guard_zone_message
+    repo, guild = await _repo(), FakeGuild()
+    channel = await _zone_channel(repo, guild)
+    msg = _typed(channel)
+    assert await guard_zone_message(None, repo, _settings(), msg) is True
+    msg.delete.assert_awaited_once()
+    text = channel.send.await_args.args[0]
+    assert "/lfg" in text
+    assert channel.send.await_args.kwargs["delete_after"] > 0
+    await repo.close()
+
+
+async def test_admin_bot_and_other_channels_are_left_alone():
+    from n3x_bot.groupfinder.commands import guard_zone_message
+    repo, guild = await _repo(), FakeGuild()
+    channel = await _zone_channel(repo, guild)
+    admin = _typed(channel, author_roles=[guild.roles[ADMIN_ROLE]])
+    bot_msg = _typed(channel, bot_author=True)
+    elsewhere = _typed(SimpleNamespace(id=1, name="general", send=AsyncMock()))
+    for msg in (admin, bot_msg, elsewhere):
+        assert await guard_zone_message(None, repo, _settings(), msg) is False
+        msg.delete.assert_not_awaited()
+    await repo.close()
+
+
+async def test_old_zone_channels_get_send_messages_for_the_zone_role():
+    repo, guild = await _repo(), FakeGuild()
+    channel = await _zone_channel(repo, guild)
+    role = guild.get_role((await repo.gf_get_zone("Europe/Berlin"))["role_id"])
+    locked = discord.PermissionOverwrite(view_channel=True, send_messages=False)
+    channel.overwrites_for = lambda r: locked
+    channel.set_permissions = AsyncMock()
+    assert await provision.refresh_member_permissions(_bot_for(guild), repo) == 1
+    channel.set_permissions.assert_awaited_once()
+    assert channel.set_permissions.await_args.args[0] is role
+    assert channel.set_permissions.await_args.kwargs["overwrite"].send_messages is True
+
+    channel.overwrites_for = lambda r: provision.member_overwrite()
+    channel.set_permissions.reset_mock()
+    assert await provision.refresh_member_permissions(_bot_for(guild), repo) == 0
+    channel.set_permissions.assert_not_awaited()
+    await repo.close()

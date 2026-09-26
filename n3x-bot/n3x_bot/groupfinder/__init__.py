@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from n3x_bot.activity import now_local
 from n3x_bot.groupfinder import hub, legacy, lifecycle, provision, sync, views
 from n3x_bot.groupfinder.admin import register_groupfinder_admin
-from n3x_bot.groupfinder.commands import register_lfg_command
+from n3x_bot.groupfinder.commands import guard_zone_message, register_lfg_command
 from n3x_bot.groupfinder.hub import register_timezone_command
 
 log = logging.getLogger("N3X-Bot")
@@ -46,6 +46,14 @@ def register_groupfinder(bot, repo, settings) -> None:
 
     bot.add_listener(_on_channel_delete, "on_guild_channel_delete")
 
+    async def _on_message(message):
+        try:
+            await guard_zone_message(bot, repo, settings, message)
+        except Exception:
+            log.exception("group finder: zone message guard failed")
+
+    bot.add_listener(_on_message, "on_message")
+
 
 async def start_groupfinder(bot, repo, settings) -> None:
     """On ready: re-attach the hub and event routers, catch up on channels
@@ -61,6 +69,8 @@ async def start_groupfinder(bot, repo, settings) -> None:
     gone = await provision.reconcile_zones(bot, repo, now_local(settings))
     if gone:
         log.info("group finder: deactivated while offline: %s", ", ".join(gone))
+    if await provision.refresh_member_permissions(bot, repo):
+        log.info("group finder: zone channel permissions updated")
     now = datetime.now(timezone.utc)
     await legacy.migrate_legacy_lfgs(bot, repo, settings, now)
     await hub.update_hub(bot, repo, settings)

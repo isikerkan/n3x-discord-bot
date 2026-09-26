@@ -2,8 +2,10 @@
 channel decides how the entered date and times are read."""
 from datetime import datetime, timezone
 
+import discord
 from discord import app_commands
 
+from n3x_bot.admin import is_admin
 from n3x_bot.groupfinder import events, parsing, provision, sync
 from n3x_bot.groupfinder.zones import ACTIVE
 
@@ -15,6 +17,38 @@ async def _hub_hint(repo) -> str:
     where = f"<#{raw}>" if raw else "the Group Finder hub"
     return (f"❌ Use `/lfg` in your timezone channel. Pick your timezone in "
             f"{where}.")
+
+
+HINT_SECONDS = 15
+
+
+async def guard_zone_message(bot, repo, settings, message) -> bool:
+    """Zone channels hold group searches only. A message typed there by a
+    member is removed with a short hint to use `/lfg`; admins may still write.
+    Returns whether the message was removed."""
+    if message.author.bot or message.guild is None:
+        return False
+    # Cheap filter first: this runs for every message on the server.
+    if not getattr(message.channel, "name", "").startswith("gf-"):
+        return False
+    zone = await repo.gf_zone_by_channel(message.channel.id)
+    if zone is None or zone["status"] != ACTIVE:
+        return False
+    if is_admin(message.author, settings):
+        return False
+    try:
+        await message.delete()
+    except discord.HTTPException:
+        return False
+    try:
+        await message.channel.send(
+            f"{message.author.mention} This channel only holds group "
+            f"searches. Post one with `/lfg`.",
+            delete_after=HINT_SECONDS,
+            allowed_mentions=discord.AllowedMentions(users=[message.author]))
+    except discord.HTTPException:
+        pass
+    return True
 
 
 def register_lfg_command(bot, repo, settings) -> None:

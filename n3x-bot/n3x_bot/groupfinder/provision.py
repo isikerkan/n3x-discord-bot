@@ -41,15 +41,21 @@ def _admin_overwrite() -> discord.PermissionOverwrite:
         use_application_commands=True)
 
 
+def member_overwrite() -> discord.PermissionOverwrite:
+    """What the zone role may do in its channel. Send Messages is required:
+    without it Discord disables the message box, and with it `/lfg`. Typed
+    messages are removed by the zone message guard, so only group searches
+    stay in the channel."""
+    return discord.PermissionOverwrite(
+        view_channel=True, read_message_history=True,
+        use_application_commands=True, send_messages=True)
+
+
 def zone_overwrites(guild, role, settings) -> dict:
-    """Only the zone role (and admins) can see a zone channel. Members interact
-    through selects, buttons and slash commands, which need no send permission,
-    so they cannot post — the channel stays a clean list of group searches."""
+    """Only the zone role (and admins) can see a zone channel."""
     overwrites = {
         guild.default_role: discord.PermissionOverwrite(view_channel=False),
-        role: discord.PermissionOverwrite(
-            view_channel=True, read_message_history=True,
-            use_application_commands=True, send_messages=False),
+        role: member_overwrite(),
     }
     for admin in _admin_roles(guild, settings):
         overwrites[admin] = _admin_overwrite()
@@ -232,6 +238,26 @@ async def reconcile_zones(bot, repo, now: datetime) -> list[str]:
                                     channel_id=None, status=DEACTIVATED, now=now)
             gone.append(row["zone"])
     return gone
+
+
+async def refresh_member_permissions(bot, repo) -> int:
+    """Bring the zone role's permissions in existing zone channels in line with
+    `member_overwrite` (channels created before `/lfg` needed Send Messages).
+    Only the zone role's entry is touched. Returns how many were changed."""
+    changed = 0
+    for row in await active_zones(repo):
+        channel = bot.get_channel(row["channel_id"]) if row["channel_id"] else None
+        role = channel.guild.get_role(row["role_id"]) if channel else None
+        if role is None or channel.overwrites_for(role) == member_overwrite():
+            continue
+        try:
+            await channel.set_permissions(role, overwrite=member_overwrite(),
+                                          reason=_REASON)
+            changed += 1
+        except discord.HTTPException:
+            log.warning("group finder: cannot update permissions in #%s",
+                        channel.name)
+    return changed
 
 
 async def active_zones(repo) -> list[dict]:
