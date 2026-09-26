@@ -105,6 +105,9 @@ class Settings(BaseSettings):
     # Add/remove PREFIX_STR on members' nicknames by TARGET_ROLE_ID. Turn off
     # on servers where another bot manages nickname tags.
     nickname_enforcement: bool = True
+    # Group Finder (/lfg, /timezone, /groupfinder). On: the category and hub
+    # channel are created at startup if missing. Off: none of it is loaded.
+    groupfinder_enabled: bool = True
     command_prefix: str = "!"
     reminder_time: str = "19:30"
 

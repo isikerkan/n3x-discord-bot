@@ -238,6 +238,10 @@ class RuntimeConfig:
         return self._settings.nickname_enforcement
 
     @property
+    def groupfinder_enabled(self) -> bool:
+        return self._settings.groupfinder_enabled
+
+    @property
     def timezone(self) -> str:
         return self._settings.timezone
 

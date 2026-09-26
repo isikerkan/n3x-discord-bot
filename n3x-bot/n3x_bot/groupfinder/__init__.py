@@ -9,6 +9,8 @@ Stage 5: cutover — adopt the old LFG channel as the hub, import running LFGs.
 """
 import logging
 
+import discord
+
 from datetime import datetime, timezone
 
 from n3x_bot.activity import now_local
@@ -20,8 +22,14 @@ from n3x_bot.groupfinder.hub import register_timezone_command
 log = logging.getLogger("N3X-Bot")
 
 
+def enabled(settings) -> bool:
+    return getattr(settings, "groupfinder_enabled", True)
+
+
 def register_groupfinder(bot, repo, settings) -> None:
     """Commands and the channel-delete listener. Called from `build_bot`."""
+    if not enabled(settings):
+        return
     register_groupfinder_admin(bot, repo, settings)
     register_timezone_command(bot, repo, settings)
     register_lfg_command(bot, repo, settings)
@@ -43,10 +51,13 @@ async def start_groupfinder(bot, repo, settings) -> None:
     """On ready: re-attach the hub and event routers, catch up on channels
     deleted while offline, refresh the hub, bring every event message in line
     with the database (zones added while offline get their messages here)."""
+    if not enabled(settings):
+        return
     bot.add_view(hub.HubView(repo, settings))
     bot.add_view(views.VotingView(repo, settings))
     bot.add_view(views.FixedView(repo, settings))
     await legacy.adopt_legacy_hub(bot, repo, settings)
+    await _ensure_hub(bot, repo, settings)
     gone = await provision.reconcile_zones(bot, repo, now_local(settings))
     if gone:
         log.info("group finder: deactivated while offline: %s", ", ".join(gone))
@@ -57,4 +68,20 @@ async def start_groupfinder(bot, repo, settings) -> None:
     lifecycle.start_lifecycle_loop(bot, repo, settings)
 
 
-__all__ = ["register_groupfinder", "start_groupfinder"]
+async def _ensure_hub(bot, repo, settings) -> None:
+    """Create the category and hub on a fresh server, so members can pick their
+    timezone without an admin running setup first. The bot serves one server;
+    with several it cannot tell which one is meant and leaves it to setup."""
+    guilds = list(bot.guilds)
+    if len(guilds) != 1:
+        if not await repo.gf_get_setting(provision.HUB_CHANNEL_KEY):
+            log.warning("group finder: in %d servers, not creating a hub; "
+                        "run /groupfinder setup", len(guilds))
+        return
+    try:
+        await provision.ensure_hub_channel(guilds[0], repo, settings)
+    except discord.Forbidden:
+        log.warning("group finder: missing Manage Channels, cannot create the hub")
+
+
+__all__ = ["enabled", "register_groupfinder", "start_groupfinder"]

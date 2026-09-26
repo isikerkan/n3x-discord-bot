@@ -680,3 +680,65 @@ async def test_register_is_idempotent():
     register_groupfinder(bot, repo, _settings())   # second call from tests
     assert bot.tree.get_command("groupfinder") is not None
     await repo.close()
+
+
+# ── GROUPFINDER_ENABLED ──────────────────────────────────────────────────────
+
+async def test_start_creates_category_and_hub_on_a_fresh_server():
+    repo, guild = await _repo(), FakeGuild()
+    bot = _bot_for(guild)
+    bot.guilds = [guild]
+    bot.add_view = MagicMock()
+    await start_groupfinder(bot, repo, _settings())
+    bot._gf_lifecycle_loop.cancel()
+    hub_id = int(await repo.gf_get_setting(provision.HUB_CHANNEL_KEY))
+    hub_channel = guild.get_channel(hub_id)
+    assert hub_channel.name == "group-finder"
+    assert hub_channel.category.id == int(await repo.gf_get_setting(provision.CATEGORY_KEY))
+    hub_channel.send.assert_awaited_once()                  # the hub message
+    await start_groupfinder(bot, repo, _settings())         # restart: no second hub
+    bot._gf_lifecycle_loop.cancel()
+    assert guild.create_text_channel.await_count == 1
+    await repo.close()
+
+
+async def test_start_does_not_guess_the_server_when_in_several():
+    repo, guild = await _repo(), FakeGuild()
+    bot = _bot_for(guild)
+    bot.guilds = [guild, FakeGuild()]
+    bot.add_view = MagicMock()
+    await start_groupfinder(bot, repo, _settings())
+    bot._gf_lifecycle_loop.cancel()
+    guild.create_text_channel.assert_not_awaited()
+    await repo.close()
+
+
+async def test_disabled_registers_nothing_and_starts_nothing():
+    repo, guild = await _repo(), FakeGuild()
+    bot = build_bot(_settings(groupfinder_enabled=False), repo)
+    for name in ("groupfinder", "timezone", "lfg"):
+        assert bot.tree.get_command(name) is None
+    assert not bot.extra_events.get("on_guild_channel_delete")
+
+    fake = _bot_for(guild)
+    fake.guilds = [guild]
+    fake.add_view = MagicMock()
+    fake._gf_lifecycle_loop = None
+    await start_groupfinder(fake, repo, _settings(groupfinder_enabled=False))
+    fake.add_view.assert_not_called()
+    guild.create_category.assert_not_awaited()
+    assert fake._gf_lifecycle_loop is None
+    await repo.close()
+
+
+def test_command_list_omits_the_guide_when_disabled():
+    from n3x_bot.bot import build_admin_command_list, build_command_list
+    bot = MagicMock()
+    bot.tree.get_commands.return_value = []
+    bot.commands = []
+    names = lambda e: [f.name for f in e.fields]
+    assert any("Group Finder" in n for n in names(build_command_list(bot)))
+    assert not any("Group Finder" in n
+                   for n in names(build_command_list(bot, groupfinder=False)))
+    assert not any("Group Finder" in n
+                   for n in names(build_admin_command_list(bot, groupfinder=False)))

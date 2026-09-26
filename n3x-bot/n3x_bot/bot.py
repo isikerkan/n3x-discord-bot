@@ -61,6 +61,7 @@ from n3x_bot.timers import (
     TIMER_OVERVIEW_KEY, register_timer_commands, start_timer_overview_loop,
     update_timer_overview,
 )
+from n3x_bot.groupfinder import enabled as groupfinder_enabled
 from n3x_bot.groupfinder import register_groupfinder, start_groupfinder
 from n3x_bot.welcome import register_welcome_commands, send_welcome_card
 
@@ -580,7 +581,8 @@ def _groupfinder_guide(hub_channel_id: int | None) -> str:
         "ist auf Englisch.")
 
 
-def build_command_list(bot, hub_channel_id: int | None = None) -> discord.Embed:
+def build_command_list(bot, hub_channel_id: int | None = None,
+                       groupfinder: bool = True) -> discord.Embed:
     """PUBLIC command-list embed — every category EXCEPT the admin block.
 
     Admin/config/content are hidden here; a footer points to the ephemeral
@@ -593,17 +595,19 @@ def build_command_list(bot, hub_channel_id: int | None = None) -> discord.Embed:
         bot, "📋 Befehlsübersicht", public_keys, discord.Color.blurple(),
         footer="🔧 Admin-Befehle: Button unten (nur für Admins sichtbar).")
     embed.description = _BOT_INTRO
-    embed.add_field(name="ℹ️ Group Finder – so funktioniert's",
-                    value=_groupfinder_guide(hub_channel_id), inline=False)
+    if groupfinder:
+        embed.add_field(name="ℹ️ Group Finder – so funktioniert's",
+                        value=_groupfinder_guide(hub_channel_id), inline=False)
     return embed
 
 
-def build_admin_command_list(bot) -> discord.Embed:
+def build_admin_command_list(bot, groupfinder: bool = True) -> discord.Embed:
     """ADMIN-only command-list embed — solely the admin categories."""
     embed = _render_command_embed(
         bot, "⚙️ Admin-Befehle", _ADMIN_CATEGORY_KEYS, discord.Color.dark_grey())
-    embed.add_field(name="ℹ️ Group Finder einrichten",
-                    value=_GROUPFINDER_ADMIN_GUIDE, inline=False)
+    if groupfinder:
+        embed.add_field(name="ℹ️ Group Finder einrichten",
+                        value=_GROUPFINDER_ADMIN_GUIDE, inline=False)
     return embed
 
 
@@ -630,7 +634,9 @@ class CommandListView(discord.ui.View):
                 "❌ Diese Befehle sind nur für Admins sichtbar.", ephemeral=True)
             return
         await interaction.response.send_message(
-            embed=build_admin_command_list(self.bot), ephemeral=True)
+            embed=build_admin_command_list(
+                self.bot, groupfinder=groupfinder_enabled(self.settings)),
+            ephemeral=True)
 
 
 async def update_command_list(bot, repo: StatsRepository, settings: Settings):
@@ -646,7 +652,8 @@ async def update_command_list(bot, repo: StatsRepository, settings: Settings):
     if channel is None:
         return
     hub = await repo.gf_get_setting("hub_channel_id")
-    embed = build_command_list(bot, hub_channel_id=int(hub) if hub else None)
+    embed = build_command_list(bot, hub_channel_id=int(hub) if hub else None,
+                               groupfinder=groupfinder_enabled(settings))
     view = CommandListView(bot, settings)
 
     stored = await repo.get_channel_message(COMMAND_LIST_KEY)
