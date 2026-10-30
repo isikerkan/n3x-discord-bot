@@ -63,6 +63,8 @@ def build_kodex_report(confirmed: set[int], members: list) -> list[str]:
 
 
 def register_kodex_commands(bot, repo: StatsRepository, settings: Settings) -> None:
+    if not settings.kodex_enabled:
+        return
     if bot.tree.get_command("kodex") is None:
         @bot.tree.command(name="kodex",
                           description="Sendet allen Mitgliedern den Kodex (Admin).")

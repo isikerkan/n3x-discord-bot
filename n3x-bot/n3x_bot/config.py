@@ -122,6 +122,8 @@ class Settings(BaseSettings):
 
     milestone_channel_id: int = 0
     overview_channel_id: int = 0
+    # Kodex (rules acceptance): the DM to new members and /kodex, /kodex_check.
+    kodex_enabled: bool = True
     kodex_check_channel_id: int = 0
     # Where event reminders + the opt-in signup message go. 0 falls back to
     # reminder_channel_id.

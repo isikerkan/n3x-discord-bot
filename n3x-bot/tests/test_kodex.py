@@ -521,3 +521,33 @@ async def test_build_bot_registers_kodex_slash_commands():
     assert bot.tree.get_command("kodex_check") is not None
 
     await repo.close()
+
+
+# ── KODEX_ENABLED=false ──────────────────────────────────────────────────────
+
+async def test_disabled_kodex_registers_no_commands(tmp_path):
+    repo = JsonRepository(str(tmp_path / "stats.json"))
+    await repo.connect()
+    await seed_defaults(repo)
+    bot = build_bot(_settings(kodex_enabled=False), repo)
+    assert bot.tree.get_command("kodex") is None
+    assert bot.tree.get_command("kodex_check") is None
+    await repo.close()
+
+
+async def test_disabled_kodex_sends_new_members_no_dm(tmp_path, monkeypatch):
+    repo = JsonRepository(str(tmp_path / "stats.json"))
+    await repo.connect()
+    await seed_defaults(repo)
+    dm = AsyncMock()
+    monkeypatch.setattr(botmod, "send_kodex_dm", dm)
+    monkeypatch.setattr(botmod, "send_welcome_card", AsyncMock())
+    member = SimpleNamespace(id=7, display_name="New", bot=True)
+    monkeypatch.setattr(botmod, "enforce_nick", AsyncMock())
+
+    await build_bot(_settings(kodex_enabled=False), repo).on_member_join(member)
+    dm.assert_not_awaited()
+
+    await build_bot(_settings(), repo).on_member_join(member)
+    dm.assert_awaited_once()
+    await repo.close()

@@ -1571,10 +1571,11 @@ def _wire_events(bot, settings: Settings, repo: StatsRepository):
             await send_welcome_card(bot, settings, member)
         except Exception:
             pass
-        try:
-            await send_kodex_dm(bot, repo, member)
-        except Exception:
-            pass
+        if settings.kodex_enabled:
+            try:
+                await send_kodex_dm(bot, repo, member)
+            except Exception:
+                pass
         await asyncio.sleep(5)
         await enforce_nick(member, bot.runtime_config)
 
